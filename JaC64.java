@@ -8,7 +8,6 @@
  * @author Joakim Eriksson, Dreamfabric / joakime@sics.se
  * @version 1.0
  */
-import java.applet.*;
 import java.awt.*;
 import java.awt.event.*;
 
@@ -72,14 +71,14 @@ public class JaC64 implements ActionListener, KeyEventDispatcher {
     scr = new C64Screen(monitor, true);
     cpu.init(scr);
 
-    // Reader available after init!
-    scr.init(cpu);
+    // Set up desktop rendering via C64Canvas
+    C64Canvas canvas = C64Canvas.setupDesktop(scr, cpu, true);
 
-    scr.registerHotKey(KeyEvent.VK_BACK_SPACE, KeyEvent.CTRL_DOWN_MASK |
-		       KeyEvent.ALT_DOWN_MASK
+    scr.registerHotKey(Keyboard.VK_BACK_SPACE, Keyboard.CTRL_DOWN_MASK |
+		       Keyboard.ALT_DOWN_MASK
 		       , "reset()", cpu);
 
-    scr.registerHotKey(KeyEvent.VK_F12, KeyEvent.CTRL_DOWN_MASK
+    scr.registerHotKey(Keyboard.VK_F12, Keyboard.CTRL_DOWN_MASK
 		       , "toggleFullScreen()", this);
 
     reader = new C64Reader(); // scr.getDiskDrive().getReader();
@@ -120,27 +119,18 @@ public class JaC64 implements ActionListener, KeyEventDispatcher {
     C64Win.setBackground(Color.black);
     C64Win.setForeground(Color.black);
     C64Win.setLayout(new BorderLayout());
-    C64Win.getContentPane().add(scr.getScreen(),
-				BorderLayout.CENTER);
+    C64Win.getContentPane().add(canvas, BorderLayout.CENTER);
     C64Win.setFocusable(true);
 
     C64Win.pack(); //	C64Scr.setSize(380,300);
     C64Win.setSize(386 * 2 + 10, 284 * 2 + 70);
     C64Win.setResizable(true);
     C64Win.setVisible(true);
-    
+
     KeyboardFocusManager.
       getCurrentKeyboardFocusManager().addKeyEventDispatcher(this);
 
-    // Setup disk sounds
-    AudioClip trackSound = null;
-    AudioClip motorSound = null;
-    URL url = getClass().getResource("sounds/track.wav");
-    if (url != null) trackSound = Applet.newAudioClip(url);
-    url = getClass().getResource("sounds/motor.wav");
-    if (url != null) motorSound = Applet.newAudioClip(url);
-    scr.setSounds(trackSound, motorSound);
-    c64Canvas = (KeyListener) scr.getScreen();
+    c64Canvas = canvas;
   }
 
   private void createRadioMenu(JMenu subm, String[] names, int selected) {

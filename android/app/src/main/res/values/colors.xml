@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="c64_blue">#4040E0</color>
+    <color name="c64_light_blue">#6C6CFF</color>
+    <color name="keyboard_bg">#CC333333</color>
+    <color name="keyboard_key">#CC666666</color>
+    <color name="keyboard_key_pressed">#CC999999</color>
+    <color name="keyboard_text">#CCCCCCCC</color>
+    <color name="joystick_bg">#40FFFFFF</color>
+    <color name="joystick_active">#80FFFFFF</color>
+</resources>

@@ -81,14 +81,13 @@ public class C64Applet extends Applet implements Runnable, PatchListener {
 
       screen = new C64Screen(imon, doubleScreen > 0);
       cpu.init(screen);
-      screen.init(cpu);
+
+      // Set up desktop rendering via C64Canvas
+      canvas = C64Canvas.setupDesktop(screen, cpu, doubleScreen > 0);
 
       if (freescale != 0) {
-    	  screen.setIntegerScaling(false);
+    	  canvas.setIntegerScaling(false);
       }
-
-      // Not when emulating 1541!!
-      //      cpu.patchROM(this);
 
       memory = cpu.getMemory();
 
@@ -100,17 +99,14 @@ public class C64Applet extends Applet implements Runnable, PatchListener {
       reader = new C64Reader();
       reader.setCPU(cpu);
 
-      canvas = (C64Canvas) screen.getScreen();
-
       fullscreen(fullscreen);
 
-      screen.registerHotKey(KeyEvent.VK_BACK_SPACE, KeyEvent.CTRL_DOWN_MASK |
-			 KeyEvent.ALT_DOWN_MASK
+      screen.registerHotKey(Keyboard.VK_BACK_SPACE, Keyboard.CTRL_DOWN_MASK |
+			 Keyboard.ALT_DOWN_MASK
 			 , "reset()", cpu);
 
-      screen.registerHotKey(KeyEvent.VK_F12, KeyEvent.CTRL_DOWN_MASK
+      screen.registerHotKey(Keyboard.VK_F12, Keyboard.CTRL_DOWN_MASK
 			    , "toggleFullscreen()", this);
-
 
       repaint();
       validate();
@@ -121,15 +117,6 @@ public class C64Applet extends Applet implements Runnable, PatchListener {
       // A test... for real 1541 emulation...
       cpu.getDrive().setReader(reader);
 
-      AudioClip trackSound = null;
-      AudioClip motorSound = null;
-      URL url = getClass().getResource("sounds/track.wav");
-      System.out.println("Audio URL:" + url);
-      if (url != null) trackSound = Applet.newAudioClip(url);
-      url = getClass().getResource("sounds/motor.wav");
-      if (url != null) motorSound = Applet.newAudioClip(url);
-      screen.setSounds(trackSound, motorSound);
-
 
       setColorSet(getParameterAsInt("colorset", 0));
       int rq1541 = getParameterAsInt("require1541", 0);
@@ -139,8 +126,8 @@ public class C64Applet extends Applet implements Runnable, PatchListener {
     	  String f1 = getParameter("hotkey-f" + (i + 1));
     	  if (f1 != null && f1.length() > 0) {
     		  // 0 - 11 => ALT-F1-12
-    		  screen.registerHotKey(KeyEvent.VK_F1 + i,
-    				  KeyEvent.ALT_DOWN_MASK, f1, this);
+    		  screen.registerHotKey(Keyboard.VK_F1 + i,
+    				  Keyboard.ALT_DOWN_MASK, f1, this);
     	  }
       }
       System.out.println("*** INIT END ***");
@@ -164,7 +151,7 @@ public class C64Applet extends Applet implements Runnable, PatchListener {
 	fullWin.addKeyListener(canvas);
       }
 
-      screen.setAutoscale(true);
+      canvas.setAutoscale(true);
       fullWin.add(canvas);
       fullWin.setSize(100, 100);
       System.out.println("Setting visible to true!!!");
@@ -278,7 +265,6 @@ public class C64Applet extends Applet implements Runnable, PatchListener {
         cpu.stop();
     if (screen != null) {
         screen.deleteInterruptManagers();
-        screen.motorSound(false);
     }
     cpu = null;
     screen = null;

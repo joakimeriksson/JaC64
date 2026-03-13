@@ -1,0 +1,201 @@
+package com.dreamfabric.jac64.android;
+
+import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Rect;
+import android.util.AttributeSet;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+
+import java.nio.IntBuffer;
+
+import com.dreamfabric.jac64.C64Screen;
+
+/**
+ * SurfaceView that renders the C64 screen at 50Hz (PAL).
+ * Listens for frame-ready signals from the VIC-II emulation
+ * and renders each completed frame exactly once.
+ */
+public class EmulatorSurfaceView extends SurfaceView
+        implements SurfaceHolder.Callback, C64Screen.ScreenRefreshListener {
+
+    private static final int SCREEN_WIDTH = 384;
+    private static final int SCREEN_HEIGHT = 284;
+
+    private C64Screen screen;
+    private RenderThread renderThread;
+    private Bitmap screenBitmap;
+    private final Paint paint;
+    private final Rect srcRect;
+    private final Rect dstRect;
+
+    // Frame signaling from emulation thread to render thread
+    private final Object frameLock = new Object();
+    private volatile boolean frameReady = false;
+
+    // FPS counter
+    private int frameCount = 0;
+    private long fpsStartTime = 0;
+    private String fpsText = "";
+    private final Paint fpsPaint = new Paint();
+
+    public EmulatorSurfaceView(Context context) {
+        this(context, null);
+    }
+
+    public EmulatorSurfaceView(Context context, AttributeSet attrs) {
+        super(context, attrs);
+        getHolder().addCallback(this);
+        paint = new Paint();
+        paint.setFilterBitmap(true);
+        srcRect = new Rect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+        dstRect = new Rect();
+        screenBitmap = Bitmap.createBitmap(SCREEN_WIDTH, SCREEN_HEIGHT, Bitmap.Config.ARGB_8888);
+        fpsPaint.setColor(Color.YELLOW);
+        fpsPaint.setTextSize(28);
+        fpsPaint.setAntiAlias(true);
+    }
+
+    public void setScreen(C64Screen screen) {
+        this.screen = screen;
+        screen.setScreenRefreshListener(this);
+    }
+
+    /**
+     * Called from the CPU/VIC-II thread when a frame is complete (vPos == 285).
+     * Wakes the render thread to draw the frame.
+     */
+    @Override
+    public void onFrameReady() {
+        synchronized (frameLock) {
+            frameReady = true;
+            frameLock.notify();
+        }
+    }
+
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        renderThread = new RenderThread(holder);
+        renderThread.setRunning(true);
+        renderThread.start();
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        float scaleX = (float) width / SCREEN_WIDTH;
+        float scaleY = (float) height / SCREEN_HEIGHT;
+        float scale = Math.min(scaleX, scaleY);
+
+        int scaledWidth = (int) (SCREEN_WIDTH * scale);
+        int scaledHeight = (int) (SCREEN_HEIGHT * scale);
+        int offsetX = (width - scaledWidth) / 2;
+        int offsetY = (height - scaledHeight) / 2;
+        dstRect.set(offsetX, offsetY, offsetX + scaledWidth, offsetY + scaledHeight);
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        if (renderThread != null) {
+            renderThread.setRunning(false);
+            // Wake the thread in case it's waiting
+            synchronized (frameLock) {
+                frameLock.notify();
+            }
+            boolean retry = true;
+            while (retry) {
+                try {
+                    renderThread.join();
+                    retry = false;
+                } catch (InterruptedException e) {
+                    // retry
+                }
+            }
+            renderThread = null;
+        }
+    }
+
+    private class RenderThread extends Thread {
+        private final SurfaceHolder surfaceHolder;
+        private volatile boolean running;
+
+        RenderThread(SurfaceHolder holder) {
+            this.surfaceHolder = holder;
+            setName("C64-Render");
+        }
+
+        void setRunning(boolean run) {
+            this.running = run;
+        }
+
+        @Override
+        public void run() {
+            while (running) {
+                // Wait for frame-ready signal from VIC-II
+                synchronized (frameLock) {
+                    if (!frameReady) {
+                        try {
+                            frameLock.wait(25); // timeout prevents deadlock
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                    }
+                    frameReady = false;
+                }
+
+                Canvas canvas = null;
+                try {
+                    canvas = surfaceHolder.lockHardwareCanvas();
+                    if (canvas != null) {
+                        drawFrame(canvas);
+                    }
+                } catch (Exception e) {
+                    // Surface may have been destroyed
+                } finally {
+                    if (canvas != null) {
+                        try {
+                            surfaceHolder.unlockCanvasAndPost(canvas);
+                        } catch (Exception e) {
+                            // ignore
+                        }
+                    }
+                }
+            }
+        }
+
+        private void drawFrame(Canvas canvas) {
+            canvas.drawColor(Color.BLACK);
+
+            if (screen == null) return;
+
+            int[] pixels = screen.getPixelBuffer();
+            if (pixels == null) return;
+
+            try {
+                screenBitmap.setPixels(pixels, 0, SCREEN_WIDTH, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT);
+            } catch (Exception e) {
+                return;
+            }
+
+            if (!dstRect.isEmpty()) {
+                canvas.drawBitmap(screenBitmap, srcRect, dstRect, paint);
+            }
+
+            // FPS counter
+            frameCount++;
+            long now = System.nanoTime();
+            if (fpsStartTime == 0) fpsStartTime = now;
+            long elapsed = now - fpsStartTime;
+            if (elapsed >= 1_000_000_000L) {
+                fpsText = frameCount + " FPS";
+                frameCount = 0;
+                fpsStartTime = now;
+            }
+            if (!fpsText.isEmpty()) {
+                canvas.drawText(fpsText, 10, 30, fpsPaint);
+            }
+        }
+    }
+}

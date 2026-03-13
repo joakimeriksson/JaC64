@@ -1,4 +1,28 @@
 *.class
 *.jar
-roms/*
-sounds/*
+roms/
+sounds/
+
+# Gradle
+.gradle/
+build/
+gradle/
+gradlew
+gradlew.bat
+local.properties
+
+# Android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/gradle/
+android/gradlew
+android/gradlew.bat
+android/local.properties
+
+# Android ROM files (copyrighted)
+android/app/src/main/assets/roms/
+
+# IDE
+.idea/
+*.iml

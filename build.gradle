@@ -1,0 +1,44 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+sourceSets {
+    main {
+        java {
+            srcDir '.'
+            exclude 'android/**'
+            exclude 'build/**'
+        }
+        resources {
+            srcDirs = [] // no automatic resource processing
+        }
+    }
+}
+
+application {
+    mainClass = 'JaC64'
+}
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+run {
+    classpath = files('.') + sourceSets.main.runtimeClasspath
+}
+
+jar {
+    manifest {
+        attributes 'Main-Class': 'JaC64'
+    }
+    from('.') {
+        include 'roms/**'
+        include 'sounds/**'
+    }
+}

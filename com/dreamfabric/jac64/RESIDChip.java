@@ -24,6 +24,8 @@ public class RESIDChip extends ExtChip {
 
   int BUFFER_SIZE = 256;
   byte[] buffer = new byte[BUFFER_SIZE * 2];
+  private long totalSamplesWritten = 0;
+  private long startTimeNanos = 0;
 
   SID sid;
   int CPUFrq = 985248;
@@ -85,6 +87,23 @@ public class RESIDChip extends ExtChip {
   private void writeSamples() {
     driver.write(buffer);
     pos = 0;
+    totalSamplesWritten += BUFFER_SIZE;
+
+    // Throttle to real-time based on samples written vs wall clock
+    if (startTimeNanos == 0) {
+      startTimeNanos = System.nanoTime();
+      return;
+    }
+    long elapsedNanos = System.nanoTime() - startTimeNanos;
+    long expectedNanos = (totalSamplesWritten * 1_000_000_000L) / SAMPLE_RATE;
+    long aheadNanos = expectedNanos - elapsedNanos;
+    if (aheadNanos > 1_000_000) {
+      try {
+        Thread.sleep(aheadNanos / 1_000_000, (int)(aheadNanos % 1_000_000));
+      } catch (InterruptedException e) {
+        // ignore
+      }
+    }
   }
 
   public int performRead(int address, long cycles) {

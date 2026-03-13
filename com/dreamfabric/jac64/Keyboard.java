@@ -6,19 +6,17 @@
  * Web: http://www.dreamfabric.com/c64
  * ---------------------------------------------------
  *
- *
+ * Platform-neutral keyboard and joystick emulation.
+ * Key constants defined locally (matching AWT KeyEvent values)
+ * so this file can be used on both desktop and Android.
  */
 
 package com.dreamfabric.jac64;
 import com.dreamfabric.c64utils.*;
-import java.awt.event.*;
 import java.util.*;
 
 /**
  * The keyboard and joystick emulation
- *
- *
- * Created: Wed Jun 14 17:39:15 2006
  *
  * @author Joakim Eriksson, joakime@sics.se
  * @version 1.0
@@ -41,22 +39,63 @@ public class Keyboard {
   public static final int STICK_RIGHT = 8;
   public static final int STICK_FIRE = 16;
 
+  // Key constants (matching java.awt.event.KeyEvent values)
+  public static final int VK_ENTER = 10;
+  public static final int VK_BACK_SPACE = 8;
+  public static final int VK_TAB = 9;
+  public static final int VK_SHIFT = 16;
+  public static final int VK_CONTROL = 17;
+  public static final int VK_ESCAPE = 27;
+  public static final int VK_DELETE = 127;
+  public static final int VK_HOME = 36;
+  public static final int VK_END = 35;
+  public static final int VK_INSERT = 155;
+  public static final int VK_PAGE_UP = 33;
+  public static final int VK_CAPS_LOCK = 20;
+  public static final int VK_UP = 38;
+  public static final int VK_DOWN = 40;
+  public static final int VK_LEFT = 37;
+  public static final int VK_RIGHT = 39;
+  public static final int VK_F1 = 112;
+  public static final int VK_F3 = 114;
+  public static final int VK_F5 = 116;
+  public static final int VK_F7 = 118;
+  public static final int VK_F9 = 120;
+  public static final int VK_F10 = 121;
+  public static final int VK_F11 = 122;
+  public static final int VK_F12 = 123;
+  public static final int VK_SUBTRACT = 109;
+  public static final int VK_DIVIDE = 111;
+  public static final int VK_PLUS = 521;
+  public static final int VK_NUMPAD0 = 96;
+  public static final int VK_NUMPAD2 = 98;
+  public static final int VK_NUMPAD4 = 100;
+  public static final int VK_NUMPAD5 = 101;
+  public static final int VK_NUMPAD6 = 102;
+  public static final int VK_NUMPAD8 = 104;
+
+  public static final int KEY_LOCATION_LEFT = 2;
+  public static final int KEY_LOCATION_RIGHT = 3;
+
+  public static final int CTRL_DOWN_MASK = 128;
+  public static final int ALT_DOWN_MASK = 512;
+
   public static final char[][] KEYMAPS = new char[][] {
     { 's','v',  // Keymap for language "sv"
-      ';', 'ö',
-      '\'','ä',
-      '[','å',
-      '`', '§',
+      ';', '\u00f6',
+      '\'','\u00e4',
+      '[','\u00e5',
+      '`', '\u00a7',
       '\\', (char) 222,
       '/', '-',
       ']', (char) 135,
-      '-', (char) KeyEvent.VK_PLUS,
+      '-', (char) VK_PLUS,
       '=', (char) 129
     },
     { 'd','e',  // Keymap for language "de"
-      ';', 'ö',
-      '\'','ä',
-      '[','ü',
+      ';', '\u00f6',
+      '\'','\u00e4',
+      '[','\u00fc',
       '`', '^',
       '\\', (char) 520,
       '/', '-',
@@ -137,7 +176,7 @@ public class Keyboard {
       {'8', 3, 3, 0 },
       {'9', 4, 0, 0 },
       {'\n', 0, 1, 0 },
-      {KeyEvent.VK_ENTER, 0, 1, 0 },
+      {VK_ENTER, 0, 1, 0 },
       {' ', 7, 4, 0 },
       {',', 5, 7, 0 },
       {'.', 5, 4, 0 },
@@ -151,46 +190,46 @@ public class Keyboard {
       {'`', 7, 1, 0 },
       // This is semi-colon on the C64
       {'\'', 6, 2, 0 },
-      {KeyEvent.VK_SUBTRACT, 5, 3, 0 },
+      {VK_SUBTRACT, 5, 3, 0 },
       {'[', 5, 6, 0 },
       {']', 6, 1, 0 },
-      {KeyEvent.VK_ESCAPE, 7, 1, 0},
+      {VK_ESCAPE, 7, 1, 0},
       {'/', 6, 7, 0 },
-      {KeyEvent.VK_DIVIDE, 6, 7, 0},
+      {VK_DIVIDE, 6, 7, 0},
       // will be mapped to an auto shift /
       {'?', 6, 7, AUTO_SHIFT},
-      {KeyEvent.VK_DELETE, 0, 0, 0 },
-      {KeyEvent.VK_BACK_SPACE, 0, 0, 0 },
+      {VK_DELETE, 0, 0, 0 },
+      {VK_BACK_SPACE, 0, 0, 0 },
       // LEFT SHIFT
-      {KeyEvent.VK_SHIFT, 1, 7, 0 },
+      {VK_SHIFT, 1, 7, 0 },
       // RIGHT SHIFT
-      {KeyEvent.VK_CAPS_LOCK, 6, 4, 0 },
+      {VK_CAPS_LOCK, 6, 4, 0 },
 
       // Break
       {19, 7, 7, 0 },
-      {KeyEvent.VK_ESCAPE, 7, 7, 0 },
+      {VK_ESCAPE, 7, 7, 0 },
       // Enter + CTRL
       {'\r', 0, 1, 0 },
       // Commodore key on the control keys
-      {KeyEvent.VK_CONTROL, 7, 5, KeyEvent.KEY_LOCATION_LEFT},
-      {KeyEvent.VK_ENTER, 0, 1, 0 },
+      {VK_CONTROL, 7, 5, KEY_LOCATION_LEFT},
+      {VK_ENTER, 0, 1, 0 },
       // DOWN     &  RIGHT
-      {KeyEvent.VK_DOWN, 0, 7, 0 },
-      {KeyEvent.VK_UP, 0, 7, AUTO_SHIFT },
-      {KeyEvent.VK_RIGHT, 0, 2, 0 },
-      {KeyEvent.VK_LEFT, 0, 2, AUTO_SHIFT },
+      {VK_DOWN, 0, 7, 0 },
+      {VK_UP, 0, 7, AUTO_SHIFT },
+      {VK_RIGHT, 0, 2, 0 },
+      {VK_LEFT, 0, 2, AUTO_SHIFT },
       // Function keys
-      {KeyEvent.VK_F1, 0, 4, 0 },
-      {KeyEvent.VK_F3, 0, 5, 0 },
-      {KeyEvent.VK_F5, 0, 6, 0 },
-      {KeyEvent.VK_F7, 0, 3, 0 },
-      {KeyEvent.VK_HOME, 6, 3, 0 },
-      {KeyEvent.VK_END, 6, 6, 0},
-      {KeyEvent.VK_INSERT, 6, 0, 0},
-      {KeyEvent.VK_TAB, 7, 2, 0}
+      {VK_F1, 0, 4, 0 },
+      {VK_F3, 0, 5, 0 },
+      {VK_F5, 0, 6, 0 },
+      {VK_F7, 0, 3, 0 },
+      {VK_HOME, 6, 3, 0 },
+      {VK_END, 6, 6, 0},
+      {VK_INSERT, 6, 0, 0},
+      {VK_TAB, 7, 2, 0}
   };
 
-  private int restoreKey = KeyEvent.VK_PAGE_UP;
+  private int restoreKey = VK_PAGE_UP;
 
   public static final int USER_UP = 0;
   public static final int USER_DOWN = 1;
@@ -199,9 +238,9 @@ public class Keyboard {
   public static final int USER_FIRE = 4;
 
   private static final int[] ARROWS = new int[] {
-    KeyEvent.VK_UP, 0, KeyEvent.VK_DOWN, 0,
-    KeyEvent.VK_LEFT, 0, KeyEvent.VK_RIGHT, 0,
-    KeyEvent.VK_CONTROL, KeyEvent.KEY_LOCATION_RIGHT};
+    VK_UP, 0, VK_DOWN, 0,
+    VK_LEFT, 0, VK_RIGHT, 0,
+    VK_CONTROL, KEY_LOCATION_RIGHT};
 
   private int[] userDefinedStick = ARROWS;
 
@@ -283,6 +322,15 @@ public class Keyboard {
       stick = IO_OFFSET + 0xdc00;
   }
 
+  /**
+   * Set joystick state directly (for virtual joystick on Android).
+   * @param joy joystick value (0xff = nothing, clear bits for directions/fire)
+   */
+  public void setJoystickState(int joy) {
+    joystick1 = joy;
+    updateJoystick();
+  }
+
   private int getUserStick(int key, int location) {
     if (userDefinedStick != null) {
       for (int i = 0, n = userDefinedStick.length; i < n; i += 2) {
@@ -298,33 +346,25 @@ public class Keyboard {
     return -1;
   }
 
-  // # Chars in char buffer - 0xc6 - need not to be set here...
-  public void keyPressed(KeyEvent event) {
-//  System.out.println("Key pressed..." + event.getKeyCode());
-//  System.out.println("Char pressed..." + event.getKeyChar() + " = " +
-//  (int) event.getKeyChar());
-    char chr = event.getKeyChar();
-    int key = event.getKeyCode();
-    int location = event.getKeyLocation();
-
+  /**
+   * Handle key press with hotkey/modifier support (for desktop).
+   */
+  public void keyPressed(int key, int location, int modifiers) {
     if (hotkeyScript != null) {
-      int mod = event.getModifiersEx();
-//    System.out.println("HotKey: " + key + " mod: " + mod);
-
       for (int i = 0, n = hotkeyScript.size(); i < n; i++) {
         Object[] hk = (Object[]) hotkeyScript.get(i);
         int[] keys = (int[]) hk[2];
-//      System.out.println("Cmp " + keys[0] + " mod: " + keys[1]);
-        if (keys[0] == key && ((mod & keys[1]) == keys[1])) {
+        if (keys[0] == key && ((modifiers & keys[1]) == keys[1])) {
           c64script.interpretCall((String) hk[0], hk[1]);
         }
       }
     }
+    keyPressed(key, location);
+  }
 
-    if (key == 0) {
-      System.out.println("KeyZero ???");
-      key = (int) Character.toLowerCase(chr);
-    }
+  // # Chars in char buffer - 0xc6 - need not to be set here...
+  public void keyPressed(int key, int location) {
+    if (key == 0) return;
 
     if (key == restoreKey) {
       screen.restoreKey(true);
@@ -347,100 +387,81 @@ public class Keyboard {
       joystick1 = joystick1 & (255 - STICK_UP);
       lastUp = true;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     case USER_DOWN:
       joystick1 = joystick1 & (255 - STICK_DOWN);
       lastUp = false;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     case USER_LEFT:
       joystick1 = joystick1 & (255 - STICK_LEFT);
       lastLeft = true;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     case USER_RIGHT:
       joystick1 = joystick1 & (255 - STICK_RIGHT);
       lastLeft = false;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     case USER_FIRE:
       joystick1 = joystick1 & (255 - STICK_FIRE);
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     }
 
     // Change the joystick with F10!
     switch (key) {
-    case KeyEvent.VK_F10:
+    case VK_F10:
       setStick(stick == IO_OFFSET + 0xdc00);
       break;
-    case KeyEvent.VK_F9:
+    case VK_F9:
       System.out.println("F9");
       extendedKeyboardEmulation = !extendedKeyboardEmulation;
       stickExits = !extendedKeyboardEmulation;
       break;
-    case KeyEvent.VK_F11:
+    case VK_F11:
       // Toggle colour set?
       break;
     }
 
-    if (extendedKeyboardEmulation) {
-      // Auto shift handling!
-      if ((keytable[key][2] & AUTO_SHIFT) != 0) {
-        keyShift++;
-        if (keyShift == 1) {
-          // AutoShift on if first shift! - otherwize not?!
-          handleKeyPress(KeyEvent.VK_SHIFT, location);
+    if (key < keytable.length) {
+      if (extendedKeyboardEmulation) {
+        // Auto shift handling!
+        if ((keytable[key][2] & AUTO_SHIFT) != 0) {
+          keyShift++;
+          if (keyShift == 1) {
+            // AutoShift on if first shift! - otherwize not?!
+            handleKeyPress(VK_SHIFT, location);
+          }
+          // Also increase shift is shift is pressed
+        } else if (key == VK_SHIFT) {
+          keyShift++;
         }
-        // Also increase shift is shift is pressed
-      } else if (key == KeyEvent.VK_SHIFT) {
-        keyShift++;
-      }
-      handleKeyPress(key, location);
-
-    } else {
-      // No autoshift keys!!!
-      if (keytable[key][2] < MIN_AUTO) {
         handleKeyPress(key, location);
+      } else {
+        // No autoshift keys!!!
+        if (keytable[key][2] < MIN_AUTO) {
+          handleKeyPress(key, location);
+        }
       }
     }
   }
 
-  public void keyReleased(KeyEvent event)
-  {
-    int key = event.getKeyCode();
-    char chr = event.getKeyChar();
-    int location = event.getKeyLocation();
-
-    if (key == 0) {
-      System.out.println("KeyZero???");
-      key = (int) Character.toLowerCase(chr);
-    }
+  public void keyReleased(int key, int location) {
+    if (key == 0) return;
 
     if (key == restoreKey) {
       screen.restoreKey(false);
     }
 
-
     keyPressed--;
     lastKey = 0;
-    if (keyPressed < 0)
-      keyPressed = 0;
+    if (keyPressed < 0) keyPressed = 0;
 
     int usr = getUserStick(key, location);
     if (usr == -1)
@@ -450,75 +471,67 @@ public class Keyboard {
     case USER_UP:
       joystick1 = joystick1 | STICK_UP;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     case USER_DOWN:
       joystick1 = joystick1 | STICK_DOWN;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     case USER_LEFT:
       joystick1 = joystick1 | STICK_LEFT;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     case USER_RIGHT:
       joystick1 = joystick1 | STICK_RIGHT;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     case USER_FIRE:
       joystick1 = joystick1 | STICK_FIRE;
       updateJoystick();
-      if (stickExits) {
-        return;
-      }
+      if (stickExits) return;
       break;
     }
 
-    if (extendedKeyboardEmulation) {
-      // Auto shift handling!
-      if ((keytable[key][2] & AUTO_SHIFT) != 0) {
-        keyShift--;
-        if (keyShift == 0) {
-          // AutoShift on if first shift! - otherwize not?!
-          handleKeyRelease(KeyEvent.VK_SHIFT, location);
+    if (key < keytable.length) {
+      if (extendedKeyboardEmulation) {
+        // Auto shift handling!
+        if ((keytable[key][2] & AUTO_SHIFT) != 0) {
+          keyShift--;
+          if (keyShift == 0) {
+            // AutoShift on if first shift! - otherwize not?!
+            handleKeyRelease(VK_SHIFT, location);
+          }
+          // Also decrease shift is shift is released
+        } else if (key == VK_SHIFT) {
+          keyShift--;
+          // Should not remove shift if autoshift was on?
+          if (keyShift > 0)
+            return;
         }
-        // Also decrease shift is shift is released
-      } else if (key == KeyEvent.VK_SHIFT) {
-        keyShift--;
-        // Should not remove shift if autoshift was on?
-        if (keyShift > 0)
-          return;
-      }
-      handleKeyRelease(key, location);
-    } else {
-      if (keytable[key][2] < MIN_AUTO) {
         handleKeyRelease(key, location);
+      } else {
+        if (keytable[key][2] < MIN_AUTO) {
+          handleKeyRelease(key, location);
+        }
       }
     }
   }
 
   private int getNormalStick(int key) {
     switch (key) {
-    case KeyEvent.VK_NUMPAD8 :
+    case VK_NUMPAD8 :
       return USER_UP;
-    case KeyEvent.VK_NUMPAD2 :
-    case KeyEvent.VK_NUMPAD5 :
+    case VK_NUMPAD2 :
+    case VK_NUMPAD5 :
       return USER_DOWN;
-    case KeyEvent.VK_NUMPAD4 :
+    case VK_NUMPAD4 :
       return USER_LEFT;
-    case KeyEvent.VK_NUMPAD6 :
+    case VK_NUMPAD6 :
       return USER_RIGHT;
-    case KeyEvent.VK_NUMPAD0:
+    case VK_NUMPAD0:
       return USER_FIRE;
     }
     return -1;
@@ -585,7 +598,7 @@ public class Keyboard {
 
     return (val & (cia.prb | ~(cia.ddrb))) & tmp;
   }
-  
+
   /* Updates $DC00/$DC01 based on recent joystick activity. */
   private void updateJoystick() {
 

@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root_layout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <com.dreamfabric.jac64.android.EmulatorSurfaceView
+        android:id="@+id/emulator_view"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center" />
+
+    <com.dreamfabric.jac64.android.VirtualJoystickView
+        android:id="@+id/joystick_view"
+        android:layout_width="180dp"
+        android:layout_height="180dp"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="16dp" />
+
+    <com.dreamfabric.jac64.android.VirtualKeyboardView
+        android:id="@+id/keyboard_view"
+        android:layout_width="match_parent"
+        android:layout_height="200dp"
+        android:layout_gravity="bottom"
+        android:visibility="gone" />
+
+    <!-- Toolbar buttons -->
+    <LinearLayout
+        android:id="@+id/toolbar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:orientation="horizontal"
+        android:padding="8dp"
+        android:background="#40000000">
+
+        <ImageButton
+            android:id="@+id/btn_keyboard"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_dialog_dialer"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="@string/action_keyboard"
+            android:scaleType="fitCenter"
+            android:padding="8dp" />
+
+        <ImageButton
+            android:id="@+id/btn_joystick"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_media_play"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="@string/action_joystick"
+            android:scaleType="fitCenter"
+            android:padding="8dp" />
+
+        <ImageButton
+            android:id="@+id/btn_open"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_menu_upload"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="@string/action_open_file"
+            android:scaleType="fitCenter"
+            android:padding="8dp" />
+
+        <ImageButton
+            android:id="@+id/btn_menu"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_menu_more"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="@string/action_settings"
+            android:scaleType="fitCenter"
+            android:padding="8dp" />
+    </LinearLayout>
+
+</FrameLayout>

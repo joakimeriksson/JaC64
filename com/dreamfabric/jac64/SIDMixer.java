@@ -523,7 +523,7 @@ public class SIDMixer {
 
   public static final int SLEEP_SYNC = 1;
   private int sleep = 100;
-  private int syncMode = 0;//SLEEP_SYNC;
+  private int syncMode = SLEEP_SYNC;
   private double avg = 10;
   private long lastTime = System.currentTimeMillis();
   private long micros = 0;

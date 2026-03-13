@@ -107,13 +107,14 @@ public class C64Test implements ActionListener, Runnable {
 
     cpu.init(scr);
 
-    // Reader available after init!
-    scr.init(cpu);
-    scr.registerHotKey(KeyEvent.VK_BACK_SPACE, KeyEvent.CTRL_DOWN_MASK |
-		       KeyEvent.ALT_DOWN_MASK
+    // Set up desktop rendering via C64Canvas
+    C64Canvas canvas = C64Canvas.setupDesktop(scr, cpu, true);
+
+    scr.registerHotKey(Keyboard.VK_BACK_SPACE, Keyboard.CTRL_DOWN_MASK |
+		       Keyboard.ALT_DOWN_MASK
 		       , "reset()", cpu);
 
-    scr.registerHotKey(KeyEvent.VK_F12, KeyEvent.CTRL_DOWN_MASK
+    scr.registerHotKey(Keyboard.VK_F12, Keyboard.CTRL_DOWN_MASK
 		       , "toggleFullScreen()", this);
 
     reader = new C64Reader(); // scr.getDiskDrive().getReader();
@@ -139,13 +140,13 @@ public class C64Test implements ActionListener, Runnable {
       C64Scr.setBackground(Color.black);
       C64Scr.setForeground(lblue = new Color(VICConstants.COLOR_SETS[0][14]));
       C64Scr.setLayout(new BorderLayout());
-      C64Scr.add(scr.getScreen(), BorderLayout.CENTER);
+      C64Scr.add(canvas, BorderLayout.CENTER);
       C64Scr.setSize(386 * 2, 284 * 2);
     } else {
       C64Win.setBackground(Color.black);
       C64Win.setForeground(lblue = new Color(VICConstants.COLOR_SETS[0][14]));
       C64Win.setLayout(new BorderLayout());
-      C64Win.add(scr.getScreen(), BorderLayout.CENTER);
+      C64Win.add(canvas, BorderLayout.CENTER);
       C64Win.setFocusable(true);
     }
 
@@ -173,20 +174,7 @@ public class C64Test implements ActionListener, Runnable {
       sprite = C64Win.createImage(mis);
     }
 
-    AudioClip trackSound = null;
-    AudioClip motorSound = null;
-    URL url = getClass().getResource("sounds/track.wav");
-    System.out.println("Audio URL:" + url);
-    if (url != null) trackSound = Applet.newAudioClip(url);
-    url = getClass().getResource("sounds/motor.wav");
-    if (url != null) motorSound = Applet.newAudioClip(url);
-    else {
-      System.out.println("Could not load file... motor.wav");
-    }
-    scr.setSounds(trackSound, motorSound);
-    if (motorSound != null) {
-      motorSound.play();
-    }
+    // Disk sounds removed (C64Screen is now platform-neutral)
   }
 
   private JLabel[] sprites = new JLabel[8];
@@ -283,7 +271,7 @@ public class C64Test implements ActionListener, Runnable {
       infoWindow.add(sprites[i] = new JLabel("0000"));
     }
     window.getContentPane().add(infoWindow, BorderLayout.NORTH);
-    //	window.getContentPane().add(scr.getScreen(), BorderLayout.WEST);
+    //	window.getContentPane().add(canvas, BorderLayout.WEST);
     window.pack();
     window.setResizable(true);
     window.setVisible(true);

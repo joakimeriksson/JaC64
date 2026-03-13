@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JaC64</string>
+    <string name="action_open_file">Open File/Disk</string>
+    <string name="action_reset">Reset</string>
+    <string name="action_hard_reset">Hard Reset</string>
+    <string name="action_keyboard">Keyboard</string>
+    <string name="action_joystick">Joystick</string>
+    <string name="action_settings">Settings</string>
+    <string name="roms_missing_title">ROM Files Required</string>
+    <string name="roms_missing_message">C64 ROM files are required but not found.\n\nPlease place the following files in the app\'s assets/roms/ folder and rebuild:\n\n- kernal.c64\n- basic.c64\n- chargen.c64\n\nThese ROM files are copyrighted and cannot be included with the app.</string>
+</resources>

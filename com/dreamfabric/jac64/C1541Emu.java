@@ -24,9 +24,15 @@ public class C1541Emu extends MOS6510Core {
   public static final int C1541ROM = 0xc000;
   public static final int RESET_VECTOR = 0xfffc;
   public C1541Chips chips;
+  private Loader loader;
 
   public C1541Emu(IMonitor m, String cb) {
+    this(m, cb, null);
+  }
+
+  public C1541Emu(IMonitor m, String cb, Loader loader) {
     super(m, cb);
+    this.loader = loader;
     // Only single area of RAM
     memory = new int[0x10000];
     chips = new C1541Chips(this);
@@ -158,6 +164,11 @@ public class C1541Emu extends MOS6510Core {
 
   protected void readROM(String resource, int startMem, int len) {
     try {
+      if (loader != null) {
+        monitor.info("Read ROM (via Loader) " + resource);
+        loadROM(loader.getResourceStream(resource), startMem, len);
+        return;
+      }
       URL url = getClass().getResource(resource);
       monitor.info("URL: " + url);
       monitor.info("Read ROM " + resource);

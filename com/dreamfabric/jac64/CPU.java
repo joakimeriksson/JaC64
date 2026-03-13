@@ -62,7 +62,7 @@ public class CPU extends MOS6510Core {
     this.loader = loader;
     if (EMULATE_1541) {
       IMonitor d = new DefaultIMon(); // new Debugger();
-      c1541 = new C1541Emu(d, cb);
+      c1541 = new C1541Emu(d, cb, loader);
       // d.init(c1541);
       // d.setEnabled(true);
     }

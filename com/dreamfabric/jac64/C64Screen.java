@@ -4,15 +4,12 @@
  * Contact: joakime@sics.se
  * Web: http://www.dreamfabric.com/c64
  * ---------------------------------------------------
+ *
+ * Platform-neutral VIC-II emulation. No AWT/Swing dependencies.
+ * Desktop rendering is handled by C64Canvas; Android by EmulatorSurfaceView.
  */
 
 package com.dreamfabric.jac64;
-
-import java.awt.*;
-import java.awt.event.*;
-import java.awt.image.*;
-import java.applet.*;
-import javax.swing.JPanel;
 
 /**
  * Implements the VIC chip + some other HW
@@ -22,8 +19,7 @@ import javax.swing.JPanel;
  * @version $Revision: 1.11 $, $Date: 2006/05/02 16:26:26 $
  */
 
-public class C64Screen extends ExtChip implements Observer, MouseListener,
-MouseMotionListener {
+public class C64Screen extends ExtChip implements Observer {
   public static final String version = "1.11";
 
   public static final int SERIAL_ATN = (1 << 3);
@@ -54,24 +50,11 @@ MouseMotionListener {
   // This might be solved differently later!!!
   public static final int CYCLES_PER_LINE = VICConstants.SCAN_RATE;
 
-  // ALoow the IO to write in same as RAM
+  // Allow the IO to write in same as RAM
   public static final int IO_OFFSET = CPU.IO_OFFSET;
   public static final boolean SOUND_AVAIABLE = true;
 
-  public static final Color TRANSPARENT_BLACK = new Color(0, 0, 0x40, 0x40);
-  public static final Color DARKER_0 = new Color(0, 0, 0x40, 0x20);
-  public static final Color LIGHTER_0 = new Color(0xe0, 0xe0, 0xff, 0x30);
-  public static final Color DARKER_N = new Color(0, 0, 0x40, 0x70);
-  public static final Color LIGHTER_N = new Color(0xe0, 0xe0, 0xff, 0xa0);
-
-  public static final Color LED_ON = new Color(0x60, 0xdf, 0x60, 0xc0);
-  public static final Color LED_OFF = new Color(0x20, 0x60, 0x20, 0xc0);
-  public static final Color LED_BORDER = new Color(0x40, 0x60, 0x40, 0xa0);
-
-
   public static final int LABEL_COUNT = 32;
-  private Color[] darks = new Color[LABEL_COUNT];
-  private Color[] lites = new Color[LABEL_COUNT];
   private int colIndex = 0;
 
   // This is the screen width and height used...
@@ -92,11 +75,8 @@ MouseMotionListener {
   private long nextIOUpdate = 0;
   private boolean DOUBLE = false;
   private int reset = 100;
-  private C64Canvas canvas;
 
   private int[] memory;
-
-  private Keyboard keyboard;
 
   ExtChip sidChip;
 
@@ -110,9 +90,6 @@ MouseMotionListener {
   // for disk emulation...
   int cia2PRA = 0;
   int cia2DDRA = 0;
-
-  AudioClip trackSound = null;
-  AudioClip motorSound = null;
 
   private int lastTrack = 0;
   private int lastSector = 0;
@@ -179,7 +156,7 @@ MouseMotionListener {
   boolean gfxVisible = false;
   boolean paintBorder = false;
   boolean paintSideBorder = false;
-  
+
   int borderColor = cbmcolor[0];
   int bgColor = cbmcolor[1];
 
@@ -195,13 +172,8 @@ MouseMotionListener {
 
   Sprite sprites[] = new Sprite[8];
 
-  private Color colors[] = null;
-
   private int horizScroll = 0;
   private int vScroll = 0;
-
-  private Image image;
-  private Graphics g2;
 
   // The font is in a copy in "ROM"...
   private int charMemoryIndex = 0;
@@ -210,13 +182,13 @@ MouseMotionListener {
   private int[] vicCharCache = new int[40];
   private int[] vicColCache = new int[40];
 
-  public Image screen = null;
-  private MemoryImageSource mis = null;
   private AudioDriver audioDriver;
 
-  // The array to generate the screen in Extra rows for sprite clipping
-  // And for clipping when scrolling (smooth)
+  // Double-buffered pixel arrays for tear-free rendering.
+  // VIC-II writes into mem (back buffer), which is swapped to memFront
+  // at frame completion. getPixelBuffer() returns the stable front buffer.
   int mem[] = new int[SC_WIDTH * (SC_HEIGHT + 10)];
+  private int[] memFront = new int[SC_WIDTH * (SC_HEIGHT + 10)];
 
   int rnd = 754;
   String message;
@@ -240,38 +212,39 @@ MouseMotionListener {
   private boolean isrRunning = false;
   private int     ciaWrites = 0;
 
+  // Callback for frame refresh (replaces AWT canvas.repaint())
+  private ScreenRefreshListener screenRefreshListener;
+
+  public interface ScreenRefreshListener {
+    void onFrameReady();
+  }
+
+  private Keyboard keyboard;
+
   public C64Screen(IMonitor m, boolean dob) {
     monitor = m;
     DOUBLE = dob;
-
     setScanRate(50);
-    makeColors(darks, DARKER_0, DARKER_N);
-    makeColors(lites, LIGHTER_0, LIGHTER_N);
   }
 
-  public void setAutoscale(boolean val) {
-    DOUBLE = val;
-    canvas.setAutoscale(val);
+  public void setScreenRefreshListener(ScreenRefreshListener listener) {
+    this.screenRefreshListener = listener;
   }
 
-  private void makeColors(Color[] colors, Color c1, Color c2) {
-    int a0 = c1.getAlpha();
-    int r0 = c1.getRed();
-    int g0 = c1.getGreen();
-    int b0 = c1.getBlue();
-    int an = c2.getAlpha();
-    int rn = c2.getRed();
-    int gn = c2.getGreen();
-    int bn = c2.getBlue();
-    int lc = LABEL_COUNT / 2;
-    for (int i = 0, n = lc; i < n; i++) {
-      colors[i] =
-        colors[LABEL_COUNT - i - 1] =
-          new Color(((lc - i) * r0 + (i * rn)) / lc,
-              ((lc - i) * g0 + (i * gn)) / lc,
-              ((lc - i) * b0 + (i * bn)) / lc,
-              ((lc - i) * a0 + (i * an)) / lc);
-    }
+  /**
+   * Returns the front pixel buffer for rendering.
+   * This buffer is stable (not being written to by VIC-II).
+   */
+  public int[] getPixelBuffer() {
+    return memFront;
+  }
+
+  public int getScreenWidth() {
+    return SC_WIDTH;
+  }
+
+  public int getScreenHeight() {
+    return SC_HEIGHT;
   }
 
   public void setColorSet(int c) {
@@ -321,17 +294,7 @@ MouseMotionListener {
   }
 
   public int getActualScanRate() {
-    // This should be calculated... if it is too slow it will be
-    // shown here
     return (1000000 / actualScanTime);
-  }
-
-  public void setIntegerScaling(boolean yes) {
-    canvas.setIntegerScaling(yes);
-  }
-
-  public JPanel getScreen() {
-    return canvas;
   }
 
   public AudioDriver getAudioDriver() {
@@ -342,10 +305,13 @@ MouseMotionListener {
     return isrRunning;
   }
 
+  public Keyboard getKeyboard() {
+    return keyboard;
+  }
+
   public void setDisplayFactor(double f) {
     displayWidth = (int) (SC_WIDTH * f);
     displayHeight = (int) (SC_HEIGHT * f);
-    crtImage = null;
   }
 
   public void setDisplayOffset(int x, int y) {
@@ -411,16 +377,20 @@ MouseMotionListener {
     keyboard.extendedKeyboardEmulation = extended;
   }
 
-  public void init(CPU cpu) {
+  /**
+   * Initialize the screen with the given CPU and audio driver.
+   * On Android, we inject the AudioDriver instead of creating AudioDriverSE.
+   */
+  public void init(CPU cpu, AudioDriver driver) {
     super.init(cpu);
 
     this.memory = cpu.getMemory();
+    this.audioDriver = driver;
 
     c1541Chips = cpu.getDrive().chips;
     c1541Chips.initIEC2(this);
     c1541Chips = cpu.getDrive().chips;
     c1541Chips.setObserver(this);
-
 
     for (int i = 0, n = sprites.length; i < n; i++) {
       sprites[i] = new Sprite();
@@ -433,15 +403,8 @@ MouseMotionListener {
 
     tfe = new TFE_CS8900(IO_OFFSET + 0xde00);
 
-//  c1541 = new C1541(memory);
-//  c1541.addObserver(this);
-
     keyboard = new Keyboard(this, cia[0], memory);
-    canvas = new C64Canvas(this, DOUBLE, keyboard);
-    canvas.addMouseMotionListener(this);
-    canvas.addMouseListener(this);
 
-    audioDriver = new AudioDriverSE();
     audioDriver.init(44000, 22000);
     setSID(RESID_6581);
     charMemoryIndex = CPU.CHAR_ROM2;
@@ -450,20 +413,11 @@ MouseMotionListener {
       mem[i] = cbmcolor[6];
     }
 
-    mis = new MemoryImageSource(SC_WIDTH, SC_HEIGHT, mem, 0, SC_WIDTH);
-
-    mis.setAnimated(true);
-    mis.setFullBufferUpdates(true);
-    screen = canvas.createImage(mis);
-
-    //to fix bug http://developer.java.sun.com/developer/bugParade/bugs/4464723.html
-//  setRequestFocusEnabled(true);
-//  addMouseListener(new MouseAdapter() {
-//  public void mousePressed(MouseEvent e) {
-//  requestFocus();
-//  }
-//  });
     initUpdate();
+  }
+
+  public boolean isDoubleSize() {
+    return DOUBLE;
   }
 
   public void update(Object src, Object data) {
@@ -619,17 +573,8 @@ MouseMotionListener {
     int pos = (address >> 8) & 0xf;
     address = address & IO_ADDRAND[pos];
 
-//  monitor.info("Wrote to Chips at " + Integer.toString(address, 16)
-//  + " = " + Integer.toString(data, 16));
-
     // Store in the memory given by "CPU"
     memory[address + IO_OFFSET] = data;
-
-//  if (address >= 0xd800 && address < 0xdc00) {
-//  int p = address - 0xd800;
-//  System.out.println("### Write to color ram: " + (p % 40) + "," + p/40 +
-//  " = " + data);
-//  }
 
     switch (address) {
     // -------------------------------------------------------------------
@@ -656,7 +601,6 @@ MouseMotionListener {
     case 0xd00d:
     case 0xd00f:
       sprites[(address - 0xd000) >> 1].y = data;
-//      System.out.println("Setting sprite " + (address - 0xd000)/2 + " to " + data);
       break;
     case 0xd010:
       sprXMSB = data;
@@ -669,9 +613,6 @@ MouseMotionListener {
     case 0xd011 :
       raster = (raster & 0xff) | ((data << 1) & 0x100);
       control1 = data;
-      //       monitor.info("Setting blank: " +
-      // 			 ((memory[ + 0xd011] & 0x08) == 0) +
-      // 			 " at " + vbeam);
 
       if (vScroll != (data & 7)) {
         // update vScroll and badLine!
@@ -693,15 +634,8 @@ MouseMotionListener {
       extended = (data & 0x40) != 0;
       blankRow = (data & 0x08) == 0;
 
-      // 000 => normal text, 001 => multicolor text
-      // 010 => extended text, 011 => illegal mode...
-      // 100 => hires gfx, 101 => multi hires
-      // 110, 111 => ?
       videoMode = (extended ? 0x02 : 0)
       | (multiCol ? 0x01 : 0) | (((data & 0x20) != 0) ? 0x04 : 0x00);
-
-//    System.out.println("Extended set to: " + extended + " at " +
-//    vbeam + " d011: " + Hex.hex2(data));
 
       if (VIC_MEM_DEBUG || BAD_LINE_DEBUG) {
         monitor.info("d011 = " + data + " at " + vbeam +
@@ -730,30 +664,18 @@ MouseMotionListener {
       for (int i = 0, m = 1, n = 8; i < n; i++, m = m << 1) {
         sprites[i].enabled = (data & m) != 0;
       }
-//      System.out.println("Setting sprite enable to " + data);
-
       break;
     case 0xd016:
       control2 = data;
       horizScroll = data & 0x7;
       multiCol = (data & 0x10) != 0;
 
-//      if (hideColumn != ((data & 0x08) == 0)) {
-//        System.out.println("38 chars on: " + hideColumn + " at " + vbeam + " cycle: " +
-//            (cycles - lastLine) + " borderstate:" + borderState);
-//      }
-      
       hideColumn = (data & 0x08) == 0;
 
       // Set videmode...
       videoMode = (extended ? 0x02 : 0)
       | (multiCol ? 0x01 : 0) | (((control1 & 0x20) != 0)
           ? 0x04 : 0x00);
-
-//    System.out.println("HorizScroll set to: " + horizScroll + " at "
-//    + vbeam);
-
-//    System.out.println("MultiColor set to: " + multiCol + " at " + vbeam);
       break;
 
     case 0xd017:
@@ -856,16 +778,12 @@ MouseMotionListener {
     case 0xd02e:
       sprites[address - 0xd027].color[2] = cbmcolor[data & 15];
       sprites[address - 0xd027].col = data & 15;
-//      System.out.println("Sprite " + (address - 0xd027) + " color set to: " + (data & 15));
       break;
       // CIA 1 & 2 - 'special' addresses
     case 0xdc00:
     case 0xdc01:
     case 0xdc02:
     case 0xdc03:
-      //       monitor.println("////////////==> Set Keyboard:" +
-      // 		      Integer.toString(address - ,16) + " = " + data +
-      // 		      " => ~" + ((~data) & 0xff));
       cia[0].performWrite(address + IO_OFFSET, data, cpu.cycles);
       if (!isrRunning) {
         if (ciaWrites++ > 20) {
@@ -879,10 +797,6 @@ MouseMotionListener {
     case 0xdd00:
       if (DEBUG_IEC)
         monitor.info("C64: IEC Write: " + Integer.toHexString(data));
-
-//    if (emulateDisk) {
-//    c1541.handleDisk(data, cpu.cycles);
-//    }
 
       if (VIC_MEM_DEBUG)
         System.out.println("Set dd00 to " + Integer.toHexString(data));
@@ -907,8 +821,6 @@ MouseMotionListener {
 
     case 0xdd02:
       cia2DDRA = data;
-//    System.out.println("C64: Wrote to DDRA (IEC): " +
-//    Integer.toHexString(data));
       cia[1].performWrite(address + IO_OFFSET, data, cpu.cycles);
       setVideoMem();
       break;
@@ -967,15 +879,7 @@ MouseMotionListener {
     vicBase = vicBank | (vicMem & 0x08) << 10;
     spr0BlockSel = 0x03f8 + videoMatrix;
 
-//    monitor.info("--------------------");
-//    monitor.info("0xdd00: 0x"+Integer.toHexString(memory[IO_OFFSET + 0xdd00]));
-//    monitor.info("0xd018: 0x"+Integer.toHexString(memory[IO_OFFSET + 0xd018]));
-//    monitor.info("vicBank: 0x"+Integer.toHexString(vicBank));
-//    monitor.info("videoMatrix: 0x"+Integer.toHexString(videoMatrix-vicBank));
-//    monitor.info("charSet: 0x"+Integer.toHexString(charSet-vicBank));
-
     //check if vic not looking at char rom 1, 2, 4, 8
-    // This is not correct! Char Rom is not everywhere!!!! - find out!
     if ( (vicMem & 0x0c) != 4 || (vicBank & 0x4000) == 0x4000) {
       charMemoryIndex = charSet;
     } else {
@@ -988,25 +892,13 @@ MouseMotionListener {
     vc = 0;
     vcBase = 0;
     vmli = 0;
-    //     rc = 0;
     updating = true;
-
-//  // First rendered line will start at cpu.cycles - no at next_scan!
-//  firstLine = nextScanLine;
 
     for (int i = 0; i < 8; i++) {
       sprites[i].nextByte = 0;
       sprites[i].painting = false;
       sprites[i].spriteReg = 0;
     }
-
-    if (colors == null) {
-      colors = new Color[16];
-      for (int i = 0; i < 16; i++) {
-        colors[i] = new Color(cbmcolor[i]);
-      }
-    }
-    canvas.setBackground(colors[memory[IO_OFFSET + 0xd020] & 15]);
   }
 
   // -------------------------------------------------------------------
@@ -1017,7 +909,7 @@ MouseMotionListener {
   private boolean notVisible = false;
   private int xPos = 0;
   private long lastCycle = 0;
-  
+
   public final void clock(long cycles) {
     if (DEBUG_CYCLES || true) {
       if (lastCycle + 1 < cycles) {
@@ -1041,16 +933,11 @@ MouseMotionListener {
       if (vicCycle < 62)
         return;
     }
-    
-    // Each cycle is 8 pixels (a byte)
-    // Cycle 16 (if first cycle is 0) is the first visible gfx cycle
-    // Cycle 12 is first visible border cycle => 12 x 8 = 96
-    // Last to "draw" is cycle 59 => 59 * 8 = 472 => 376 visible pixels?
 
     if (badLine) {
       gfxVisible = true;
     }
-    
+
     switch (vicCycle) {
     case 0:
       // Increase the vbeam - rendering is started
@@ -1112,7 +999,6 @@ MouseMotionListener {
         notVisible = true;
         if (STATE_DEBUG)
           monitor.info("FINISH next at " + vbeam);
-        // Jump directly to VS_FINISH and wait for end of line...
         break;
       }
 
@@ -1130,21 +1016,20 @@ MouseMotionListener {
         (displayEnabled && vbeam >= 0x30 && vbeam <= 0xf7) &&
         (vbeam & 0x7) == vScroll;
 
-      // Clear the collission masks each line... - not needed???
+      // Clear the collission masks each line...
       for (int i = 0, n = SC_WIDTH; i < n; i++) {
         collissionMask[i] = 0;
       }
       break;
     case 1: // Sprite data - sprite 3
       if (sprites[3].dma) {
-        sprites[3].readSpriteData(); // reads all 3 bytes here (one should be prev).
+        sprites[3].readSpriteData();
       }
       if (sprites[5].dma) {
         cpu.baLowUntil = lastLine + VICConstants.BA_SP5;
       }
       break;
     case 2:
-      // here some of the bytes for sprite 4 should be read...
       break;
     case 3:
       if (sprites[4].dma) {
@@ -1155,7 +1040,6 @@ MouseMotionListener {
       }
       break;
     case 4:
-      // here some of the bytes for sprite 5 should be read...
       break;
     case 5:
       if (sprites[5].dma) {
@@ -1166,7 +1050,6 @@ MouseMotionListener {
       }
       break;
     case 6:
-      // here some of the bytes for sprite 6 should be read..
       break;
     case 7:
       if (sprites[6].dma) {
@@ -1174,14 +1057,13 @@ MouseMotionListener {
       }
       break;
     case 8:
-      // here some of the bytes for sprite 7 should be read...
       break;
     case 9:
       if (sprites[7].dma) {
         sprites[7].readSpriteData();
       }
 
-      // Border management! (at another cycle maybe?)
+      // Border management!
       if (blankRow) {
         if (vbeam == 247) {
           borderState |= 1;
@@ -1193,7 +1075,6 @@ MouseMotionListener {
         if (vbeam == 51) {
           borderState &= 0xfe;
 
-          // Reset sprite data to avoid garbage since they are not painted...
           for (int i = 0, n = 7; i < n; i++) {
             if (!sprites[i].painting) {
               sprites[i].lineFinished = true;
@@ -1205,7 +1086,6 @@ MouseMotionListener {
       if (vbeam == 55) {
         borderState &= 0xfe;
 
-        // Reset sprite data to avoid garbage since they are not painted...
         for (int i = 0, n = 7; i < n; i++) {
           if (!sprites[i].painting)
             sprites[i].lineFinished = true;
@@ -1243,9 +1123,9 @@ MouseMotionListener {
         rc = 0;
       }
       break;
-    case 14:      
-      drawBackground();      
-      drawSprites();     
+    case 14:
+      drawBackground();
+      drawSprites();
       mpos += 8;
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
@@ -1266,7 +1146,7 @@ MouseMotionListener {
         if (sprites[i].nextByte == 63)
           sprites[i].dma = false;
       }
-      
+
       break;
     case 16:
       if (!hideColumn) {
@@ -1274,7 +1154,7 @@ MouseMotionListener {
       }
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        // Fetch first char into cache! (for the below draw...)
+        // Fetch first char into cache!
         vicCharCache[vmli] = memory[videoMatrix + (vcBase & 0x3ff)];
         vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + (vcBase & 0x3ff)];
       }
@@ -1285,8 +1165,7 @@ MouseMotionListener {
       if (borderState != 0)
         drawBackground();
       mpos += 8;
-      
-//      System.out.println("Cycle: " + vicCycle + " VMLI: " + vmli + " => " + mpos);
+
       break;
     case 17:
       if (hideColumn) {
@@ -1295,11 +1174,9 @@ MouseMotionListener {
 
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        // Fetch a some chars into cache! (for the below draw...)
         vicCharCache[vmli] = memory[videoMatrix + ((vcBase + vmli) & 0x3ff)];
         vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + ((vcBase + vmli) & 0x3ff)];
       }
-      // draw the graphics. (should probably handle sprites also??)
       drawGraphics(mpos + horizScroll);
       drawSprites();
       mpos += 8;
@@ -1308,23 +1185,17 @@ MouseMotionListener {
     default:
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        // Fetch a some chars into cache! (for the below draw...)
         vicCharCache[vmli] = memory[videoMatrix + ((vcBase + vmli) & 0x3ff)];
         vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + ((vcBase + vmli) & 0x3ff)];
       }
-      // draw the graphics. (should probably handle sprites also??)
       drawGraphics(mpos + horizScroll);
       drawSprites();
 
       mpos += 8;
-//      System.out.println("Cycle: " + vicCycle + " VMLI: " + vmli + " => " + mpos);
       break;
     case 54:
-      // Then Check if it is time to start up the sprites!
-      // Does not matter in which order this is done ?=
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        // Fetch a some chars into cache! (for the below draw...)
         vicCharCache[vmli] = memory[videoMatrix + ((vcBase + vmli) & 0x3ff)];
         vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + ((vcBase + vmli) & 0x3ff)];
       }
@@ -1334,7 +1205,6 @@ MouseMotionListener {
       for (int i = 0, n = 8; i < n; i++) {
         Sprite sprite = sprites[i];
         if (sprite.enabled) {
-          // If it is time to start drawing this sprite!
           if (sprite.y == (ypos & 0xff) && (ypos < 270)) {
             sprite.nextByte = 0;
             sprite.dma = true;
@@ -1349,13 +1219,12 @@ MouseMotionListener {
       if (sprites[0].dma) {
         cpu.baLowUntil = lastLine + VICConstants.BA_SP0;
       }
-      
+
       drawGraphics(mpos + horizScroll);
       drawSprites();
 
       mpos += 8;
-//      System.out.println("Cycle: " + vicCycle + " VMLI: " + vmli + " => " + mpos);
-      
+
       break;
     case 55:
       if (hideColumn) {
@@ -1363,7 +1232,6 @@ MouseMotionListener {
       }
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        // Fetch a some chars into cache! (for the below draw...)
         vicCharCache[vmli] = memory[videoMatrix + ((vcBase + vmli) & 0x3ff)];
         vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + ((vcBase + vmli) & 0x3ff)];
       }
@@ -1372,7 +1240,6 @@ MouseMotionListener {
       if (borderState != 0)
           drawBackground();
       mpos += 8;
-//      System.out.println("Cycle: " + vicCycle + " VMLI: " + vmli + " => " + mpos);
 
       break;
     case 56:
@@ -1384,7 +1251,7 @@ MouseMotionListener {
       drawSprites();
       mpos += 8;
 
-      
+
       // If time to turn of sprite display...
       for (int i = 0, n = 8; i < n; i++) {
         Sprite sprite = sprites[i];
@@ -1396,16 +1263,11 @@ MouseMotionListener {
         }
       }
 
-      // Here we should check if sprite dma should start...
-      // - probably need to add a dma variable to sprites, and not
-      // only use the painting variable for better emulation
-      // Bus not available if sp0 or sp1 is painting
       if (sprites[1].dma) {
         cpu.baLowUntil = lastLine + VICConstants.BA_SP1;
       }
       break;
     case 57:
-      // Paint border, check sprite for display and read sprite 0 data.
       for (int i = 0, n = 8; i < n; i++) {
         Sprite sprite = sprites[i];
         if (sprite.dma)
@@ -1416,7 +1278,7 @@ MouseMotionListener {
       drawSprites();
       mpos += 8;
 
-      
+
       if (rc == 7) {
         vcBase = vc;
         gfxVisible = false;
@@ -1470,8 +1332,6 @@ MouseMotionListener {
       }
       break;
     case 62:
-      // Should this be made??? or should sprite 0 be repaintable 
-      // same line?
       // Reset sprites so that they can be repainted again...
       for (int i = 0; i < sprites.length; i++) {
         sprites[i].reset();
@@ -1480,8 +1340,27 @@ MouseMotionListener {
       // Update screen
       if (updating) {
         if (vPos == 285) {
-          mis.newPixels();
-          canvas.repaint();
+          // Throttle to 50 Hz (20ms per frame)
+          long now = audioDriver.getMicros();
+          if (lastScan > 0) {
+            long frameElapsed = now - lastScan;
+            long targetMicros = 20000; // 20ms = 50Hz PAL
+            if (frameElapsed < targetMicros) {
+              long sleepMs = (targetMicros - frameElapsed) / 1000;
+              if (sleepMs > 0) {
+                try { Thread.sleep(sleepMs); } catch (InterruptedException e) {}
+              }
+            }
+          }
+
+          // Swap front and back buffers for tear-free rendering
+          int[] tmp = memFront;
+          memFront = mem;
+          mem = tmp;
+          // Signal frame ready (replaces AWT mis.newPixels() + canvas.repaint())
+          if (screenRefreshListener != null) {
+            screenRefreshListener.onFrameReady();
+          }
           actualScanTime = (actualScanTime * 9 + (int)
               ((audioDriver.getMicros() - lastScan))) / 10;
           lastScan = audioDriver.getMicros();
@@ -1497,7 +1376,7 @@ MouseMotionListener {
   // painted...
   private void drawBackground() {
     int bpos = mpos;
-    int currentBg = borderState > 0 ? borderColor : bgColor; 
+    int currentBg = borderState > 0 ? borderColor : bgColor;
     for (int i = 0; i < 8; i++) {
       mem[bpos++] = currentBg;
     }
@@ -1505,48 +1384,38 @@ MouseMotionListener {
 
   /**
    * <code>drawGraphics</code> - draw the VIC graphics (text/bitmap)
-   * Note that sprites are not drawn here... (yet?)
-   *
-   *
-   * @param mpos an <code>int</code> value representing position to
-   * draw the graphics from (already fixed with hscroll)
    */
   private final void drawGraphics(int mpos) {
     if (!gfxVisible || paintBorder || (borderState & 1) == 1) {
-      // We know that display is not enabled, and that mpos is already
-      // at a correct place, except horizScroll...
       mpos -= horizScroll;
       int color = (paintBorder || (borderState > 0)) ? borderColor : bgColor;
       for (int i = mpos, n = mpos + 8; i < n; i++) {
         mem[i] = color;
       }
-      // trick to use vmli as a if var even when no gfx.
       vmli++;
       return;
     }
 
     int collX = (vmli << 3) + horizScroll + SC_XOFFS;
-    
-    // Paint background if first col (should maybe be made later also...)
+
+    // Paint background if first col
     if (vmli == 0) {
       for (int i = mpos - horizScroll, n = i + 8; i < n; i++) {
         mem[i] = bgColor;
       }
     }
-    
+
     int position = 0, data = 0, penColor = 0, bgcol = bgColor;
 
     if ((control1 & 0x20) == 0) {
       int tmp;
       int pcol;
 
-      // This should be in a cache some where...
       if (multiCol) {
         multiColor[0] = bgColor;
         multiColor[1] = cbmcolor[bgCol[1]];
         multiColor[2] = cbmcolor[bgCol[2]];
       }
-
 
       penColor = cbmcolor[pcol = vicColCache[vmli] & 15];
       if (extended) {
@@ -1564,8 +1433,6 @@ MouseMotionListener {
         for (int pix = 0; pix < 8; pix += 2) {
           tmp = (data >> pix) & 3;
           mem[mpos + 6 - pix] = mem[mpos + 7 - pix] = multiColor[tmp];
-          // both 00 and 01 => no collission!?
-          // but what about priority?
           if (tmp > 0x01) {
             tmp = 256;
           } else {
@@ -1587,7 +1454,6 @@ MouseMotionListener {
       }
 
       if (multiCol && extended) {
-        // Illegal mode => all black!
         for (int pix = 0; pix < 8; pix++) {
           mem[mpos + 7 - pix] = 0xff000000;
         }
@@ -1620,7 +1486,6 @@ MouseMotionListener {
           cbmcolor[vmliData & 0x0f];
         multiColor[3] = cbmcolor[vicColCache[vmli] & 0x0f];
 
-        // Multicolor
         int tmp;
         for (int pix = 0; pix < 8; pix += 2) {
           mem[mpos + 6 - pix] = mem[mpos + 7 - pix] =
@@ -1634,7 +1499,6 @@ MouseMotionListener {
             collissionMask[collX + 6 - pix] = tmp;
         }
       } else {
-        // Non multicolor
         for (int pix = 0; pix < 8; pix++) {
           if ((data & (1 << pix)) > 0) {
             mem[7 - pix + mpos] = penColor;
@@ -1647,7 +1511,6 @@ MouseMotionListener {
       }
 
       if (extended) {
-        // Illegal mode => all black!
         for (int pix = 0; pix < 8; pix++) {
           mem[mpos + 7 - pix] = 0xff000000;
         }
@@ -1669,7 +1532,7 @@ MouseMotionListener {
   private final void drawSprites() {
     int smult = 0x100;
     int lastX = xPos - 8;
-    
+
     for (int i = 7; i >= 0; i--) {
       Sprite sprite = sprites[i];
       // Done before the continue...
@@ -1681,10 +1544,7 @@ MouseMotionListener {
       int mpos = vPos * SC_WIDTH;
 
       if (x < xPos) {
-        // Ok, we should write some data...
         int minX = lastX > x ? lastX : x;
-//        if (i == 0) monitor.info("Writing sprite " + i + " first pixel at " +
-//            minX + " vPos = " + vPos);
 
         for (int j = minX, m = xPos; j < m; j++) {
           int c = sprite.getPixel();
@@ -1695,18 +1555,11 @@ MouseMotionListener {
             }
 
             if (tmp != smult) {
-              // If collission with bg then notice!
               if ((tmp & 0x100) != 0) {
                 sprBgCol |= smult;
-//              monitor.info("***** Sprite x Bkg collission!");
               }
-              // If collission with sprite, all colls must
-              // be registered!
               if ((tmp & 0xff) != smult) {
                 sprCol |= tmp & 0xff;
-//              monitor.info("***** Sprite x Sprite collission: d01e = " +
-//              sprCol + " sprite: " + i + " => " +
-//              smult + " at " + j + "," + vbeam);
               }
             }
           }
@@ -1730,7 +1583,6 @@ MouseMotionListener {
   }
 
   public void stop() {
-    motorSound(false);
     sidChip.stop();
     audioDriver.shutdown();
   }
@@ -1750,106 +1602,23 @@ MouseMotionListener {
 
     cia[0].reset();
     cia[1].reset();
-//  c1541.reset();
     keyboard.reset();
     ciaWrites = 0;
     isrRunning = false;
 
-    motorSound(false);
     resetInterrupts();
   }
 
   public static final int IMG_TOTWIDTH = SC_WIDTH;
   public static final int IMG_TOTHEIGHT = SC_HEIGHT;
 
-  public Image crtImage;
-
-  // Will be called from the c64canvas class
-  long repaint = 0;
-  public void paint(Graphics g) {
-    if (g == null)
-      return;
-
-    if (image == null) {
-      image = canvas.createImage(IMG_TOTWIDTH, IMG_TOTHEIGHT);
-      g2 = image.getGraphics();
-      g2.setFont(new Font("Monospaced", Font.PLAIN, 11));
-    }
-
-    if (crtImage == null) {
-      crtImage = new BufferedImage(displayWidth, displayHeight,
-          BufferedImage.TYPE_INT_ARGB);
-      Graphics gcrt = crtImage.getGraphics();
-      gcrt.setColor(TRANSPARENT_BLACK);
-      for (int i = 0, n = displayHeight; i < n; i += 2) {
-        gcrt.drawLine(0, i, displayWidth, i);
-      }
-    }
-
-    // Why is there transparency?
-    g2.drawImage(screen, 0, 0,  null);
-
-    if (reset > 0) {
-      g2.setColor(darks[colIndex]);
-      int xp = 44;
-      if (reset < 44) {
-        xp = reset;
-      }
-      g2.drawString("JaC64 " + version + " - Java C64 - www.jac64.com",
-          xp + 1, 9);
-      g2.setColor(lites[colIndex]);
-      g2.drawString("JaC64 " + version + " - Java C64 - www.jac64.com",
-          xp, 8);
-      reset--;
-    } else {
-      String msg = "JaC64 ";
-      if ((message != null) && (message != "")) {
-        msg += message;
-      } else {
-        colIndex = 0;
-      }
-      msg += tmsg;
-
-      g2.setColor(darks[colIndex]);
-      g2.drawString(msg, 1, 9);
-      g2.setColor(lites[colIndex]);
-      g2.drawString(msg, 0, 8);
-
-      if (ledOn) {
-        g2.setColor(LED_ON);
-      } else {
-        g2.setColor(LED_OFF);
-      }
-      g2.fillRect(372, 3, 7, 1);
-      g2.setColor(LED_BORDER);
-      g2.drawRect(371, 2, 8, 2);
-    }
-
-    g.fillRect(0, 0, offsetX, displayHeight + offsetY * 2);
-    g.fillRect(offsetX + displayWidth, 0,
-        offsetX, displayHeight + offsetY * 2);
-    g.fillRect(0, 0, displayWidth + offsetX * 2, offsetY);
-    g.fillRect(0, displayHeight + offsetY,
-        displayWidth + offsetX * 2, offsetY);
-    Graphics2D g2d = (Graphics2D) g;
-//  g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-//  RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-    g2d.drawImage(image, offsetX, offsetY, displayWidth, displayHeight, null);
-//    g.drawImage(crtImage, offsetX, offsetY, displayWidth, displayHeight, null);
-
-//     monitor.info("Repaint: " + (System.currentTimeMillis() - repaint) + " " + memory[IO_OFFSET + 55296 + 6 * 40]);
-//     repaint = System.currentTimeMillis();
-  }
-
-
   // -------------------------------------------------------------------
   // Internal sprite class to handle all data for sprites
-  // Just a collection of data registers... so far...
   // -------------------------------------------------------------------
   private class Sprite {
 
-    boolean painting = false; // If sprite is "on" or not (visible)
-    boolean dma = false;  // Sprite DMA on/off
+    boolean painting = false;
+    boolean dma = false;
 
     int nextByte;
     int pointer;
@@ -1857,7 +1626,6 @@ MouseMotionListener {
     int y;
 
     int spriteNo;
-    // Contains the sprite data to be outshifted
     int spriteReg;
 
     boolean enabled;
@@ -1871,16 +1639,13 @@ MouseMotionListener {
     int pixelsLeft = 0;
     int currentPixel = 0;
 
-    // The sprites color value (col)
     int col;
-    // Sprites real colors
     int[] color = new int[4];
 
     int getPixel() {
       if (lineFinished) return 0;
       pixelsLeft--;
       if (pixelsLeft > 0) return currentPixel;
-      // Indicate finished!
       if (pixelsLeft <= 0 && spriteReg == 0) {
         currentPixel = 0;
         lineFinished = true;
@@ -1888,17 +1653,14 @@ MouseMotionListener {
       }
 
       if (multicolor) {
-        // The 23rd and 22nd pixel => data!
         currentPixel = (spriteReg & 0xc00000) >> 22;
         spriteReg = (spriteReg << 2) & 0xffffff;
         pixelsLeft = 2;
       } else {
-        // Only the 23rd bit is pixel data!
         currentPixel = (spriteReg & 0x800000) >> 22;
         spriteReg = (spriteReg << 1) & 0xffffff;
         pixelsLeft = 1;
       }
-      // Double the number of pixels if expanded!
       if (expandX) {
         pixelsLeft = pixelsLeft << 1;
       }
@@ -1909,17 +1671,12 @@ MouseMotionListener {
     void reset() {
       lineFinished = false;
     }
-    
+
     void readSpriteData() {
-      // Read pointer + the three sprite data pointers...
       pointer = vicBank + memory[spr0BlockSel + spriteNo] * 0x40;
       spriteReg = ((memory[pointer + nextByte++] & 0xff) << 16) |
       ((memory[pointer + nextByte++] & 0xff)  << 8) |
       memory[pointer + nextByte++];
-
-      // For debugging... seems to be err on other place than the
-      // Memoryfetch - since this is also looking very odd...???
-      // spriteReg = 0xf0f0f0;
 
       if (!expandY) expFlipFlop = false;
 
@@ -1929,97 +1686,39 @@ MouseMotionListener {
 
       expFlipFlop = !expFlipFlop;
       pixelsLeft = 0;
-
     }
   }
 
   // -------------------------------------------------------------------
-  // Observer (1541) - should probably be in C64 screen later...
+  // Observer (1541)
   // -------------------------------------------------------------------
 
   public void updateDisk(Object obs, Object msg) {
     if (msg == C1541Chips.HEAD_MOVED) {
       if (lastTrack != c1541Chips.currentTrack) {
         lastTrack = c1541Chips.currentTrack;
-        trackSound();
-      } else {
-        // Head could not move any more... maybe other sound here?
-        trackSound();
       }
     }
 
-    // add head beyond here...
     lastSector = c1541Chips.currentSector;
-
-    if (motorOn != c1541Chips.motorOn) {
-      motorSound(c1541Chips.motorOn);
-    }
-
     tmsg = " track: " + lastTrack + " / " + lastSector;
 
     ledOn = c1541Chips.ledOn;
     motorOn = c1541Chips.motorOn;
   }
 
-  private void trackSound() {
-    if (trackSound != null) {
-      trackSound.play();
-    }
+  // Pointer input (for paddle/lightpen emulation)
+  public void setPointerPosition(int x, int y) {
+    potx = x & 0xff;
+    poty = 0xff - (y & 0xff);
   }
 
-  public void motorSound(boolean on) {
-    if (motorSound != null) {
-      if (on)
-        motorSound.loop();
-      else
-        motorSound.stop();
-    }
-  }
-
-  public void setSounds(AudioClip track, AudioClip motor) {
-    trackSound = track;
-    motorSound = motor;
-  }
-
-  // -------------------------------------------------------------------
-  // MouseListener
-  // -------------------------------------------------------------------
-  public void mouseDragged(MouseEvent e) {
-    potx = e.getX() & 0xff;
-    poty = 0xff - (e.getY() & 0xff);
-  }
-
-  public void mouseMoved(MouseEvent e) {
-    potx = e.getX() & 0xff;
-    poty = 0xff - (e.getY() & 0xff);
-  }
-
-  public void mouseClicked(MouseEvent e) {
-  }
-  public void mouseEntered(MouseEvent e) {
-  }
-  public void mouseExited(MouseEvent e) {
-  }
-
-  public void mousePressed(MouseEvent e) {
-    if (e.getButton() == MouseEvent.BUTTON1) {
-      button1 = true;
+  public void setPointerButton(int button, boolean pressed) {
+    if (button == 1) {
+      button1 = pressed;
     } else {
-      button2 = true;
+      button2 = pressed;
     }
-    // Emulate stick button
     keyboard.setButtonval(0xff - (button1 | button2 ? 0x10 : 0));
-    //keyboard.setButtonval(0xff - (button1 ? 0x4 : 0) - (button2 ? 0x8 : 0));
-  }
-
-  public void mouseReleased(MouseEvent e) {
-    if (e.getButton() == MouseEvent.BUTTON1) {
-      button1 = false;
-    } else {
-      button2 = false;
-    }
-    // Emulate stick button
-    keyboard.setButtonval(0xff - (button1 | button2 ? 0x10 : 0));
-    //    keyboard.setButtonval(0xff - (button1 ? 0x4 : 0) - (button2 ? 0x8 : 0));
   }
 }

@@ -1,0 +1,55 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.dreamfabric.jac64.android'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.dreamfabric.jac64.android"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    sourceSets {
+        main {
+            java {
+                // Android-specific code
+                srcDir 'src/main/java'
+                // Shared core sources from the original JaC64 project
+                srcDir '../../'
+                // Exclude desktop-only files
+                exclude 'JaC64.java'
+                exclude 'C64Test.java'
+                exclude 'C64Applet.java'
+                exclude 'com/dreamfabric/gui/**'
+                exclude 'com/dreamfabric/jac64/C64Canvas.java'
+                exclude 'com/dreamfabric/jac64/AudioDriverSE.java'
+                exclude 'android/**'
+            }
+            assets.srcDirs = ['src/main/assets']
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+}
+
+dependencies {
+}
