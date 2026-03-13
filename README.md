@@ -1,28 +1,24 @@
 # JaC64 - 100% Java C64 Emulation
 
-JaC64 is a pure Java Commodore 64 emulator that can be run in any modern Java
-enabled web-browser. It can also be run as a stand-alone C64 emulator.
+JaC64 is a pure Java Commodore 64 emulator created by Joakim Eriksson in 2007.
+It can be run as a stand-alone desktop application or as an Android app.
 
-**Originator and main developer:** Joakim Eriksson, [jac64.com](http://www.jac64.com), [dreamfabric.com](http://www.dreamfabric.com)
+**Author:** Joakim Eriksson, [jac64.com](http://www.jac64.com), [dreamfabric.com](http://www.dreamfabric.com)
 
-## Fork History
+## What's New
 
-This is Cat's Eye Technologies' fork of the original JaC64 distribution.
+- **Android port** — full C64 emulation on Android with virtual keyboard and joystick
+- **Gradle build system** — modern build for both desktop and Android
+- **Refactored rendering** — separated platform-independent emulation from UI code
 
-This fork was made from what was the tip revision of the JaC64 sources
-on Sourceforge, [revision 140](http://sourceforge.net/p/jac64/code/HEAD/tree/).
+## Acknowledgements
 
-Several bug fixes and minor enhancements have been applied. The
-full details can be found in the [git log](https://github.com/catseye/JaC64/commits/master).
-
-Some highlights are:
-- **Restartable!** There were problems before with applet start/stop
-  (e.g. reloading a web page that has a JaC64 applet on it)
-- More robust handling of joystick (does not initially "stick" in the
-  top-left direction at the start of some games)
-- More robust handling of broken audio support
-- Easier building (cleaned up Makefile, build warnings)
-- Refactored some code
+This version incorporates bug fixes and improvements from
+[Cat's Eye Technologies' fork](https://github.com/catseye/JaC64), including:
+- Applet restart fixes
+- More robust joystick handling
+- Improved audio error handling
+- Makefile cleanup and code refactoring
 
 ## Building
 
