@@ -45,7 +45,7 @@ public class JaC64MCP {
         cpu.getDrive().setReader(reader);
 
         keyboard = scr.getKeyboard();
-        scr.setKeyboardEmulation(true);
+        scr.setKeyboardEmulation(false);
 
         window = new JFrame("JaC64 MCP");
         window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
