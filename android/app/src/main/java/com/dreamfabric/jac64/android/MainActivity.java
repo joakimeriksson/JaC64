@@ -43,6 +43,7 @@ public class MainActivity extends Activity {
     private VirtualJoystickView joystickView;
     private Thread cpuThread;
     private boolean warpEnabled = false;
+    private boolean touchPaddleEnabled = false;
     private AudioDriverAndroid audioDriver;
 
     private boolean keyboardVisible = false;
@@ -462,6 +463,7 @@ public class MainActivity extends Activity {
         popup.getMenu().add(0, 31, 8, "Joystick Port 1");
         popup.getMenu().add(0, 32, 9, "Joystick Port 2");
         popup.getMenu().add(0, 40, 10, warpEnabled ? "Warp Speed OFF" : "Warp Speed ON");
+        popup.getMenu().add(0, 41, 11, touchPaddleEnabled ? "Touch Paddle OFF" : "Touch Paddle ON");
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -479,6 +481,12 @@ public class MainActivity extends Activity {
                 case 40:
                     warpEnabled = !warpEnabled;
                     screen.setFullSpeed(warpEnabled);
+                    return true;
+                case 41:
+                    touchPaddleEnabled = !touchPaddleEnabled;
+                    emulatorView.setTouchEnabled(touchPaddleEnabled);
+                    // Hide joystick when paddle is active, show when not
+                    joystickView.setVisibility(touchPaddleEnabled ? View.GONE : View.VISIBLE);
                     return true;
             }
             return false;

@@ -1723,8 +1723,8 @@ public class C64Screen extends ExtChip implements Observer {
 
   // Pointer input (for paddle/lightpen emulation)
   public void setPointerPosition(int x, int y) {
-    potx = x & 0xff;
-    poty = 0xff - (y & 0xff);
+    potx = 0xff - (x & 0xff);
+    poty = y & 0xff;
   }
 
   public void setPointerButton(int button, boolean pressed) {

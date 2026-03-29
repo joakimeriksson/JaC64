@@ -16,23 +16,28 @@ import com.dreamfabric.jac64.Keyboard;
  */
 public class VirtualKeyboardView extends View {
 
-    // C64 keyboard layout - rows of key labels and their keycodes
+    // C64 keyboard layout - rows of key labels
     private static final String[][] KEY_LABELS = {
         {"<-", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "+", "-", "\u00a3", "HOME", "DEL"},
-        {"CTRL", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "@", "*", "^", "RSTR"},
+        {"CTRL", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "@", "*", "\u2191", "RSTR"},
         {"R/S", "SL", "A", "S", "D", "F", "G", "H", "J", "K", "L", ":", ";", "=", "RETURN"},
         {"C=", "SHFT", "Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "SHFT", "U", "D"},
         {"", "", "", "SPACE", "", "", "", "", "", "", "", "", "L", "", "R"}
     };
 
-    // Key codes matching Keyboard.java constants
-    // Using the same int values as java.awt.event.KeyEvent VK_* constants
-    private static final int[][] KEY_CODES = {
-        {192, 49, 50, 51, 52, 53, 54, 55, 56, 57, 48, 45, 61, 92, Keyboard.VK_HOME, Keyboard.VK_BACK_SPACE},
-        {Keyboard.VK_TAB, 81, 87, 69, 82, 84, 89, 85, 73, 79, 80, 91, 93, -1, Keyboard.VK_PAGE_UP},
-        {Keyboard.VK_ESCAPE, -1, 65, 83, 68, 70, 71, 72, 74, 75, 76, 59, 39, -1, Keyboard.VK_ENTER},
-        {Keyboard.VK_CONTROL, Keyboard.VK_SHIFT, 90, 88, 67, 86, 66, 78, 77, 44, 46, 47, Keyboard.VK_CAPS_LOCK, Keyboard.VK_UP, Keyboard.VK_DOWN},
-        {-1, -1, -1, 32, -1, -1, -1, -1, -1, -1, -1, -1, Keyboard.VK_LEFT, -1, Keyboard.VK_RIGHT}
+    // C64 keyboard matrix positions: {row, col, flags}
+    // row=-1: inactive, row=-2: RESTORE key, flags=1: auto-shift
+    private static final int[][][] KEY_MATRIX = {
+        // <-, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0, +, -, £, HOME, DEL
+        {{7,1,0}, {7,0,0}, {7,3,0}, {1,0,0}, {1,3,0}, {2,0,0}, {2,3,0}, {3,0,0}, {3,3,0}, {4,0,0}, {4,3,0}, {5,0,0}, {5,3,0}, {6,0,0}, {6,3,0}, {0,0,0}},
+        // CTRL, Q, W, E, R, T, Y, U, I, O, P, @, *, up-arrow, RESTORE
+        {{7,2,0}, {7,6,0}, {1,1,0}, {1,6,0}, {2,1,0}, {2,6,0}, {3,1,0}, {3,6,0}, {4,1,0}, {4,6,0}, {5,1,0}, {5,6,0}, {6,1,0}, {6,6,0}, {-2,0,0}},
+        // R/S, SL(inactive), A, S, D, F, G, H, J, K, L, :, ;, =, RETURN
+        {{7,7,0}, {-1,0,0}, {1,2,0}, {1,5,0}, {2,2,0}, {2,5,0}, {3,2,0}, {3,5,0}, {4,2,0}, {4,5,0}, {5,2,0}, {5,5,0}, {6,2,0}, {6,5,0}, {0,1,0}},
+        // C=, LSHIFT, Z, X, C, V, B, N, M, comma, period, /, RSHIFT, CRS-UP, CRS-DOWN
+        {{7,5,0}, {1,7,0}, {1,4,0}, {2,7,0}, {2,4,0}, {3,7,0}, {3,4,0}, {4,7,0}, {4,4,0}, {5,7,0}, {5,4,0}, {6,7,0}, {6,4,0}, {0,7,1}, {0,7,0}},
+        // (empty x3), SPACE, (empty x8), CRS-LEFT, (empty), CRS-RIGHT
+        {{-1,0,0}, {-1,0,0}, {-1,0,0}, {7,4,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {0,2,1}, {-1,0,0}, {0,2,0}}
     };
 
     // Width weight for each key in each row (wider keys get more weight)
@@ -131,7 +136,7 @@ public class VirtualKeyboardView extends View {
 
         for (int r = 0; r < KEY_LABELS.length; r++) {
             for (int c = 0; c < KEY_LABELS[r].length; c++) {
-                if (KEY_LABELS[r][c].isEmpty() || KEY_CODES[r][c] == -1) continue;
+                if (KEY_LABELS[r][c].isEmpty() || KEY_MATRIX[r][c][0] == -1) continue;
 
                 RectF rect = keyRects[r][c];
                 Paint p = keyPressed[r][c] ? keyPressedPaint : keyPaint;
@@ -185,10 +190,16 @@ public class VirtualKeyboardView extends View {
         for (int r = 0; r < keyRects.length; r++) {
             for (int c = 0; c < keyRects[r].length; c++) {
                 if (keyRects[r][c].contains(x, y)) {
-                    int keyCode = KEY_CODES[r][c];
-                    if (keyCode != -1 && !keyPressed[r][c]) {
+                    int[] matrix = KEY_MATRIX[r][c];
+                    if (matrix[0] >= 0 && !keyPressed[r][c]) {
                         keyPressed[r][c] = true;
-                        keyboard.keyPressed(keyCode, 0);
+                        if (matrix[2] == 1) {
+                            keyboard.pressC64Key(1, 7); // auto-shift
+                        }
+                        keyboard.pressC64Key(matrix[0], matrix[1]);
+                    } else if (matrix[0] == -2 && !keyPressed[r][c]) {
+                        keyPressed[r][c] = true;
+                        keyboard.pressRestoreKey();
                     }
                     return;
                 }
@@ -201,9 +212,14 @@ public class VirtualKeyboardView extends View {
             for (int c = 0; c < keyPressed[r].length; c++) {
                 if (keyPressed[r][c]) {
                     keyPressed[r][c] = false;
-                    int keyCode = KEY_CODES[r][c];
-                    if (keyCode != -1) {
-                        keyboard.keyReleased(keyCode, 0);
+                    int[] matrix = KEY_MATRIX[r][c];
+                    if (matrix[0] >= 0) {
+                        keyboard.releaseC64Key(matrix[0], matrix[1]);
+                        if (matrix[2] == 1) {
+                            keyboard.releaseC64Key(1, 7); // auto-shift
+                        }
+                    } else if (matrix[0] == -2) {
+                        keyboard.releaseRestoreKey();
                     }
                 }
             }
