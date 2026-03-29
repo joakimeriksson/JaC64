@@ -300,6 +300,9 @@ public class JaC64MCP {
         tools.add(toolDef("cpu_state", "Read CPU registers (PC, SP, A, X, Y) and 1541 drive CPU state",
             null));
 
+        tools.add(toolDef("iec_trace", "Enable/disable IEC serial bus tracing to stderr",
+            prop("enabled", "boolean", "true to start tracing, false to stop")));
+
         result.add("tools", tools);
         return result;
     }
@@ -323,6 +326,7 @@ public class JaC64MCP {
                 case "key_press": return toolKeyPress(args);
                 case "set_sid": return toolSetSid(args);
                 case "cpu_state": return toolCpuState();
+                case "iec_trace": return toolIecTrace(args);
                 default: return toolError("Unknown tool: " + name);
             }
         } catch (Exception e) {
@@ -369,6 +373,29 @@ public class JaC64MCP {
         text = text.replace("\n", "~");
         cpu.enterText(text);
         return toolResult("Typed: " + text.replace("~", "\\n"));
+    }
+
+    private JsonObject toolIecTrace(JsonObject args) {
+        boolean enabled = args.has("enabled") && args.get("enabled").getAsBoolean();
+        if (enabled) {
+            scr.iecTraceCount = 0;
+            scr.iecLogPos = 0;
+            for (int i = 0; i < C64Screen.IEC_LOG_SIZE; i++) scr.iecLog[i] = null;
+            scr.iecTrace = true;
+            return toolResult("IEC trace started");
+        } else {
+            scr.iecTrace = false;
+            // Dump last N events from ring buffer
+            StringBuilder sb = new StringBuilder();
+            sb.append("IEC trace: " + scr.iecTraceCount + " total events. Last entries:\n");
+            for (int i = 0; i < C64Screen.IEC_LOG_SIZE; i++) {
+                int idx = (scr.iecLogPos + i) % C64Screen.IEC_LOG_SIZE;
+                if (scr.iecLog[idx] != null) {
+                    sb.append(scr.iecLog[idx]).append('\n');
+                }
+            }
+            return toolResult(sb.toString());
+        }
     }
 
     private JsonObject toolCpuState() {

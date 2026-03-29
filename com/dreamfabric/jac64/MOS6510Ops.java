@@ -302,7 +302,7 @@ public class MOS6510Ops {
   private static int getAdrMode(int pos, int m) {
     switch(m) {
     case 0: case 2:
-      if (pos > 4) return IMMEDIATE;
+      if (pos >= 4) return IMMEDIATE;
       return 0;
     case 1: case 3:
       return INDIRECT_X;

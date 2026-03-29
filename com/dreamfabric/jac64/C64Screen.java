@@ -87,6 +87,11 @@ public class C64Screen extends ExtChip implements Observer {
   TFE_CS8900 tfe;
 
   int iecLines = 0;
+  public boolean iecTrace = false;
+  public long iecTraceCount = 0;
+  public static final int IEC_LOG_SIZE = 200;
+  public String[] iecLog = new String[IEC_LOG_SIZE];
+  public int iecLogPos = 0;
   // for disk emulation...
   int cia2PRA = 0;
   int cia2DDRA = 0;
@@ -815,6 +820,16 @@ public class C64Screen extends ExtChip implements Observer {
       }
       c1541Chips.updateIECLines();
 
+      if (iecTrace) {
+        iecTraceCount++;
+        int combined = iecLines & c1541Chips.iecLines;
+        iecLog[iecLogPos] = String.format("#%d cy=%d PC=$%04X W=$%02X ATN=%d CLK=%d DAT=%d c64[%02X] drv[%02X]",
+            iecTraceCount, cpu.cycles, cpu.getPC(),
+            cia2PRA & 0xff,
+            (combined >> 4) & 1, (combined >> 6) & 1, (combined >> 7) & 1,
+            iecLines & 0xd0, c1541Chips.iecLines & 0xd0);
+        iecLogPos = (iecLogPos + 1) % IEC_LOG_SIZE;
+      }
       if (DEBUG_IEC) printIECLines();
       setVideoMem();
       break;
