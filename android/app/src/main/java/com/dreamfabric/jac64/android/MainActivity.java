@@ -42,6 +42,7 @@ public class MainActivity extends Activity {
     private VirtualKeyboardView keyboardView;
     private VirtualJoystickView joystickView;
     private Thread cpuThread;
+    private boolean warpEnabled = false;
     private AudioDriverAndroid audioDriver;
 
     private boolean keyboardVisible = false;
@@ -460,6 +461,7 @@ public class MainActivity extends Activity {
         popup.getMenu().add(0, 23, 7, "SID: JaC64 Original");
         popup.getMenu().add(0, 31, 8, "Joystick Port 1");
         popup.getMenu().add(0, 32, 9, "Joystick Port 2");
+        popup.getMenu().add(0, 40, 10, warpEnabled ? "Warp Speed OFF" : "Warp Speed ON");
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -474,6 +476,10 @@ public class MainActivity extends Activity {
                 case 23: screen.setSID(C64Screen.JACSID); return true;
                 case 31: screen.setStick(true); return true;
                 case 32: screen.setStick(false); return true;
+                case 40:
+                    warpEnabled = !warpEnabled;
+                    screen.setFullSpeed(warpEnabled);
+                    return true;
             }
             return false;
         });

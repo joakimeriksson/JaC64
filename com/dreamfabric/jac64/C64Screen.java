@@ -944,6 +944,22 @@ public class C64Screen extends ExtChip implements Observer {
     // Delta is cycles into the current raster line!
     int vicCycle = (int) (cycles - lastLine);
 
+    // Per-cycle raster compare IRQ check (like real VIC-II)
+    // Must run even on non-visible lines — raster IRQs fire anywhere
+    if (raster == vbeam) {
+      if ((irqFlags & 1) == 0) {
+        irqFlags |= 0x1;
+        if ((irqMask & 1) != 0) {
+          irqFlags |= 0x80;
+          irqTriggered = true;
+          setIRQ(VIC_IRQ);
+          lastIRQ = cpu.cycles;
+        }
+      }
+    } else {
+      irqTriggered = false;
+    }
+
     if (notVisible) {
       if (vicCycle < 62)
         return;
@@ -967,46 +983,16 @@ public class C64Screen extends ExtChip implements Observer {
         initUpdate();
       }
 
-      // Check for interrupts, etc...
-      // Sprite collission interrupts - why only once a line?
+      // Sprite collission interrupts - checked once per line
       if (((irqMask & 2) != 0) && (sprBgCol != 0) &&
           (irqFlags & 2) == 0) {
-        if (SPRITEDEBUG)
-          monitor.info("*** Sprite collission IRQ (d01f): " +
-              sprBgCol + " at " + vbeam);
         irqFlags |= 82;
         setIRQ(VIC_IRQ);
       }
       if (((irqMask & 4) != 0) && (sprCol != 0) &&
           (irqFlags & 4) == 0) {
-        if (SPRITEDEBUG)
-          monitor.info("*** Sprite collission IRQ (d01e): " +
-              sprCol + " at " + vbeam);
         irqFlags |= 84;
         setIRQ(VIC_IRQ);
-      }
-
-
-      int irqComp = raster;
-      // Not nice... FIX THIS!!!
-      if (irqComp > 312) irqComp &= 0xff;
-
-      if ((irqFlags & 1) == 0 && (irqComp == vbeam)) {
-        irqFlags |= 0x1;
-
-        if ((irqMask & 1) != 0) {
-          irqFlags |= 0x80;
-          irqTriggered = true;
-          setIRQ(VIC_IRQ);
-          lastIRQ = cpu.cycles;
-          if (IRQDEBUG)
-            monitor.info("Generating IRQ at " + vbeam + " req:" + raster
-                + " IRQs:" + cpu.interruptInExec
-                + " flags: " + irqFlags + " delta: " +
-                (cpu.cycles - lastLine));
-        }
-      } else {
-        irqTriggered = false;
       }
       notVisible = false;
       if (vPos < 0 || vPos >= 284) {

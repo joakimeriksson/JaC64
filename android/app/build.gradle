@@ -35,11 +35,13 @@ android {
                 srcDir '../../'
                 // Exclude desktop-only files
                 exclude 'JaC64.java'
+                exclude 'JaC64MCP.java'
                 exclude 'C64Test.java'
                 exclude 'C64Applet.java'
                 exclude 'com/dreamfabric/gui/**'
                 exclude 'com/dreamfabric/jac64/C64Canvas.java'
                 exclude 'com/dreamfabric/jac64/AudioDriverSE.java'
+                exclude 'com/dreamfabric/jac64/SELoader.java'
                 exclude 'android/**'
             }
             assets.srcDirs = ['src/main/assets']
