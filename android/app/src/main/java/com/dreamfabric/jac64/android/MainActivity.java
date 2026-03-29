@@ -128,6 +128,7 @@ public class MainActivity extends Activity {
 
         // Connect views
         emulatorView.setScreen(screen);
+        emulatorView.setCPU(cpu);
 
         Keyboard keyboard = screen.getKeyboard();
         keyboardView.setKeyboard(keyboard);
@@ -355,13 +356,30 @@ public class MainActivity extends Activity {
                 fos.close();
                 is.close();
 
+                // If zip, extract first C64 file from it
+                if (path.toLowerCase().endsWith(".zip")) {
+                    tmpFile = extractFromZip(tmpFile);
+                    if (tmpFile == null) {
+                        runOnUiThread(() -> android.widget.Toast.makeText(this,
+                            "No .d64/.t64/.prg/.p00 found in zip", android.widget.Toast.LENGTH_LONG).show());
+                        return;
+                    }
+                    Log.i("JaC64", "Extracted from zip: " + tmpFile.getName());
+                }
+
                 String name = tmpFile.getAbsolutePath().toLowerCase();
                 Log.i("JaC64", "Temp file: " + tmpFile.getAbsolutePath() + " size: " + tmpFile.length());
                 Log.i("JaC64", "Matching extension from: " + name);
                 if (name.endsWith(".d64")) {
                     Log.i("JaC64", "Loading as D64 disk image");
+                    cpu.reset();
+                    Thread.sleep(200);
+                    while (!screen.ready()) {
+                        Thread.sleep(100);
+                    }
                     reader.readDiskFromFile(tmpFile.getAbsolutePath());
-                    Log.i("JaC64", "D64 loaded - type LOAD \"*\",8,1 then RUN");
+                    cpu.enterText("LOAD\"*\",8,1~");
+                    Log.i("JaC64", "D64 mounted and LOAD command sent");
                 } else if (name.endsWith(".t64")) {
                     Log.i("JaC64", "Loading as T64 tape");
                     cpu.reset();
@@ -400,6 +418,30 @@ public class MainActivity extends Activity {
                 });
             }
         }, "FileLoader").start();
+    }
+
+    private File extractFromZip(File zipFile) throws java.io.IOException {
+        java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+            new java.io.FileInputStream(zipFile));
+        java.util.zip.ZipEntry entry;
+        while ((entry = zis.getNextEntry()) != null) {
+            String entryName = entry.getName().toLowerCase();
+            if (entryName.endsWith(".d64") || entryName.endsWith(".t64")
+                    || entryName.endsWith(".prg") || entryName.endsWith(".p00")) {
+                File out = new File(getCacheDir(), entry.getName());
+                java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+                byte[] buf = new byte[8192];
+                int len;
+                while ((len = zis.read(buf)) > 0) {
+                    fos.write(buf, 0, len);
+                }
+                fos.close();
+                zis.close();
+                return out;
+            }
+        }
+        zis.close();
+        return null;
     }
 
     private void showMenu(View anchor) {

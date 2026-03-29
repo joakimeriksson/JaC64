@@ -141,12 +141,35 @@ public class JaC64MCP {
                 FileDialog fd = new FileDialog(window, "Open File/Disk", FileDialog.LOAD);
                 fd.setFilenameFilter((dir, name) -> {
                     String n = name.toLowerCase();
-                    return n.endsWith(".d64") || n.endsWith(".t64") || n.endsWith(".prg") || n.endsWith(".p00");
+                    return n.endsWith(".d64") || n.endsWith(".t64") || n.endsWith(".prg") || n.endsWith(".p00") || n.endsWith(".zip");
                 });
                 fd.setVisible(true);
                 if (fd.getFile() != null) {
                     String path = fd.getDirectory() + fd.getFile();
                     String lower = path.toLowerCase();
+                    try {
+                        if (lower.endsWith(".zip")) {
+                            java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+                                new java.io.FileInputStream(path));
+                            java.util.zip.ZipEntry entry;
+                            while ((entry = zis.getNextEntry()) != null) {
+                                String n = entry.getName().toLowerCase();
+                                if (n.endsWith(".d64") || n.endsWith(".t64") || n.endsWith(".prg") || n.endsWith(".p00")) {
+                                    File tmp = File.createTempFile("jac64_", "_" + entry.getName());
+                                    tmp.deleteOnExit();
+                                    FileOutputStream fos = new FileOutputStream(tmp);
+                                    byte[] buf = new byte[8192];
+                                    int len;
+                                    while ((len = zis.read(buf)) > 0) fos.write(buf, 0, len);
+                                    fos.close();
+                                    path = tmp.getAbsolutePath();
+                                    lower = path.toLowerCase();
+                                    break;
+                                }
+                            }
+                            zis.close();
+                        }
+                    } catch (Exception ex) { ex.printStackTrace(); }
                     if (lower.endsWith(".d64")) {
                         reader.readDiskFromFile(path);
                         cpu.reset();
@@ -336,9 +359,36 @@ public class JaC64MCP {
 
     // --- Tool Implementations ---
 
-    private JsonObject toolLoadFile(JsonObject args) {
+    private JsonObject toolLoadFile(JsonObject args) throws Exception {
         String path = args.get("path").getAsString();
         String lower = path.toLowerCase();
+
+        // Extract from zip if needed
+        if (lower.endsWith(".zip")) {
+            java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
+                new java.io.FileInputStream(path));
+            java.util.zip.ZipEntry entry;
+            while ((entry = zis.getNextEntry()) != null) {
+                String n = entry.getName().toLowerCase();
+                if (n.endsWith(".d64") || n.endsWith(".t64") || n.endsWith(".prg") || n.endsWith(".p00")) {
+                    File tmp = File.createTempFile("jac64_", "_" + entry.getName());
+                    tmp.deleteOnExit();
+                    FileOutputStream fos = new FileOutputStream(tmp);
+                    byte[] buf = new byte[8192];
+                    int len;
+                    while ((len = zis.read(buf)) > 0) fos.write(buf, 0, len);
+                    fos.close();
+                    zis.close();
+                    path = tmp.getAbsolutePath();
+                    lower = path.toLowerCase();
+                    break;
+                }
+            }
+            if (lower.endsWith(".zip")) {
+                zis.close();
+                return toolError("No .d64/.t64/.prg/.p00 found in zip");
+            }
+        }
 
         if (lower.endsWith(".d64")) {
             reader.readDiskFromFile(path);
