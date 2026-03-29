@@ -1340,9 +1340,12 @@ public class C64Screen extends ExtChip implements Observer {
       // Update screen
       if (updating) {
         if (vPos == 285) {
-          // Throttle to 50 Hz (20ms per frame)
+          // Throttle to 50 Hz only when audio driver has no sound
+          // (e.g. Android without Java Sound). With ReSID, audio
+          // output already provides the timing — double throttle
+          // causes half-speed audio and flickering.
           long now = audioDriver.getMicros();
-          if (lastScan > 0) {
+          if (lastScan > 0 && !audioDriver.fullSpeed() && !audioDriver.hasSound()) {
             long frameElapsed = now - lastScan;
             long targetMicros = 20000; // 20ms = 50Hz PAL
             if (frameElapsed < targetMicros) {
@@ -1580,6 +1583,16 @@ public class C64Screen extends ExtChip implements Observer {
       }
     }
     xPos += 8;
+  }
+
+  public void setFullSpeed(boolean fullSpeed) {
+    System.err.println("C64Screen.setFullSpeed(" + fullSpeed + ") sidChip=" + sidChip.getClass().getSimpleName());
+    audioDriver.setFullSpeed(fullSpeed);
+    if (sidChip instanceof SIDChip) {
+      ((SIDChip) sidChip).mixer.setFullSpeed(fullSpeed);
+    } else if (sidChip instanceof RESIDChip) {
+      ((RESIDChip) sidChip).setFullSpeed(fullSpeed);
+    }
   }
 
   public void stop() {

@@ -46,6 +46,14 @@ public class RESIDChip extends ExtChip {
         nextRest -= 1000;
         nextSample++;
       }
+      if (fullSpeed) {
+        // Warp mode: skip all audio work, just keep time advancing
+        lastCycles = cycles;
+        time = nextSample;
+        if (!removeSample)
+          cpu.scheduler.addEvent(this);
+        return;
+      }
       // Clock resid!
       while(lastCycles < cycles) {
         sid.clock();
@@ -90,6 +98,7 @@ public class RESIDChip extends ExtChip {
     totalSamplesWritten += BUFFER_SIZE;
 
     // Throttle to real-time based on samples written vs wall clock
+    if (fullSpeed) return;
     if (startTimeNanos == 0) {
       startTimeNanos = System.nanoTime();
       return;
@@ -124,6 +133,15 @@ public class RESIDChip extends ExtChip {
   public void stop() {
     // Called from any thread!
     removeSample = true;
+  }
+
+  private boolean fullSpeed = false;
+
+  public void setFullSpeed(boolean fs) {
+    fullSpeed = fs;
+    // Reset timing state on any transition to re-sync with wall clock
+    startTimeNanos = 0;
+    totalSamplesWritten = 0;
   }
 
   public void setChipVersion(int version) {

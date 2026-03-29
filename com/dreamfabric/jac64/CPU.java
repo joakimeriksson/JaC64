@@ -73,6 +73,7 @@ public class CPU extends MOS6510Core {
     return c1541;
   }
 
+
   private final void schedule(long cycles) {
     chips.clock(cycles);
     while (cycles >= scheduler.nextTime) {

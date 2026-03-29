@@ -617,6 +617,31 @@ public class Keyboard {
     joy1 = stick == 0xdc00 + IO_OFFSET ? jst : 0xff;
   }
 
+  /**
+   * Press a C64 key directly by matrix position (for virtual keyboard).
+   * Bypasses keycode-to-matrix lookup and locale remapping.
+   */
+  public void pressC64Key(int row, int col) {
+    keyrow[row] = keyrow[row] & (255 - (1 << col));
+    keycol[col] = keycol[col] & (255 - (1 << row));
+  }
+
+  /**
+   * Release a C64 key directly by matrix position (for virtual keyboard).
+   */
+  public void releaseC64Key(int row, int col) {
+    keyrow[row] = keyrow[row] | (1 << col);
+    keycol[col] = keycol[col] | (1 << row);
+  }
+
+  public void pressRestoreKey() {
+    screen.restoreKey(true);
+  }
+
+  public void releaseRestoreKey() {
+    screen.restoreKey(false);
+  }
+
   public void reset() {
     lastKey = 0;
     keyPressed = 0;

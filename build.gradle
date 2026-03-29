@@ -3,9 +3,17 @@ plugins {
     id 'application'
 }
 
+repositories {
+    mavenCentral()
+}
+
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
     targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+dependencies {
+    implementation 'com.google.code.gson:gson:2.11.0'
 }
 
 sourceSets {
@@ -41,4 +49,8 @@ jar {
         include 'roms/**'
         include 'sounds/**'
     }
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

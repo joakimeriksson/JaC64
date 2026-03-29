@@ -132,9 +132,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected int rindex = 0;
   protected int lastReadOP = 0;
 
-  public int getSP() {
-    return s;
-  }
+  public int getSP() { return s; }
+  public int getPC() { return pc; }
+  public int getAcc() { return acc; }
+  public int getX() { return x; }
+  public int getY() { return y; }
 
   private final void doInterrupt(int adr, int status) {
 //  System.out.println("Doing Interrupt disableInterrupt before: " +
