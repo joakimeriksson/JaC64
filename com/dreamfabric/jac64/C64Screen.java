@@ -87,6 +87,7 @@ public class C64Screen extends ExtChip implements Observer {
   TFE_CS8900 tfe;
 
   int iecLines = 0;
+  private boolean rasterIrqTriggered = false;
   public boolean iecTrace = false;
   public long iecTraceCount = 0;
   public static final int IEC_LOG_SIZE = 200;
@@ -944,10 +945,21 @@ public class C64Screen extends ExtChip implements Observer {
     // Delta is cycles into the current raster line!
     int vicCycle = (int) (cycles - lastLine);
 
+    // At cycle 0, increment vbeam BEFORE the raster compare
+    // (real VIC-II updates raster counter at start of line)
+    if (vicCycle == 0) {
+      vbeam = (vbeam + 1) % 312;
+      if (vbeam == 0) frame++;
+      vPos = vbeam - (FIRST_VISIBLE_VBEAM + 1);
+    }
+
     // Per-cycle raster compare IRQ check (like real VIC-II)
     // Must run even on non-visible lines — raster IRQs fire anywhere
+    // Uses separate rasterIrqTriggered flag (like VICE) to prevent
+    // re-triggering after the game acknowledges via $D019
     if (raster == vbeam) {
-      if ((irqFlags & 1) == 0) {
+      if (!rasterIrqTriggered) {
+        rasterIrqTriggered = true;
         irqFlags |= 0x1;
         if ((irqMask & 1) != 0) {
           irqFlags |= 0x80;
@@ -957,6 +969,7 @@ public class C64Screen extends ExtChip implements Observer {
         }
       }
     } else {
+      rasterIrqTriggered = false;
       irqTriggered = false;
     }
 
@@ -971,10 +984,7 @@ public class C64Screen extends ExtChip implements Observer {
 
     switch (vicCycle) {
     case 0:
-      // Increase the vbeam - rendering is started
-      vbeam = (vbeam + 1) % 312;
-      if (vbeam == 0) frame++;
-      vPos = vbeam - (FIRST_VISIBLE_VBEAM + 1);
+      // vbeam already incremented before the raster compare above
 
       if (vbeam == FIRST_VISIBLE_VBEAM) {
         colIndex++;
