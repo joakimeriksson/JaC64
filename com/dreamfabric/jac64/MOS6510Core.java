@@ -24,7 +24,7 @@ import java.io.*;
  */
 public abstract class MOS6510Core extends MOS6510Ops {
   protected int memory[];
-    protected boolean debug = false;
+  protected boolean debug = false;
 
   public static final int NMI_DELAY = 2;
   public static final int IRQ_DELAY = 2;
@@ -45,6 +45,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public boolean checkInterrupt = false;
   public boolean NMILow = false;
   public boolean NMILastLow = false;
+  private boolean NMIPending = false;
   private boolean IRQLow = false;
   public int lastInterrupt = 0;
   public boolean busAvailable = true;
@@ -103,17 +104,17 @@ public abstract class MOS6510Core extends MOS6510Ops {
 
   public void setNMILow(boolean low) {
     if (!NMILow && low) {
-      // If going from "high" to low -> will trigger an NMI!
+      // Latch the falling edge until the CPU can service it.
       checkInterrupt = true;
-      nmiCycleStart = cycles + NMI_DELAY;
+      if (!NMIPending) {
+        nmiCycleStart = cycles + NMI_DELAY;
+      }
+      NMIPending = true;
       //System.out.println("*** NMI Goes low!");
     }
     NMILow = low;
-    // If setting to non-low - both low and lastLow can be set?
-    if (!low) {
-      NMILastLow = low;
-      //System.out.println("*** NMI Goes hi!");
-    }
+    NMILastLow = low;
+    //System.out.println(low ? "*** NMI Goes low!" : "*** NMI Goes hi!");
   }
 
   protected int jumpTo = -1;
@@ -137,6 +138,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public int getAcc() { return acc; }
   public int getX() { return x; }
   public int getY() { return y; }
+  public int getStatus() { return getStatusByte(); }
 
   private final void doInterrupt(int adr, int status) {
 //  System.out.println("Doing Interrupt disableInterrupt before: " +
@@ -230,7 +232,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   private final void branch(boolean branch, int adr, int cycDiff) {
     if (branch) {
       int oldPC = pc;
-      pc = adr;
+      pc = adr & 0xffff;
       /* correct branch */
       if (cycDiff == 1) {
         fetchByte(pc);
@@ -268,10 +270,10 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public void emulateOp() {
     // Before executing an operation - check for interrupts!!!
     if (checkInterrupt) {
-      // Trigger on negative edge!
-      if ((NMILow && !NMILastLow) && (cycles >= nmiCycleStart)) {
+      if (NMIPending && (cycles >= nmiCycleStart)) {
         log("NMI interrupt at " + cycles);
         lastInterrupt = NMI_INT;
+        NMIPending = false;
         doInterrupt(0xfffa, getStatusByte() & 0xef);
         disableInterupt = true;
         //prevent irq during nmi,RTI will clear by poping status back
@@ -302,7 +304,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
           return;
         } else {
           brk = false;
-          checkInterrupt = (NMILow && !NMILastLow);
+          checkInterrupt = NMIPending;
         }
       } else if (resetFlag) {
         doReset();
@@ -314,7 +316,8 @@ public abstract class MOS6510Core extends MOS6510Ops {
 
     // Ok no interrupts, execute instruction
     // fetch instruction!
-    int data = INSTRUCTION_SET[fetchByte(pc++)];
+    int opcode = fetchByte(pc++) & 0xff;
+    int data = INSTRUCTION_SET[opcode];
     int op = data & OP_MASK;
     int addrMode = data & ADDRESSING_MASK;
     boolean read = (data & READ) != 0;
@@ -866,6 +869,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
     checkInterrupt = false;
     NMILow = false;
     NMILastLow = false;
+    NMIPending = false;
     IRQLow = false;
     log("Set IRQLOW to false...");
     resetFlag = false;
@@ -887,6 +891,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
     // Clear and copy!
     // The processor flags
     NMILow = false;
+    NMIPending = false;
     brk = false;
     IRQLow = false;
     log("Set IRQLOW to false...");

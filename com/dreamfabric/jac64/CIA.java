@@ -182,7 +182,7 @@ public class CIA {
 //      System.out.println(ciaID() + " getTimerB LO, timer = " + timerB.getTimer(cycles));
       return timerB.getTimer(cycles) & 0xff;
     case TIMBHI:
-      return timerB.getTimer(cycles) & 0xff;
+      return timerB.getTimer(cycles) >> 8;
     case TODTEN:
       return tod10sec;
     case TODSEC:

@@ -372,9 +372,8 @@ public class CPU extends MOS6510Core {
         emulateOp();
 
         // Also allow the 1541 to run an instruction!
-        if (EMULATE_1541) {
-          c1541.tick(cycles);
-        }
+        // 1541 drive runs on-demand only (synced on $DD00 read/write)
+        // Matching VICE's DRIVE_IDLE_SKIP_CYCLES architecture
 
         nr_ins++;
         if (next_print < cycles) {
@@ -478,9 +477,8 @@ public class CPU extends MOS6510Core {
         }
 
         // Also allow the 1541 to run an instruction!
-        if (EMULATE_1541) {
-          c1541.tick(cycles);
-        }
+        // 1541 drive runs on-demand only (synced on $DD00 read/write)
+        // Matching VICE's DRIVE_IDLE_SKIP_CYCLES architecture
       }
     } catch (Exception e) {
       monitor.error("Exception in loop " + pc + " : " + e);

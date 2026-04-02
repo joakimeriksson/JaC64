@@ -86,21 +86,22 @@ public class C64Screen extends ExtChip implements Observer {
 
   TFE_CS8900 tfe;
 
-  int iecLines = 0;
+  public int iecLines = 0;
   private boolean rasterIrqTriggered = false;
   public boolean iecTrace = false;
   public long iecTraceCount = 0;
   public static final int IEC_LOG_SIZE = 200;
   public String[] iecLog = new String[IEC_LOG_SIZE];
   public int iecLogPos = 0;
+  private int iecLoopReadLogs = 0;
   // for disk emulation...
   int cia2PRA = 0;
   int cia2DDRA = 0;
 
   private int lastTrack = 0;
   private int lastSector = 0;
-  private boolean ledOn = false;
-  private boolean motorOn = false;
+  boolean ledOn = false;
+  boolean motorOn = false;
 
   // This is an IEC emulation (non ROM based)
   boolean emulateDisk = false; //true; //!CPU.EMULATE_1541; // false;
@@ -552,12 +553,22 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xdc01:
       return keyboard.readDC01(cpu.lastReadOP);
     case 0xdd00:
-      //       System.out.print("Read dd00 IEC1: ");
-      // Try the frodo way... again...
+      // Match VICE: bring the drive up to the current C64 clock before
+      // sampling IEC state on reads as well as writes.
+      if (c1541Chips != null) {
+        ((CPU)cpu).getDrive().tick(cpu.cycles);
+      }
       val = (cia2PRA | ~cia2DDRA) & 0x3f
       | iecLines & c1541Chips.iecLines;
 
       val &= 0xff;
+      if (iecLoopReadLogs < 16 && cpu.getPC() >= 0x01a9 && cpu.getPC() <= 0x01ad) {
+        System.out.printf(
+            "C64 loop read DD00=$%02X c64=%02X drv=%02X A=%02X X=%02X Y=%02X SP=%02X cyc=%d%n",
+            val, iecLines & 0xd0, c1541Chips.iecLines & 0xd0,
+            cpu.acc & 0xff, cpu.x & 0xff, cpu.y & 0xff, cpu.s & 0xff, cpu.cycles);
+        iecLoopReadLogs++;
+      }
       return val;
     default:
       if (pos == 0x4) {
@@ -573,6 +584,40 @@ public class C64Screen extends ExtChip implements Observer {
       }
       return 0xff;
     }
+  }
+
+  private void updateCia2IecBus(boolean syncDrive) {
+    if (c1541Chips == null) {
+      return;
+    }
+
+    if (syncDrive) {
+      ((CPU)cpu).getDrive().tick(cpu.cycles);
+    }
+
+    int data = ~cia2PRA & cia2DDRA;
+    int oldLines = iecLines;
+    iecLines = (data << 2) & 0x80   // DATA
+    | (data << 2) & 0x40            // CLK
+    | (data << 1) & 0x10;           // ATN
+
+    if (((oldLines ^ iecLines) & 0x10) != 0) {
+      c1541Chips.atnChanged((iecLines & 0x10) == 0);
+    }
+    c1541Chips.updateIECLines();
+
+    if (iecTrace) {
+      iecTraceCount++;
+      int combined = iecLines & c1541Chips.iecLines;
+      iecLog[iecLogPos] = String.format("#%d cy=%d PC=$%04X W=$%02X ATN=%d CLK=%d DAT=%d c64[%02X] drv[%02X]",
+          iecTraceCount, cpu.cycles, cpu.getPC(),
+          cia2PRA & 0xff,
+          (combined >> 4) & 1, (combined >> 6) & 1, (combined >> 7) & 1,
+          iecLines & 0xd0, c1541Chips.iecLines & 0xd0);
+      iecLogPos = (iecLogPos + 1) % IEC_LOG_SIZE;
+    }
+
+    if (DEBUG_IEC) printIECLines();
   }
 
   public void performWrite(int address, int data, long cycles) {
@@ -801,6 +846,14 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 0xdd00:
+      // Matching VICE's iecbus_cpu_write_conf1 order:
+      // 1. Sync drive FIRST (catches up with OLD bus state)
+      // 2. THEN update bus state
+      // 3. Signal ATN change via CA1 interrupt
+      // 4. Recalculate drive IEC lines
+      if (c1541Chips != null) {
+        ((CPU)cpu).getDrive().tick(cpu.cycles);
+      }
       if (DEBUG_IEC)
         monitor.info("C64: IEC Write: " + Integer.toHexString(data));
 
@@ -809,35 +862,17 @@ public class C64Screen extends ExtChip implements Observer {
 
       cia[1].performWrite(address + IO_OFFSET, data, cpu.cycles);
       cia2PRA = data;
-
-      data = ~cia2PRA & cia2DDRA;
-      int oldLines = iecLines;
-      iecLines = (data << 2) & 0x80	// DATA
-      | (data << 2) & 0x40		// CLK
-      | (data << 1) & 0x10;		// ATN
-
-      if (((oldLines ^ iecLines) & 0x10) != 0) {
-        c1541Chips.atnChanged((iecLines & 0x10) == 0);
-      }
-      c1541Chips.updateIECLines();
-
-      if (iecTrace) {
-        iecTraceCount++;
-        int combined = iecLines & c1541Chips.iecLines;
-        iecLog[iecLogPos] = String.format("#%d cy=%d PC=$%04X W=$%02X ATN=%d CLK=%d DAT=%d c64[%02X] drv[%02X]",
-            iecTraceCount, cpu.cycles, cpu.getPC(),
-            cia2PRA & 0xff,
-            (combined >> 4) & 1, (combined >> 6) & 1, (combined >> 7) & 1,
-            iecLines & 0xd0, c1541Chips.iecLines & 0xd0);
-        iecLogPos = (iecLogPos + 1) % IEC_LOG_SIZE;
-      }
-      if (DEBUG_IEC) printIECLines();
+      updateCia2IecBus(false);
       setVideoMem();
       break;
 
     case 0xdd02:
+      if (c1541Chips != null) {
+        ((CPU)cpu).getDrive().tick(cpu.cycles);
+      }
       cia2DDRA = data;
       cia[1].performWrite(address + IO_OFFSET, data, cpu.cycles);
+      updateCia2IecBus(false);
       setVideoMem();
       break;
 
@@ -949,7 +984,9 @@ public class C64Screen extends ExtChip implements Observer {
     // (real VIC-II updates raster counter at start of line)
     if (vicCycle == 0) {
       vbeam = (vbeam + 1) % 312;
-      if (vbeam == 0) frame++;
+      if (vbeam == 0) {
+        frame++;
+      }
       vPos = vbeam - (FIRST_VISIBLE_VBEAM + 1);
     }
 

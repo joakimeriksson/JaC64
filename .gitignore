@@ -26,3 +26,6 @@ android/app/src/main/assets/roms/
 # IDE
 .idea/
 *.iml
+.mcp.json
+iec_timing.log
+roms

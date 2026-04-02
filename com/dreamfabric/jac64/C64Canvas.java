@@ -150,6 +150,21 @@ public class C64Canvas extends JPanel implements KeyListener, FocusListener,
 
     // Draw the C64 screen
     g.drawImage(screenImage, ox, oy, dw, dh, null);
+
+    // Draw drive LED indicator
+    int ledRadius = 6;
+    int ledX = ox + dw - ledRadius * 2 - 4;
+    int ledY = oy + dh + (oy > ledRadius * 2 + 4 ? (oy - ledRadius * 2) / 2 : 2);
+    if (scr.ledOn) {
+      g.setColor(new Color(0x00CC00)); // bright green
+    } else if (scr.motorOn) {
+      g.setColor(new Color(0x006600)); // dim green
+    } else {
+      g.setColor(new Color(0x333333)); // dark gray (off)
+    }
+    g.fillOval(ledX, ledY, ledRadius * 2, ledRadius * 2);
+    g.setColor(Color.DARK_GRAY);
+    g.drawOval(ledX, ledY, ledRadius * 2, ledRadius * 2);
   }
 
   // -------------------------------------------------------------------

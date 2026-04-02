@@ -107,6 +107,12 @@ public class JaC64MCP {
             colorMenu.add(mi);
         }
 
+        JCheckBoxMenuItem muteItem = new JCheckBoxMenuItem("Mute");
+        muteItem.setSelected(true);
+        muteItem.addActionListener(e2 -> scr.setSoundOn(!muteItem.isSelected()));
+        settingsMenu.add(muteItem);
+        scr.setSoundOn(false); // Start muted
+
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(e -> {
             if (window.isFocused()) {
                 if (e.getID() == KeyEvent.KEY_PRESSED) canvas.keyPressed(e);
@@ -277,7 +283,8 @@ public class JaC64MCP {
         JsonArray tools = new JsonArray();
 
         tools.add(toolDef("load_file", "Load a .d64, .t64, .prg, or .p00 file into the emulator",
-            prop("path", "string", "Absolute path to the file")));
+            prop("path", "string", "Absolute path to the file"),
+            prop("mount_only", "boolean", "If true, only mount the disk without resetting or typing LOAD (for disk swaps)")));
 
         tools.add(toolDef("type_text", "Type text into the C64 keyboard buffer. Use \\n for ENTER key.",
             prop("text", "string", "Text to type")));
@@ -390,8 +397,13 @@ public class JaC64MCP {
             }
         }
 
+        boolean mountOnly = args.has("mount_only") && args.get("mount_only").getAsBoolean();
+
         if (lower.endsWith(".d64")) {
             reader.readDiskFromFile(path);
+            if (mountOnly) {
+                return toolResult("Disk mounted (swap only, no reset).");
+            }
             // Wait for screen ready, then type LOAD command
             cpu.reset();
             waitReady();
@@ -456,11 +468,34 @@ public class JaC64MCP {
         sb.append(String.format("1541 PC=$%04X SP=$%02X A=$%02X X=$%02X Y=$%02X\n",
             drive.getPC(), drive.getSP(), drive.getAcc(), drive.getX(), drive.getY()));
         // Show a few bytes at C64 PC for context
-        int pc = cpu.getPC();
+        int pc = cpu.getPC() & 0xffff;
         int[] mem = cpu.getMemory();
-        sb.append(String.format("C64 @PC: %02X %02X %02X %02X %02X",
-            mem[pc]&0xff, mem[(pc+1)&0xffff]&0xff, mem[(pc+2)&0xffff]&0xff,
-            mem[(pc+3)&0xffff]&0xff, mem[(pc+4)&0xffff]&0xff));
+        sb.append(String.format("C64 @PC: %02X %02X %02X %02X %02X\n",
+            mem[pc % mem.length]&0xff, mem[(pc+1) % mem.length]&0xff,
+            mem[(pc+2) % mem.length]&0xff, mem[(pc+3) % mem.length]&0xff,
+            mem[(pc+4) % mem.length]&0xff));
+        // 1541 IEC/VIA state
+        C1541Chips chips = drive.chips;
+        int dpc = drive.getPC();
+        int[] dmem = drive.getMemory();
+        sb.append(String.format("1541 @PC: %02X %02X %02X %02X %02X\n",
+            dmem[dpc]&0xff, dmem[(dpc+1)&0xffff]&0xff, dmem[(dpc+2)&0xffff]&0xff,
+            dmem[(dpc+3)&0xffff]&0xff, dmem[(dpc+4)&0xffff]&0xff));
+        sb.append(String.format("IEC c64=$%02X drv=$%02X via1PB=$%02X via1CB=$%02X track=%d sector=%d\n",
+            scr.iecLines & 0xff, chips.iecLines & 0xff, chips.via1PB & 0xff, chips.via1CB & 0xff,
+            chips.currentTrack, chips.currentSector));
+        sb.append(String.format("via2PB=$%02X via1IE=$%02X via1IF=$%02X motor=%b IRQLow=%b I=%b\n",
+            chips.via2PB & 0xff,
+            chips.via1IEnable & 0xff, chips.via1IFlag & 0xff,
+            chips.motorOn, drive.getIRQLow(),
+            (drive.getStatus() & 0x04) != 0));
+        // Dump 1541 code: initial handshake area and IEC transfer
+        for (int base : new int[]{0x0370, 0x0380, 0x0390, 0x0670, 0x0680, 0x0690}) {
+            sb.append(String.format("$%04X:", base));
+            for (int i = 0; i < 16; i++)
+                sb.append(String.format(" %02X", dmem[(base + i) & 0xFFFF] & 0xFF));
+            sb.append('\n');
+        }
         return toolResult(sb.toString());
     }
 

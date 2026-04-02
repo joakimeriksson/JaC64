@@ -32,8 +32,9 @@ GCR Coding Table
 
 public class C1541Chips extends ExtChip implements DiskListener {
 
-  // GCR_SECTOR_SIZE => 354
-  public static final int GCR_SECTOR_SIZE = 1 + 10 + 9 + 1 + 325 + 8;
+  // Header/data structure is fixed; the final inter-sector gap varies by zone.
+  public static final int GCR_SECTOR_HEADER_AND_DATA_SIZE = 5 + 10 + 9 + 5 + 325;
+  public static final int GCR_SECTOR_SIZE = GCR_SECTOR_HEADER_AND_DATA_SIZE + 17;
 
   public static final boolean DEBUG = false;
   public static final boolean DEBUG_IRQ = false;
@@ -77,6 +78,9 @@ public class C1541Chips extends ExtChip implements DiskListener {
   private int sector = 0;
   private int sectorPos = 0;
   private int currentTrackSize = 21;
+  private int currentTrackLength = 7692;
+  private int gcrSectorLength = GCR_SECTOR_HEADER_AND_DATA_SIZE + 8;
+  private int trackGapBytesRemaining = 0;
 
   // The current GCR sector
   private int[] gcrSector = new int[GCR_SECTOR_SIZE];
@@ -85,21 +89,25 @@ public class C1541Chips extends ExtChip implements DiskListener {
   // Max 40 tracks each 21 sectors
   private int[][][] gcrCacheSector = new int[40][21][];
 
-  private int via1PB;
+  public int via1PB;
   private int via1PA;
-  private int via1CB;
+  public int via1CB;
   private int via1CA;
   private int via1T1Ctr;
   private int via1T1Latch;
   private int via1T2Ctr;
   private int via1T2Latch;
+  private boolean via1T1Running;
+  private boolean via1T2Running;
+  private boolean via1T1IrqArmed;
+  private boolean via1T2IrqArmed;
   private int via1SerialRegister;
   private int via1AuxControl;
   private int via1PerControl;
-  private int via1IFlag;
-  private int via1IEnable;
+  public int via1IFlag;
+  public int via1IEnable;
 
-  private int via2PB;
+  public int via2PB;
   private int via2PA;
   private int via2CB;
   private int via2CA;
@@ -107,6 +115,10 @@ public class C1541Chips extends ExtChip implements DiskListener {
   private int via2T1Latch;
   private int via2T2Ctr;
   private int via2T2Latch;
+  private boolean via2T1Running;
+  private boolean via2T2Running;
+  private boolean via2T1IrqArmed;
+  private boolean via2T2IrqArmed;
   private int via2SerialRegister;
   private int via2AuxControl;
   int via2PerControl; // Needed by the C1541Emu
@@ -123,6 +135,8 @@ public class C1541Chips extends ExtChip implements DiskListener {
   public int headOutBeyond = 0;
   private int bytesWritten = 0;
   private int currentByte = 0;
+  private int iecLoopReadLogs = 0;
+  private int track1LateStateLogs = 0;
 
   private C64Reader reader;
 
@@ -130,7 +144,7 @@ public class C1541Chips extends ExtChip implements DiskListener {
   boolean diskModeWrite = false;
 
   C64Screen cia2;
-  int iecLines;
+  public int iecLines;
 
   public C1541Chips(C1541Emu emu) {
     cpu = emu;
@@ -147,13 +161,53 @@ public class C1541Chips extends ExtChip implements DiskListener {
     reader.setDiskListener(this);
   }
 
+  private static String dumpBytes(int[] memory, int start, int count) {
+    StringBuilder sb = new StringBuilder();
+    int mask = memory.length - 1;
+    for (int i = 0; i < count; i++) {
+      if (i > 0) sb.append(' ');
+      sb.append(String.format("%02X", memory[(start + i) & mask] & 0xff));
+    }
+    return sb.toString();
+  }
+
   public final int performRead(int address, long cycles) {
     switch (address) {
     case 0x1800: // VIA1 PB - IEEE Serial Bus / IEC
-      return (via1PB & 0x1a
-          | ((iecLines & cia2.iecLines) >> 7) & 0x01    // DATA
-          | ((iecLines & cia2.iecLines) >> 4) & 0x04    // CLK
-          | (cia2.iecLines << 3) & 0x80) ^ 0x85;        // ATN
+      // Match the 1541 VIA behavior in VICE: read live IEC inputs on
+      // input-configured bits, but return ORB for output-configured bits.
+      int iecBus = ((((iecLines & cia2.iecLines) >> 7) & 0x01)   // DATA IN
+          | (((iecLines & cia2.iecLines) >> 4) & 0x04)           // CLK IN
+          | ((cia2.iecLines << 3) & 0x80)) ^ 0x85;               // ATN IN
+      int value = (iecBus | 0x1a) & (~via1CB & 0xff)
+          | (via1PB & via1CB);
+      if (iecLoopReadLogs < 96
+          && cpu.getPC() >= 0x06a1 && cpu.getPC() <= 0x06c8
+          && (cpu.y & 0xff) <= 0x08) {
+        System.out.printf(
+            "DRV loop pc=%04X read %04X=$%02X c64=%02X drv=%02X PB=%02X DDR=%02X ACR=%02X PCR=%02X IFR=%02X T1=%04X T2=%04X A=%02X X=%02X Y=%02X SP=%02X cyc=%d%n",
+            cpu.getPC() & 0xffff, address & 0xffff,
+            value & 0xff, cia2.iecLines & 0xd0, iecLines & 0xd0,
+            via1PB & 0xff, via1CB & 0xff, via1AuxControl & 0xff,
+            via1PerControl & 0xff, via1IFlag & 0xff, via1T1Ctr & 0xffff, via1T2Ctr & 0xffff,
+            cpu.acc & 0xff, cpu.x & 0xff, cpu.y & 0xff, cpu.s & 0xff, cpu.cycles);
+        iecLoopReadLogs++;
+      }
+      if (track1LateStateLogs < 24 && currentTrack == 1 && cpu.getPC() == 0x06c8) {
+        track1LateStateLogs++;
+        CPU c64 = (CPU) cia2.cpu;
+        int c64pc = c64.getPC();
+        System.out.printf(
+            "TRACK1 06C8 #%d: c64pc=%04X A=%02X X=%02X Y=%02X SP=%02X drvA=%02X drvX=%02X drvY=%02X drvSP=%02X read=$%02X cyc=%d%n",
+            track1LateStateLogs, c64pc & 0xffff, c64.getAcc() & 0xff, c64.getX() & 0xff, c64.getY() & 0xff, c64.getSP() & 0xff,
+            cpu.acc & 0xff, cpu.x & 0xff, cpu.y & 0xff, cpu.s & 0xff, value & 0xff, cpu.cycles);
+        System.out.printf("C64 bytes @%04X: %s%n", (c64pc - 4) & 0xffff,
+            dumpBytes(c64.getMemory(), c64pc - 4, 16));
+        System.out.printf("C64 zp   @0002: %s%n", dumpBytes(c64.getMemory(), 0x0002, 4));
+        System.out.printf("C64 ptr  @02C0: %s%n", dumpBytes(c64.getMemory(), 0x02c0, 4));
+        System.out.printf("C64 buf  @033C: %s%n", dumpBytes(c64.getMemory(), 0x033c, 24));
+      }
+      return value;
     case 0x1801: // VIA1 PA
     case 0x180f: // VIA1 PA
       via1IFlag &= ~2;
@@ -270,6 +324,8 @@ public class C1541Chips extends ExtChip implements DiskListener {
       via1T1Latch = (via1T1Latch & 0xff) | (data << 8);
       via1IFlag &= 0xbf;
       via1T1Ctr = via1T1Latch;
+      via1T1Running = true;
+      via1T1IrqArmed = true;
       checkInterrupt(1, "write T1 high");
       break;
     case 0x1806:
@@ -285,7 +341,9 @@ public class C1541Chips extends ExtChip implements DiskListener {
       // 'Reset' timer 2
       via1T2Latch = (via1T2Latch & 0xff) | (data << 8);
       via1IFlag &= 0xdf;
-      via1T2Ctr = via1T1Latch;
+      via1T2Ctr = via1T2Latch;
+      via1T2Running = true;
+      via1T2IrqArmed = true;
       checkInterrupt(1, "write T2 high");
       break;
     case 0x180a:
@@ -353,6 +411,8 @@ public class C1541Chips extends ExtChip implements DiskListener {
 //    System.out.println("Updated via2IFlag: " +
 //    Integer.toHexString(via2IFlag));
       via2T1Ctr = via2T1Latch;
+      via2T1Running = true;
+      via2T1IrqArmed = true;
       checkInterrupt(2, "write T1 high: " + data + " latch: " + via2T1Latch);
 //    System.out.println("C1541: Wrote via2 T1H(05) Latch: " + data + " => " +
 //    via2T1Latch);
@@ -377,6 +437,8 @@ public class C1541Chips extends ExtChip implements DiskListener {
 //    System.out.println("Updated via2IFlag: " +
 //    Integer.toHexString(via2IFlag));
       via2T2Ctr = via2T2Latch;
+      via2T2Running = true;
+      via2T2IrqArmed = true;
       checkInterrupt(2, "write T2 high");
       break;
     case 0x1c0a:
@@ -471,17 +533,39 @@ public class C1541Chips extends ExtChip implements DiskListener {
     | (data << 3) & 0x40;
   }
 
+  // Cycles per byte for each speed zone (matching real 1541 / VICE)
+  // Zone 3 (tracks 1-17): 26, Zone 2 (18-24): 28, Zone 1 (25-30): 30, Zone 0 (31+): 32
+  private static final int[] SPEED_ZONE_CYCLES = { 32, 30, 28, 26 };
+  private static final int[] RAW_TRACK_BYTES = { 6250, 6666, 7142, 7692 };
+  private static final int[] SECTOR_GAP_BYTES = { 9, 12, 17, 8 };
+
+  private int getSpeedZone() {
+    return (track < 31 ? 1 : 0) + (track < 25 ? 1 : 0) + (track < 18 ? 1 : 0);
+  }
+
+  private int getSectorGapSize() {
+    return SECTOR_GAP_BYTES[getSpeedZone()];
+  }
+
+  private void refreshTrackGeometry() {
+    currentTrackSize = C64Reader.getSectorCount(track);
+    gcrSectorLength = GCR_SECTOR_HEADER_AND_DATA_SIZE + getSectorGapSize();
+    currentTrackLength = RAW_TRACK_BYTES[getSpeedZone()];
+  }
+
+  private int getTrackGapLength() {
+    return currentTrackLength - currentTrackSize * gcrSectorLength;
+  }
+
   long nextAutoforward;
   void autoForward(long cycles) {
     if (motorOn) {
-      if (nextAutoforward < cycles) {
-        if (nextAutoforward == 0) {
-          nextAutoforward = cycles + 32;
-        } else {
-          // 30 seems to work (3 x 8 is fastest, 6x8 slowest)
-          nextAutoforward += 30;
-          forward();
-        }
+      if (nextAutoforward == 0) {
+        nextAutoforward = cycles + SPEED_ZONE_CYCLES[getSpeedZone()];
+      }
+      while (nextAutoforward <= cycles) {
+        nextAutoforward += SPEED_ZONE_CYCLES[getSpeedZone()];
+        forward();
       }
     } else {
       nextAutoforward = cycles + 10000;
@@ -500,58 +584,78 @@ public class C1541Chips extends ExtChip implements DiskListener {
 
     int delta = (int) (cycles - lastCycles);
     lastCycles = cycles;
-    nextCheck = cycles + 13;
+    nextCheck = cycles + 4;
 
-    via1T1Ctr = via1T1Ctr - delta;
-    if (via1T1Ctr <= 0) {
-      if ((via1AuxControl & 0x40) == 0x40) {
-        // Increase by latch (to get correct square timing even if not
-        // called each cycle!
-        via1T1Ctr += via1T1Latch;
-      } else {
-        // Otherwise wrap around...
-        via1T1Ctr &= 0xffff;
+    if (via1T1Running) {
+      via1T1Ctr = via1T1Ctr - delta;
+      if (via1T1Ctr <= 0) {
+        if ((via1AuxControl & 0x40) == 0x40) {
+          // Free-running mode reloads from the latch and can retrigger.
+          int reload = via1T1Latch != 0 ? via1T1Latch : 0x10000;
+          while (via1T1Ctr <= 0) {
+            via1T1Ctr += reload;
+          }
+          via1IFlag |= 0x40;
+          checkInterrupt(1, "clock wrap, T1");
+        } else {
+          // One-shot mode only raises the interrupt once per explicit load.
+          via1T1Ctr &= 0xffff;
+          if (via1T1IrqArmed) {
+            via1IFlag |= 0x40;
+            checkInterrupt(1, "clock wrap, T1");
+            via1T1IrqArmed = false;
+          }
+        }
       }
-      via1IFlag |= 0x40;
-      checkInterrupt(1, "clock wrap, T1");
     }
 
     // Only count in one shot more?
-    if ((via1AuxControl & 0x20) == 0) {
+    if (via1T2Running && (via1AuxControl & 0x20) == 0) {
       via1T2Ctr = via1T2Ctr - delta;
       if (via1T2Ctr <= 0) {
-        via1IFlag |= 0x20;
         via1T2Ctr &= 0xffff;
-
-        checkInterrupt(1, "clock wrap, T2");
+        if (via1T2IrqArmed) {
+          via1IFlag |= 0x20;
+          checkInterrupt(1, "clock wrap, T2");
+          via1T2IrqArmed = false;
+        }
       }
     }
 
 
     // via 2
-    via2T1Ctr = via2T1Ctr - delta;
-    if (via2T1Ctr <= 0) {
-      if ((via2AuxControl & 0x40) == 0x40) {
-        // Increase by latch (to get correct square timing even if not
-        // called each cycle!
-        via2T1Ctr += via2T1Latch;
-      } else {
-        // Otherwise wrap around...
-        via2T1Ctr &= 0xffff;
+    if (via2T1Running) {
+      via2T1Ctr = via2T1Ctr - delta;
+      if (via2T1Ctr <= 0) {
+        if ((via2AuxControl & 0x40) == 0x40) {
+          // Free-running mode reloads from the latch and can retrigger.
+          int reload = via2T1Latch != 0 ? via2T1Latch : 0x10000;
+          while (via2T1Ctr <= 0) {
+            via2T1Ctr += reload;
+          }
+          via2IFlag |= 0x40;
+          checkInterrupt(2, "clock wrap, T1:  latch:" + via2T1Latch);
+        } else {
+          via2T1Ctr &= 0xffff;
+          if (via2T1IrqArmed) {
+            via2IFlag |= 0x40;
+            checkInterrupt(2, "clock wrap, T1:  latch:" + via2T1Latch);
+            via2T1IrqArmed = false;
+          }
+        }
       }
-      via2IFlag |= 0x40;
-
-      checkInterrupt(2, "clock wrap, T1:  latch:" + via2T1Latch);
     }
 
     // Only count in one shot more?
-    if ((via2AuxControl & 0x20) == 0) {
+    if (via2T2Running && (via2AuxControl & 0x20) == 0) {
       via2T2Ctr = via2T2Ctr - delta;
       if (via2T2Ctr <= 0) {
-        via2IFlag |= 0x20;
         via2T2Ctr &= 0xffff;
-
-        checkInterrupt(2, "clock wrap, T2");
+        if (via2T2IrqArmed) {
+          via2IFlag |= 0x20;
+          checkInterrupt(2, "clock wrap, T2");
+          via2T2IrqArmed = false;
+        }
       }
     }
   }
@@ -580,10 +684,6 @@ public class C1541Chips extends ExtChip implements DiskListener {
 
   // Set the via1IFlag for CA1
   public void atnChanged(boolean hi) {
-    if (DEBUG_IEC) {
-      System.out.println("C1541: *** IEC ATN changed detected!!! Enable: " +
-          Integer.toHexString(via1IEnable));
-    }
     if (hi) {
       via1IFlag |= 0x02;
       checkInterrupt(1, "atn went high");
@@ -602,8 +702,17 @@ public class C1541Chips extends ExtChip implements DiskListener {
     sectorPos = -1;
     diskChanged = false;
     writeProtected = false;
+    via1T1Running = false;
+    via1T2Running = false;
+    via1T1IrqArmed = false;
+    via1T2IrqArmed = false;
+    via2T1Running = false;
+    via2T2Running = false;
+    via2T1IrqArmed = false;
+    via2T2IrqArmed = false;
 
-    currentTrackSize = C64Reader.getSectorCount(track);
+    refreshTrackGeometry();
+    trackGapBytesRemaining = 0;
 
     // Read the current track/sector...
     readGCRSector(track, sector);
@@ -629,33 +738,32 @@ public class C1541Chips extends ExtChip implements DiskListener {
 //  Integer.toHexString(gcrSector[sectorPos]) + " " +
 //  cpu.cycles);
     // Sync byte on first sector position!
+    if (trackGapBytesRemaining > 0) return 0x80;
     if (sectorPos == -1) return 0x80;
     if (gcrSector[sectorPos] == 0xff) {
       return 0;
     }
 
-    // forward();
     return 0x80;
   }
 
   boolean lastSync = false;
+  private int latchedByte = 0; // Last byte latched by shift register (like real 1541)
+
   private int readByte() {
-    if (sectorPos == -1) return 0;
-    int data = gcrSector[sectorPos];
     if (DEBUG_GCR) {
-      System.out.println("C1541: Read byte from: " + sectorPos + " => " +
-          Integer.toString(data, 16) + " " +
-          i2c(data) + " " + cpu.cycles + " pc = " +
+      System.out.println("C1541: Read latched byte: " +
+          Integer.toString(latchedByte, 16) + " " +
+          i2c(latchedByte) + " " + cpu.cycles + " pc = " +
           Integer.toString(cpu.pc, 16));
     }
-    //    forward();
-    return data;
+    return latchedByte;
   }
 
   // Roatet head forward to read next byte!
   private void forward() {
     if (diskModeWrite && (via2CA == 0xff) &&
-        currentByte != -1 && sectorPos >= 0) {
+        currentByte != -1 && sectorPos >= 0 && trackGapBytesRemaining == 0) {
       bytesWritten++;
       if (DEBUG) {
         System.out.println("#### Write byte: " +
@@ -668,20 +776,38 @@ public class C1541Chips extends ExtChip implements DiskListener {
       // Should this be written a byte "backwards"??
       gcrWriteSector[sectorPos] = currentByte;
     }
-    sectorPos++;
-    if (sectorPos == GCR_SECTOR_SIZE) {
-      finishWrite();
-      sectorPos = -1;
-      // Some extra cycles when switching sector?!!
-      nextAutoforward += 1000;
-      sector = (sector + 1) % currentTrackSize;
-      readGCRSector(track, sector);
+    if (trackGapBytesRemaining > 0) {
+      trackGapBytesRemaining--;
+      if (trackGapBytesRemaining == 0) {
+        sector = 0;
+        sectorPos = -1;
+        readGCRSector(track, sector);
+      }
+    } else {
+      sectorPos++;
+      if (sectorPos == gcrSectorLength) {
+        finishWrite();
+        sectorPos = -1;
+        sector = (sector + 1) % currentTrackSize;
+        if (sector == 0) {
+          trackGapBytesRemaining = getTrackGapLength();
+        }
+        if (trackGapBytesRemaining == 0) {
+          readGCRSector(track, sector);
+        }
+      }
     }
 
     update(this, SECTOR_UPDATE);
-    // IF not sync now or last time...
+    // Latch the current byte (like the real 1541 shift register)
+    if (trackGapBytesRemaining > 0) {
+      latchedByte = 0x55;
+    } else if (sectorPos >= 0) {
+      latchedByte = gcrSector[sectorPos];
+    }
+    // On real 1541, byte ready does NOT fire during sync (shift register resets)
+    // It fires when NOT at sync, or on transition into sync (first sync byte)
     if (diskModeWrite || sync() != 0 || !lastSync) {
-      // Only trigger byte ready when not at sync bytes!
       cpu.triggerByteReady();
     }
     lastSync = sync() == 0;
@@ -712,19 +838,42 @@ public class C1541Chips extends ExtChip implements DiskListener {
 
   private void updateHTrack() {
     if (track != hTrack >> 1) {
-      // Takes some time before ready for next...
-      nextAutoforward = cpu.cycles + 100000;
+      int oldTrackBytes = currentTrackLength;
+      int oldTrackOffset = trackGapBytesRemaining > 0
+          ? currentTrackLength - trackGapBytesRemaining
+          : sector * gcrSectorLength + Math.max(sectorPos, 0);
+      boolean wasInSyncGap = sectorPos < 0;
+
+      // Keep the disk rotating while the head moves; long settle delays break
+      // DOS scans and fast-loader polling.
+      nextAutoforward = cpu.cycles;
 
       finishWrite();
       track = hTrack >> 1;
-    sector = 0;
-    //      sectorPos = 0;
-    sectorPos = -1;
-    currentTrackSize = C64Reader.getSectorCount(track);
-    System.out.println("1541: New Track " + track + " reading: "
-        + track + ", " + sector +
-        " s/t: " + currentTrackSize);
-    readGCRSector(track, sector);
+      refreshTrackGeometry();
+      int newTrackOffset = oldTrackBytes > 0
+          ? (oldTrackOffset * currentTrackLength) / oldTrackBytes
+          : 0;
+      int sectorDataBytes = currentTrackSize * gcrSectorLength;
+      if (newTrackOffset >= sectorDataBytes) {
+        sector = 0;
+        sectorPos = -1;
+        trackGapBytesRemaining = currentTrackLength - newTrackOffset;
+      } else {
+        sector = newTrackOffset / gcrSectorLength;
+        sectorPos = wasInSyncGap ? -1 : newTrackOffset % gcrSectorLength;
+        trackGapBytesRemaining = 0;
+      }
+      System.out.println("1541: New Track " + track + " reading: "
+          + track + ", " + sector +
+          " s/t: " + currentTrackSize);
+      readGCRSector(track, sector);
+      if (trackGapBytesRemaining > 0) {
+        latchedByte = 0x55;
+      } else if (sectorPos >= 0) {
+        latchedByte = gcrSector[sectorPos];
+      }
+      lastSync = sync() == 0;
     }
   }
 
@@ -773,6 +922,7 @@ public class C1541Chips extends ExtChip implements DiskListener {
       if (DEBUG_GCR) log("Using GCR Sector cache for " + track + "," + sector);
       gcrSector = gcrCacheSector[track][sector];
       gcrWriteSector = gcrSector;
+      gcrSectorLength = gcrSector.length;
       return;
     }
 
@@ -781,9 +931,11 @@ public class C1541Chips extends ExtChip implements DiskListener {
     int pos = 0;
     int cSum = 0;
 
-    gcrSector = new int[GCR_SECTOR_SIZE];
-    // First data is sync!
-    gcrSector[pos++] = 0xff;
+    int sectorGap = getSectorGapSize();
+    gcrSectorLength = GCR_SECTOR_HEADER_AND_DATA_SIZE + sectorGap;
+    gcrSector = new int[gcrSectorLength];
+    // Header sync (5 bytes of 0xFF, matching real 1541)
+    for (int i = 0; i < 5; i++) gcrSector[pos++] = 0xff;
 
     makeGCR(gcrSector, pos, 0x08, sector ^ track ^ diskID1 ^ diskID2,
         sector, track);
@@ -791,13 +943,13 @@ public class C1541Chips extends ExtChip implements DiskListener {
     makeGCR(gcrSector, pos, diskID2, diskID1, 0x0f, 0x0f);
     pos += 5;
 
-    // pos = 11
+    // pos = 15
     for (int i = 0; i < 9; i++) {
       gcrSector[pos++] = 0x55;
     }
 
-    // Another sync - at position 20 (?)
-    gcrSector[pos++] = 0xff;
+    // Data sync (5 bytes of 0xFF, matching real 1541)
+    for (int i = 0; i < 5; i++) gcrSector[pos++] = 0xff;
     // pos = 21
     // cancel out first 7 by setting cSum to 7
     cSum = 0x07;
@@ -827,7 +979,7 @@ public class C1541Chips extends ExtChip implements DiskListener {
     makeGCR(gcrSector, pos, sectorBuf[255] & 0xff, cSum & 0xff, 0, 0);
     pos += 5;
 
-    for (int i = 0, n = 8; i < n; i++) {
+    for (int i = 0, n = sectorGap; i < n; i++) {
       gcrSector[pos++] = 0x55;
     }
 

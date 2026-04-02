@@ -57,7 +57,8 @@ public class C1541Emu extends MOS6510Core {
       return memory[adr];
     int c = adr & 0xff00;
     if (c == 0x1800 || c == 0x1c00) {
-      int data = chips.performRead(adr, cycles);
+      // VIA registers mirror every 16 bytes within each page
+      int data = chips.performRead((c | (adr & 0x0f)), cycles);
 
       if (IODEBUG)
     	  System.out.println("C1541: Reading from " + Integer.toHexString(adr)
@@ -78,7 +79,7 @@ public class C1541Emu extends MOS6510Core {
     }
     int c = adr & 0xff00;
     if (c == 0x1800 || c == 0x1c00)
-      chips.performWrite(adr, data, cycles);
+      chips.performWrite(c | (adr & 0x0f), data, cycles);
   }
 
   public void reset() {
@@ -93,8 +94,28 @@ public class C1541Emu extends MOS6510Core {
     byteReady = true;
   }
 
+  // 1541 runs at 1.0MHz, C64 PAL at ~0.985MHz
+  // VICE sync_factor: 65536 * (1000000/985248) = 66517 (fixed-point 16.16)
+  // Using slightly higher value to ensure drive finishes disk I/O before C64 ATN
+  private static final long SYNC_FACTOR = 66517; // VICE: 65536 * (1000000/985248)
+  private long cycleAccum = 0;
+  private long lastC64Clk = 0;
+  private long cycles_stop = 0;
+
   public void tick(long c64Cycles) {
-    while (cycles < c64Cycles) {
+    long c64Delta = c64Cycles - lastC64Clk;
+    lastC64Clk = c64Cycles;
+    if (c64Delta <= 0) return;
+    // Convert C64 cycles to 1541 cycles using fixed-point math (like VICE)
+    // Process in chunks of 10000 to avoid overflow (matching VICE drivecpu.c:384)
+    while (c64Delta > 0) {
+      long chunk = c64Delta > 10000 ? 10000 : c64Delta;
+      c64Delta -= chunk;
+      cycleAccum += SYNC_FACTOR * chunk;
+      cycles_stop += cycleAccum >> 16;
+      cycleAccum &= 0xFFFF;
+    }
+    while (cycles < cycles_stop) {
       // Run one instruction! - with special overflow "patch" -
       // Always fake 'byte ready' for fast read!
 //    boolean o = overflow;
@@ -122,7 +143,7 @@ public class C1541Emu extends MOS6510Core {
       }
       emulateOp();
 
-      if (chips.nextCheck < cycles) {
+      if (chips.nextCheck <= cycles) {
         chips.clock(cycles);
       }
       // Back to what it was...
