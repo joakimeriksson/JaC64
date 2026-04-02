@@ -297,8 +297,18 @@ public class CIA {
   }
 
   private void updateInterrupts() {
+    C64Screen screen = (chips instanceof C64Screen) ? (C64Screen) chips : null;
+    boolean trace = screen != null && screen.fldTrace && offset == 0x10c00;
     if ((ciaie & ciaicrRead & 0x1f) != 0) {
       ciaicrRead |= 0x80;
+      if (trace) {
+        screen.fldLog("CIA1-IRQ-SET icr=$" + Integer.toHexString(ciaicrRead) +
+            " ie=$" + Integer.toHexString(ciaie) +
+            " clk=" + cpu.cycles +
+            " vbeam=" + screen.vbeam +
+            " ta=" + timerA.getTimer(cpu.cycles) +
+            " tb=" + timerB.getTimer(cpu.cycles));
+      }
       // Trigger the IRQ/NMI immediately!!!
       if (offset == 0x10c00) {
 //    	  cpu.log("CIA 1  *** TRIGGERING CIA TIMER!!!: " +
@@ -308,6 +318,14 @@ public class CIA {
         chips.setNMI(ExtChip.CIA_TIMER_NMI);
       }
     } else {
+      if (trace) {
+        screen.fldLog("CIA1-IRQ-CLR icr=$" + Integer.toHexString(ciaicrRead) +
+            " ie=$" + Integer.toHexString(ciaie) +
+            " clk=" + cpu.cycles +
+            " vbeam=" + screen.vbeam +
+            " ta=" + timerA.getTimer(cpu.cycles) +
+            " tb=" + timerB.getTimer(cpu.cycles));
+      }
       if (offset == 0x10c00) {
 //	System.out.println("*** CLEARING CIA TIMER!!!");
         chips.clearIRQ(ExtChip.CIA_TIMER_IRQ);

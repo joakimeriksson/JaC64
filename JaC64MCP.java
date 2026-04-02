@@ -359,6 +359,7 @@ public class JaC64MCP {
                 case "set_sid": return toolSetSid(args);
                 case "cpu_state": return toolCpuState();
                 case "iec_trace": return toolIecTrace(args);
+                case "fld_trace": scr.startFldTrace(); return toolResult("FLD trace started for 2 frames - check stdout");
                 default: return toolError("Unknown tool: " + name);
             }
         } catch (Exception e) {

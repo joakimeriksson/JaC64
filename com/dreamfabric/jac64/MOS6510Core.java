@@ -128,6 +128,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected int pc;
   protected int interruptInExec = 0;
   protected boolean disableInterupt = false;
+  protected int irqEnableDelayOps = 0;
 
   // Used for actual address...
   protected int rindex = 0;
@@ -268,6 +269,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   }
 
   public void emulateOp() {
+    boolean hadIrqEnableDelay = irqEnableDelayOps > 0;
     // Before executing an operation - check for interrupts!!!
     if (checkInterrupt) {
       if (NMIPending && (cycles >= nmiCycleStart)) {
@@ -282,7 +284,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
         NMILastLow = NMILow;
         // Just the interrupt handling... do nothing more...
         return;
-      } else if ((IRQLow && cycles >= irqCycleStart) || brk) {
+      } else if ((IRQLow && cycles >= irqCycleStart && irqEnableDelayOps == 0) || brk) {
         if (!disableInterupt) {
           log("IRQ interrupt > " + IRQLow + " BRK: " +  brk);
           lastInterrupt = IRQ_INT;
@@ -571,7 +573,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
     case RTI:
       fetchByte(s | 0x100);
       tmp = pop();
+      boolean irqWasDisabled = disableInterupt;
       setStatusByte(tmp);
+      if (irqWasDisabled && !disableInterupt) {
+        irqEnableDelayOps = 1;
+      }
       pc = pop() + (pop() << 8);
       brk = false;
       interruptInExec--;
@@ -604,7 +610,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
       break;
     case PLP:
       tmp = pop();
+      irqWasDisabled = disableInterupt;
       setStatusByte(tmp);
+      if (irqWasDisabled && !disableInterupt) {
+        irqEnableDelayOps = 1;
+      }
       brk = false;
       checkInterrupt = true;
       break;
@@ -673,6 +683,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
       disableInterupt = true;
       break;
     case CLI:
+      if (disableInterupt) {
+        irqEnableDelayOps = 1;
+      }
       disableInterupt = false;
       checkInterrupt = true;
       log(getName() + " Enabled interrupts: IRQ: " + chips.getIRQFlags() + " IRQLow: " + IRQLow);
@@ -831,6 +844,10 @@ public abstract class MOS6510Core extends MOS6510Ops {
       writeByte(adr, data);
     } else if (addrMode == ACCUMULATOR) {
       acc = data;
+    }
+
+    if (hadIrqEnableDelay && irqEnableDelayOps > 0) {
+      irqEnableDelayOps--;
     }
   }
 

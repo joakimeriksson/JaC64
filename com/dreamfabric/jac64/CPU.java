@@ -91,6 +91,13 @@ public class CPU extends MOS6510Core {
     }
   }
 
+  private void waitForBus() {
+    while (baLowUntil > cycles) {
+      cycles++;
+      schedule(cycles);
+    }
+  }
+
   // Reads the memory with all respect to all flags...
   protected final int fetchByte(int adr) {
     /* a cycles passes for this read */
@@ -98,10 +105,7 @@ public class CPU extends MOS6510Core {
 
     /* Chips work first, then CPU */
     schedule(cycles);
-    while (baLowUntil > cycles) {
-      cycles++;  
-      schedule(cycles);
-    }
+    waitForBus();
 
     if ((romFlag & adr) == romFlag) {
       return memory[rindex = adr | 0x10000];
@@ -123,9 +127,7 @@ public class CPU extends MOS6510Core {
     cycles++;
 
     schedule(cycles);
-    // Locking only on fetch byte...
-    // System.out.println("Writing byte at: " + Integer.toString(adr, 16)
-    // + " = " + data);
+    waitForBus();
     if (adr <= 1) {
       memory[adr] = data;
       int p = (memory[0] ^ 0xff) | memory[1];
@@ -134,7 +136,6 @@ public class CPU extends MOS6510Core {
       basicROM = ((p & 3) == 3); // Basic on
 
       charROM = ((p & 3) != 0) && ((p & 4) == 0);
-      // ioON is probably not correct!!! Check against table...
       ioON = ((p & 3) != 0) && ((p & 4) != 0);
 
       if (basicROM)
@@ -147,7 +148,6 @@ public class CPU extends MOS6510Core {
 
     adr &= 0xffff;
     if (ioON && ((adr & 0xf000) == 0xd000)) {
-      // System.out.println("IO Write at: " + Integer.toString(adr, 16));
       chips.performWrite(adr, data, cycles);
     } else {
       memory[windex = adr] = data;

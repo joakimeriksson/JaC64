@@ -41,6 +41,9 @@ public class C64Screen extends ExtChip implements Observer {
   public static final boolean DEBUG_IEC = false;
 
   public static final boolean DEBUG_CYCLES = false;
+  private static final int RASTER_LINES = 312;
+  private static final long RASTER_IRQ_DISABLED = Long.MAX_VALUE;
+  private static final int BADLINE_FETCH_CYCLE = 15;
 
   public static final int IO_UPDATE = 37;
   // This is PAL speed! - will be called each scan line...
@@ -87,7 +90,6 @@ public class C64Screen extends ExtChip implements Observer {
   TFE_CS8900 tfe;
 
   public int iecLines = 0;
-  private boolean rasterIrqTriggered = false;
   public boolean iecTrace = false;
   public long iecTraceCount = 0;
   public static final int IEC_LOG_SIZE = 200;
@@ -181,6 +183,10 @@ public class C64Screen extends ExtChip implements Observer {
 
   private int horizScroll = 0;
   private int vScroll = 0;
+  private int badLineFetchStartColumn = 0;
+  private int badLineDummyColumns = 0;
+  private int badLineFetchSourceColumn = 0;
+  private long rasterIrqClock = RASTER_IRQ_DISABLED;
 
   // The font is in a copy in "ROM"...
   private int charMemoryIndex = 0;
@@ -204,6 +210,23 @@ public class C64Screen extends ExtChip implements Observer {
   int frame = 0;
   private boolean updating = false;
   boolean displayEnabled = true;
+  // Debug: trace FLD/scroll issues - call startFldTrace() to capture 2 frames
+  int fldTraceFrames = 0;
+  boolean fldTrace = false;
+  private java.io.PrintStream fldOut;
+  public void startFldTrace() {
+    try {
+      fldOut = new java.io.PrintStream("/tmp/jac64_fld_trace.log");
+    } catch (Exception e) { fldOut = System.out; }
+    fldTraceFrames = 2;
+    fldTrace = true;
+    fldOut.println("=== FLD TRACE START ===");
+  }
+  void fldLog(String line) {
+    if (fldTrace && fldOut != null) {
+      fldOut.println(line);
+    }
+  }
   boolean irqTriggered = false;
   long lastLine = 0;
   long firstLine = 0;
@@ -324,6 +347,184 @@ public class C64Screen extends ExtChip implements Observer {
   public void setDisplayOffset(int x, int y) {
     offsetX = x;
     offsetY = y;
+  }
+
+  private boolean isBadLine(int scroll) {
+    return displayEnabled && vbeam >= 0x30 && vbeam <= 0xf7
+        && (vbeam & 0x7) == scroll;
+  }
+
+  private void resetBadLineFetchWindow() {
+    badLineFetchStartColumn = 0;
+    badLineDummyColumns = 0;
+    badLineFetchSourceColumn = 0;
+  }
+
+  private void updateDisplayEnabledFromControl(int data) {
+    if (vbeam == 0x30) {
+      displayEnabled = (data & 0x10) != 0;
+      if (displayEnabled) {
+        borderState &= ~0x04;
+      } else {
+        borderState |= 0x04;
+      }
+    }
+  }
+
+  private boolean shouldTraceRasterReads() {
+    int pc = cpu.getPC() & 0xffff;
+    return fldTrace && pc >= 0x0b00 && pc <= 0x1600;
+  }
+
+  private boolean shouldTraceRasterWrites() {
+    int pc = cpu.getPC() & 0xffff;
+    return fldTrace && pc >= 0x0a00 && pc <= 0x1600;
+  }
+
+  private void traceRasterRead(String reg, int value) {
+    fldOut.println(reg + "-READ=$" + Integer.toHexString(value & 0xff) +
+        " vbeam=" + vbeam + " cyc=" + (cpu.cycles - lastLine) +
+        " clk=" + cpu.cycles +
+        " pc=$" + Integer.toHexString(cpu.getPC() & 0xffff));
+  }
+
+  private int spriteDmaMask() {
+    int mask = 0;
+    for (int i = 0; i < sprites.length; i++) {
+      if (sprites[i].dma) {
+        mask |= 1 << i;
+      }
+    }
+    return mask;
+  }
+
+  private void scheduleRasterIrq() {
+    if (raster < 0 || raster >= RASTER_LINES) {
+      rasterIrqClock = RASTER_IRQ_DISABLED;
+      return;
+    }
+
+    int delta = raster - vbeam;
+    if (delta <= 0) {
+      delta += RASTER_LINES;
+    }
+
+    rasterIrqClock = lastLine + (long) delta * VICConstants.SCAN_RATE;
+    if (raster == 0) {
+      rasterIrqClock++;
+    }
+
+    if (fldTrace) {
+      fldOut.println("IRQ-SCHED line=" + raster + " clk=" + rasterIrqClock +
+          " now=" + cpu.cycles + " vbeam=" + vbeam +
+          " cyc=" + (cpu.cycles - lastLine));
+    }
+  }
+
+  private void advanceRasterIrqClock() {
+    if (rasterIrqClock == RASTER_IRQ_DISABLED) {
+      return;
+    }
+    rasterIrqClock += (long) RASTER_LINES * VICConstants.SCAN_RATE;
+  }
+
+  private void triggerRasterIrq(long irqClock) {
+    irqFlags |= 0x1;
+    if ((irqMask & 1) != 0) {
+      irqFlags |= 0x80;
+      irqTriggered = true;
+      setIRQ(VIC_IRQ);
+      lastIRQ = irqClock;
+    }
+    if (rasterIrqClock != RASTER_IRQ_DISABLED && rasterIrqClock <= irqClock) {
+      advanceRasterIrqClock();
+    }
+
+    if (fldTrace) {
+      fldOut.println("IRQ-FIRE line=" + raster + " clk=" + irqClock +
+          " next=" + rasterIrqClock + " vbeam=" + vbeam +
+          " cyc=" + (irqClock - lastLine));
+    }
+  }
+
+  private void updateRasterIrqLine(int oldRaster) {
+    if (raster == oldRaster) {
+      return;
+    }
+
+    boolean triggerNow = raster == vbeam && oldRaster != vbeam
+        && raster >= 0 && raster < RASTER_LINES;
+    scheduleRasterIrq();
+    if (triggerNow) {
+      triggerRasterIrq(cpu.cycles);
+    }
+  }
+
+  private void handleBadLineStart(int vicCycle, boolean wasVisible) {
+    cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+
+    if (vicCycle <= 13) {
+      rc = 0;
+    }
+
+    if (vicCycle >= 16 && vicCycle < 59) {
+      // VICE derives the current text column from the cycle where the line
+      // becomes bad: xpos = cycle - (fetch cycle + 3). Using vmli directly
+      // leaves JaC64 one column behind during mid-line FLD changes.
+      badLineFetchStartColumn = vicCycle - (BADLINE_FETCH_CYCLE + 3);
+      if (badLineFetchStartColumn < 0) {
+        badLineFetchStartColumn = 0;
+      } else if (badLineFetchStartColumn > 40) {
+        badLineFetchStartColumn = 40;
+      }
+      badLineDummyColumns = 3;
+      badLineFetchSourceColumn = wasVisible ? badLineFetchStartColumn : 0;
+    } else {
+      resetBadLineFetchWindow();
+    }
+
+    if (!wasVisible) {
+      vc = vcBase;
+      vmli = badLineFetchStartColumn;
+    }
+
+    gfxVisible = true;
+  }
+
+  private void handleBadLineStop(int vicCycle, boolean wasVisible) {
+    resetBadLineFetchWindow();
+
+    if (vicCycle > 0) {
+      gfxVisible = true;
+      if (!wasVisible && vicCycle > 13) {
+        rc = 0;
+      }
+    }
+  }
+
+  private void fetchBadLineData(int column) {
+    int sourceColumn = column;
+
+    if (column >= badLineFetchStartColumn && badLineDummyColumns > 0) {
+      int fetchColumn = column - badLineFetchStartColumn;
+      if (fetchColumn < badLineDummyColumns) {
+        vicCharCache[column] = 0xff;
+        vicColCache[column] = 0;
+        return;
+      }
+
+      sourceColumn = badLineFetchSourceColumn + fetchColumn - badLineDummyColumns;
+    }
+
+    if (sourceColumn < 0 || sourceColumn >= 40) {
+      vicCharCache[column] = 0xff;
+      vicColCache[column] = 0;
+      return;
+    }
+
+    int videoOffset = (vcBase + sourceColumn) & 0x3ff;
+    vicCharCache[column] = memory[videoMatrix + videoOffset];
+    vicColCache[column] = memory[IO_OFFSET + 0xd800 + videoOffset];
   }
 
   public void dumpGfxStat() {
@@ -478,9 +679,17 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd010:
       return sprXMSB;
     case 0xd011:
-      return control1 & 0x7f | ((vbeam & 0x100) >> 1);
+      val = control1 & 0x7f | ((vbeam & 0x100) >> 1);
+      if (shouldTraceRasterReads()) {
+        traceRasterRead("D011", val);
+      }
+      return val;
     case 0xd012:
-      return vbeam & 0xff;
+      val = vbeam & 0xff;
+      if (shouldTraceRasterReads()) {
+        traceRasterRead("D012", val);
+      }
+      return val;
       // Sprite collission registers - zeroed after read!
     case 0xd013:
     case 0xd014:
@@ -627,6 +836,14 @@ public class C64Screen extends ExtChip implements Observer {
     // Store in the memory given by "CPU"
     memory[address + IO_OFFSET] = data;
 
+    if (shouldTraceRasterWrites() && address >= 0xd000 && address <= 0xd010) {
+      fldOut.println("VIC-W $" + Integer.toHexString(address) +
+          "=$" + Integer.toHexString(data & 0xff) +
+          " vbeam=" + vbeam + " cyc=" + (cpu.cycles - lastLine) +
+          " clk=" + cpu.cycles +
+          " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+    }
+
     switch (address) {
     // -------------------------------------------------------------------
     // VIC related
@@ -662,24 +879,49 @@ public class C64Screen extends ExtChip implements Observer {
       break;
       // d011 -> high address of raster pos
     case 0xd011 :
+      int oldRaster = raster;
       raster = (raster & 0xff) | ((data << 1) & 0x100);
+      updateRasterIrqLine(oldRaster);
       control1 = data;
 
-      if (vScroll != (data & 7)) {
-        // update vScroll and badLine!
-        vScroll = data & 0x7;
-        boolean oldBadLine = badLine;
-        badLine =
-          (displayEnabled && vbeam >= 0x30 && vbeam <= 0xf7) &&
-          (vbeam & 0x7) == vScroll;
-        if (BAD_LINE_DEBUG && oldBadLine != badLine) {
-          monitor.info("#### BadLC diff@" + vbeam + " => " +
-              badLine + " vScroll: " + vScroll +
-              " vmli: " + vmli + " vc: " + vc +
-              " rc: " + rc + " cyc line: " +
-              (cpu.cycles - lastLine) +
-              " cyc IRQ: " + (cpu.cycles - lastIRQ));
+      int vicCycle = (int) (cpu.cycles - lastLine);
+      boolean wasBadLine = badLine;
+      boolean wasVisible = gfxVisible;
+
+      updateDisplayEnabledFromControl(data);
+
+      // Update vScroll and recalculate badLine on any D011 write.
+      vScroll = data & 0x7;
+      boolean newBadLine = isBadLine(vScroll);
+
+      if (!wasBadLine && newBadLine) {
+        badLine = true;
+        handleBadLineStart(vicCycle, wasVisible);
+      } else if (wasBadLine && !newBadLine) {
+        if (vicCycle < BADLINE_FETCH_CYCLE) {
+          badLine = false;
+          handleBadLineStop(vicCycle, wasVisible);
+        } else {
+          // Once badline DMA has started, the current line stays bad even if
+          // Y-scroll changes mid-line. The new scroll value applies next line.
+          badLine = true;
         }
+      } else {
+        badLine = newBadLine;
+      }
+
+      if (shouldTraceRasterWrites()) {
+        fldOut.println("D011=" + Integer.toHexString(data) +
+            " vbeam=" + vbeam + " cyc=" + vicCycle +
+            " vScroll=" + vScroll + " badLine=" + badLine +
+            " gfxVis=" + gfxVisible + " rc=" + rc +
+            " vmli=" + vmli + " vc=" + vc +
+            " clk=" + cpu.cycles +
+            " pc=$" + Integer.toHexString(cpu.pc & 0xffff) +
+            " a=$" + Integer.toHexString(cpu.acc & 0xff) +
+            " x=$" + Integer.toHexString(cpu.x & 0xff) +
+            " y=$" + Integer.toHexString(cpu.y & 0xff) +
+            " dispEn=" + displayEnabled);
       }
 
       extended = (data & 0x40) != 0;
@@ -702,7 +944,15 @@ public class C64Screen extends ExtChip implements Observer {
 
       // d012 -> raster position
     case 0xd012 :
+      oldRaster = raster;
       raster = (raster & 0x100) | data;
+      updateRasterIrqLine(oldRaster);
+      if (shouldTraceRasterWrites()) {
+        fldOut.println("D012=" + Integer.toHexString(data) +
+            " vbeam=" + vbeam + " cyc=" + (cpu.cycles - lastLine) +
+            " clk=" + cpu.cycles +
+            " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
       if (IRQDEBUG)
         monitor.info("Setting Raster Position (low) to " + data);
       break;
@@ -712,6 +962,12 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     case 0xd015:
       sprEN = data;
+      if (shouldTraceRasterWrites()) {
+        fldOut.println("D015=" + Integer.toHexString(data) +
+            " vbeam=" + vbeam + " cyc=" + (cpu.cycles - lastLine) +
+            " clk=" + cpu.cycles +
+            " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
       for (int i = 0, m = 1, n = 8; i < n; i++, m = m << 1) {
         sprites[i].enabled = (data & m) != 0;
       }
@@ -750,6 +1006,9 @@ public class C64Screen extends ExtChip implements Observer {
             " latch: " + Integer.toString(latchval, 16));
 
       irqFlags &= latchval;
+      if ((irqFlags & 1) == 0) {
+        irqTriggered = false;
+      }
 
       // Is this "flagged" off?
       if ((irqMask & 0x0f & irqFlags) == 0) {
@@ -829,6 +1088,10 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd02e:
       sprites[address - 0xd027].color[2] = cbmcolor[data & 15];
       sprites[address - 0xd027].col = data & 15;
+      break;
+    case 0xd02f:
+      // Debug: trigger FLD trace
+      if (data == 0x01) startFldTrace();
       break;
       // CIA 1 & 2 - 'special' addresses
     case 0xdc00:
@@ -986,33 +1249,17 @@ public class C64Screen extends ExtChip implements Observer {
       vbeam = (vbeam + 1) % 312;
       if (vbeam == 0) {
         frame++;
+        if (fldTrace && --fldTraceFrames <= 0) {
+          fldTrace = false;
+          fldOut.println("=== FLD TRACE END ===");
+          fldOut.close();
+        }
       }
       vPos = vbeam - (FIRST_VISIBLE_VBEAM + 1);
     }
 
-    // Per-cycle raster compare IRQ check (like real VIC-II)
-    // Must run even on non-visible lines — raster IRQs fire anywhere
-    // Uses separate rasterIrqTriggered flag (like VICE) to prevent
-    // re-triggering after the game acknowledges via $D019
-    if (raster == vbeam) {
-      if (!rasterIrqTriggered) {
-        rasterIrqTriggered = true;
-        irqFlags |= 0x1;
-        if ((irqMask & 1) != 0) {
-          irqFlags |= 0x80;
-          irqTriggered = true;
-          setIRQ(VIC_IRQ);
-          lastIRQ = cpu.cycles;
-        }
-      }
-    } else {
-      rasterIrqTriggered = false;
-      irqTriggered = false;
-    }
-
-    if (notVisible) {
-      if (vicCycle < 62)
-        return;
+    while (rasterIrqClock != RASTER_IRQ_DISABLED && cycles >= rasterIrqClock) {
+      triggerRasterIrq(rasterIrqClock);
     }
 
     if (badLine) {
@@ -1060,9 +1307,17 @@ public class C64Screen extends ExtChip implements Observer {
         }
       }
 
-      badLine =
-        (displayEnabled && vbeam >= 0x30 && vbeam <= 0xf7) &&
-        (vbeam & 0x7) == vScroll;
+      badLine = isBadLine(vScroll);
+      resetBadLineFetchWindow();
+
+      if (fldTrace && (vbeam < 0x30 || vbeam <= 0xf7)) {
+        fldOut.println("CYC0 vbeam=" + vbeam + " badLine=" + badLine +
+            " gfxVis=" + gfxVisible + " rc=" + rc +
+            " vScroll=" + vScroll + " borderSt=" + borderState +
+            " sprDMA=$" + Integer.toHexString(spriteDmaMask()) +
+            " d011=$" + Integer.toHexString(control1) +
+            " d016=$" + Integer.toHexString(control2));
+      }
 
       // Clear the collission masks each line...
       for (int i = 0, n = SC_WIDTH; i < n; i++) {
@@ -1202,9 +1457,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        // Fetch first char into cache!
-        vicCharCache[vmli] = memory[videoMatrix + (vcBase & 0x3ff)];
-        vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + (vcBase & 0x3ff)];
+        fetchBadLineData(vmli);
       }
 
       // Draw one character here!
@@ -1222,8 +1475,7 @@ public class C64Screen extends ExtChip implements Observer {
 
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        vicCharCache[vmli] = memory[videoMatrix + ((vcBase + vmli) & 0x3ff)];
-        vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + ((vcBase + vmli) & 0x3ff)];
+        fetchBadLineData(vmli);
       }
       drawGraphics(mpos + horizScroll);
       drawSprites();
@@ -1233,8 +1485,7 @@ public class C64Screen extends ExtChip implements Observer {
     default:
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        vicCharCache[vmli] = memory[videoMatrix + ((vcBase + vmli) & 0x3ff)];
-        vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + ((vcBase + vmli) & 0x3ff)];
+        fetchBadLineData(vmli);
       }
       drawGraphics(mpos + horizScroll);
       drawSprites();
@@ -1244,8 +1495,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 54:
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        vicCharCache[vmli] = memory[videoMatrix + ((vcBase + vmli) & 0x3ff)];
-        vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + ((vcBase + vmli) & 0x3ff)];
+        fetchBadLineData(vmli);
       }
       int mult = 1;
       int ypos = vPos + SC_SPYOFFS;
@@ -1257,6 +1507,13 @@ public class C64Screen extends ExtChip implements Observer {
             sprite.nextByte = 0;
             sprite.dma = true;
             sprite.expFlipFlop = true;
+            if (fldTrace) {
+              fldOut.println("SPR-DMA-ON s=" + i +
+                  " vbeam=" + vbeam + " cyc=" + vicCycle +
+                  " y=$" + Integer.toHexString(sprite.y & 0xff) +
+                  " en=" + sprite.enabled +
+                  " clk=" + cpu.cycles);
+            }
             if (SPRITEDEBUG)
               System.out.println("Starting painting sprite " + i + " on "
                   + vbeam + " first visible at " + (ypos + 1));
@@ -1280,8 +1537,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
-        vicCharCache[vmli] = memory[videoMatrix + ((vcBase + vmli) & 0x3ff)];
-        vicColCache[vmli] = memory[IO_OFFSET + 0xd800 + ((vcBase + vmli) & 0x3ff)];
+        fetchBadLineData(vmli);
       }
       drawGraphics(mpos + horizScroll);
       drawSprites();
@@ -1380,6 +1636,9 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 62:
+      if (sprites[4].dma) {
+        cpu.baLowUntil = lastLine + VICConstants.BA_SP4;
+      }
       // Reset sprites so that they can be repainted again...
       for (int i = 0; i < sprites.length; i++) {
         sprites[i].reset();
@@ -1426,10 +1685,17 @@ public class C64Screen extends ExtChip implements Observer {
   // Used to draw background where either border or background should be
   // painted...
   private void drawBackground() {
+    if (notVisible) {
+      return;
+    }
     int bpos = mpos;
     int currentBg = borderState > 0 ? borderColor : bgColor;
     for (int i = 0; i < 8; i++) {
       mem[bpos++] = currentBg;
+    }
+    if (fldTrace && vbeam >= 0x30 && vbeam <= 0xf7 && gfxVisible) {
+      fldOut.println("  drawBG overwrite at mpos=" + mpos +
+          " vmli=" + vmli + " borderSt=" + borderState);
     }
   }
 
@@ -1437,6 +1703,14 @@ public class C64Screen extends ExtChip implements Observer {
    * <code>drawGraphics</code> - draw the VIC graphics (text/bitmap)
    */
   private final void drawGraphics(int mpos) {
+    if (notVisible) {
+      if (gfxVisible && !paintBorder && (borderState & 1) == 0) {
+        vc++;
+      }
+      vmli++;
+      return;
+    }
+
     if (!gfxVisible || paintBorder || (borderState & 1) == 1) {
       mpos -= horizScroll;
       int color = (paintBorder || (borderState > 0)) ? borderColor : bgColor;
@@ -1581,6 +1855,9 @@ public class C64Screen extends ExtChip implements Observer {
   // Sprites...
   // -------------------------------------------------------------------
   private final void drawSprites() {
+    if (notVisible) {
+      return;
+    }
     int smult = 0x100;
     int lastX = xPos - 8;
 
@@ -1668,6 +1945,7 @@ public class C64Screen extends ExtChip implements Observer {
     isrRunning = false;
 
     resetInterrupts();
+    rasterIrqClock = RASTER_IRQ_DISABLED;
   }
 
   public static final int IMG_TOTWIDTH = SC_WIDTH;
