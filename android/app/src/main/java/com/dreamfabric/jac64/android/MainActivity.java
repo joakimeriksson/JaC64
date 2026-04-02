@@ -11,8 +11,10 @@ import android.os.Bundle;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.WindowManager;
+import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.PopupMenu;
+import android.widget.Toast;
 
 import com.dreamfabric.jac64.C64Reader;
 import com.dreamfabric.jac64.C64Screen;
@@ -26,6 +28,13 @@ import android.util.Log;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLDecoder;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
 
 /**
  * Main Activity for JaC64 Android.
@@ -446,6 +455,123 @@ public class MainActivity extends Activity {
         return null;
     }
 
+    private void showUrlDialog() {
+        EditText input = new EditText(this);
+        input.setHint("https://example.com/game.d64");
+        input.setSingleLine();
+        new AlertDialog.Builder(this)
+            .setTitle("Load from URL")
+            .setView(input)
+            .setPositiveButton("Load", (dialog, which) -> {
+                String url = input.getText().toString().trim();
+                if (!url.isEmpty()) {
+                    loadFromUrl(url);
+                }
+            })
+            .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void loadFromUrl(String urlStr) {
+        Toast.makeText(this, "Downloading...", Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            try {
+                URL url = new URL(urlStr);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                if (conn instanceof HttpsURLConnection) {
+                    SSLContext sc = SSLContext.getInstance("TLS");
+                    sc.init(null, new TrustManager[]{new X509TrustManager() {
+                        public void checkClientTrusted(java.security.cert.X509Certificate[] c, String t) {}
+                        public void checkServerTrusted(java.security.cert.X509Certificate[] c, String t) {}
+                        public java.security.cert.X509Certificate[] getAcceptedIssuers() { return null; }
+                    }}, null);
+                    ((HttpsURLConnection) conn).setSSLSocketFactory(sc.getSocketFactory());
+                    ((HttpsURLConnection) conn).setHostnameVerifier((h, s) -> true);
+                }
+                conn.setInstanceFollowRedirects(true);
+                conn.setRequestProperty("User-Agent", "JaC64/1.0");
+                int code = conn.getResponseCode();
+                if (code != 200) {
+                    throw new java.io.IOException("HTTP " + code);
+                }
+
+                // Determine filename from Content-Disposition or URL path
+                String filename = null;
+                String disposition = conn.getHeaderField("Content-Disposition");
+                if (disposition != null && disposition.toLowerCase().contains("filename=")) {
+                    String[] parts = disposition.split("(?i)filename=");
+                    if (parts.length > 1) {
+                        filename = parts[1].trim().replaceAll("^\"|\"$", "").split(";")[0].trim();
+                    }
+                }
+                if (filename == null || filename.isEmpty()) {
+                    String path = url.getPath();
+                    int slash = path.lastIndexOf('/');
+                    filename = slash >= 0 ? path.substring(slash + 1) : path;
+                }
+                filename = URLDecoder.decode(filename, "UTF-8");
+                if (filename.isEmpty()) filename = "download.prg";
+                final String displayName = filename;
+
+                // Download to cache
+                File tmpFile = new File(getCacheDir(), filename);
+                try (InputStream in = conn.getInputStream();
+                     FileOutputStream out = new FileOutputStream(tmpFile)) {
+                    byte[] buf = new byte[8192];
+                    int len;
+                    while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+                }
+                conn.disconnect();
+
+                Log.i("JaC64", "Downloaded " + urlStr + " -> " + tmpFile.getAbsolutePath()
+                    + " (" + tmpFile.length() + " bytes)");
+
+                // If zip, extract first C64 file
+                if (filename.toLowerCase().endsWith(".zip")) {
+                    tmpFile = extractFromZip(tmpFile);
+                    if (tmpFile == null) {
+                        runOnUiThread(() -> Toast.makeText(this,
+                            "No .d64/.t64/.prg/.p00 found in zip", Toast.LENGTH_LONG).show());
+                        return;
+                    }
+                }
+
+                // Load using existing logic
+                String name = tmpFile.getAbsolutePath().toLowerCase();
+                if (name.endsWith(".d64")) {
+                    cpu.reset();
+                    Thread.sleep(200);
+                    while (!screen.ready()) Thread.sleep(100);
+                    reader.readDiskFromFile(tmpFile.getAbsolutePath());
+                    cpu.enterText("LOAD\"*\",8,1~");
+                } else if (name.endsWith(".t64")) {
+                    cpu.reset();
+                    Thread.sleep(200);
+                    while (!screen.ready()) Thread.sleep(100);
+                    reader.readTapeFromFile(tmpFile.getAbsolutePath());
+                    reader.readFile("*", -1);
+                    cpu.runBasic();
+                } else if (name.endsWith(".prg") || name.endsWith(".p00")) {
+                    cpu.reset();
+                    Thread.sleep(200);
+                    while (!screen.ready()) Thread.sleep(100);
+                    reader.readPGM(tmpFile.getAbsolutePath(), -1);
+                    cpu.runBasic();
+                } else {
+                    runOnUiThread(() -> Toast.makeText(this,
+                        "Unsupported file type: " + displayName, Toast.LENGTH_LONG).show());
+                }
+            } catch (Exception e) {
+                Log.e("JaC64", "URL load failed", e);
+                runOnUiThread(() -> new AlertDialog.Builder(this)
+                    .setTitle("Download Error")
+                    .setMessage(e.getMessage())
+                    .setPositiveButton("OK", null)
+                    .show());
+            }
+        }, "URLLoader").start();
+    }
+
     private void showMenu(View anchor) {
         PopupMenu popup = new PopupMenu(this, anchor);
         popup.getMenu().add(0, 1, 0, "Reset");
@@ -464,6 +590,7 @@ public class MainActivity extends Activity {
         popup.getMenu().add(0, 32, 9, "Joystick Port 2");
         popup.getMenu().add(0, 40, 10, warpEnabled ? "Warp Speed OFF" : "Warp Speed ON");
         popup.getMenu().add(0, 41, 11, touchPaddleEnabled ? "Touch Paddle OFF" : "Touch Paddle ON");
+        popup.getMenu().add(0, 50, 12, "Load URL");
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -488,6 +615,7 @@ public class MainActivity extends Activity {
                     // Hide joystick when paddle is active, show when not
                     joystickView.setVisibility(touchPaddleEnabled ? View.GONE : View.VISIBLE);
                     return true;
+                case 50: showUrlDialog(); return true;
             }
             return false;
         });

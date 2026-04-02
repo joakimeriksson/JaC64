@@ -8,7 +8,9 @@ import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
+import java.net.*;
 import java.util.*;
+import javax.net.ssl.*;
 import javax.imageio.ImageIO;
 import javax.swing.*;
 
@@ -282,8 +284,8 @@ public class JaC64MCP {
         JsonObject result = new JsonObject();
         JsonArray tools = new JsonArray();
 
-        tools.add(toolDef("load_file", "Load a .d64, .t64, .prg, or .p00 file into the emulator",
-            prop("path", "string", "Absolute path to the file"),
+        tools.add(toolDef("load_file", "Load a .d64, .t64, .prg, .p00, or .zip file into the emulator. Accepts a local file path or a URL (http/https).",
+            prop("path", "string", "Absolute path or URL to the file"),
             prop("mount_only", "boolean", "If true, only mount the disk without resetting or typing LOAD (for disk swaps)")));
 
         tools.add(toolDef("type_text", "Type text into the C64 keyboard buffer. Use \\n for ENTER key.",
@@ -364,10 +366,71 @@ public class JaC64MCP {
         }
     }
 
+    // --- Helpers ---
+
+    /** Download a URL to a temp file, preserving the filename extension. */
+    private String downloadToTemp(String urlStr) throws Exception {
+        URL url = new URL(urlStr);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        // Trust all certificates for HTTPS game downloads
+        if (conn instanceof HttpsURLConnection) {
+            SSLContext sc = SSLContext.getInstance("TLS");
+            sc.init(null, new TrustManager[]{new X509TrustManager() {
+                public void checkClientTrusted(java.security.cert.X509Certificate[] c, String t) {}
+                public void checkServerTrusted(java.security.cert.X509Certificate[] c, String t) {}
+                public java.security.cert.X509Certificate[] getAcceptedIssuers() { return null; }
+            }}, null);
+            ((HttpsURLConnection) conn).setSSLSocketFactory(sc.getSocketFactory());
+            ((HttpsURLConnection) conn).setHostnameVerifier((h, s) -> true);
+        }
+        conn.setInstanceFollowRedirects(true);
+        conn.setRequestProperty("User-Agent", "JaC64/1.0");
+        int code = conn.getResponseCode();
+        if (code != 200) {
+            throw new IOException("HTTP " + code + " downloading " + urlStr);
+        }
+
+        // Try to get filename from Content-Disposition header, fall back to URL path
+        String filename = null;
+        String disposition = conn.getHeaderField("Content-Disposition");
+        if (disposition != null && disposition.toLowerCase().contains("filename=")) {
+            String[] parts = disposition.split("(?i)filename=");
+            if (parts.length > 1) {
+                filename = parts[1].trim().replaceAll("^\"|\"$", "").split(";")[0].trim();
+            }
+        }
+        if (filename == null || filename.isEmpty()) {
+            String urlPath = url.getPath();
+            int slash = urlPath.lastIndexOf('/');
+            filename = slash >= 0 ? urlPath.substring(slash + 1) : urlPath;
+        }
+        // URL-decode the filename (e.g. %20 -> space)
+        filename = URLDecoder.decode(filename, "UTF-8");
+
+        File tmp = File.createTempFile("jac64_", "_" + filename);
+        tmp.deleteOnExit();
+        System.out.println("Downloading " + urlStr + " -> " + tmp.getAbsolutePath());
+
+        try (InputStream in = conn.getInputStream();
+             FileOutputStream out = new FileOutputStream(tmp)) {
+            byte[] buf = new byte[8192];
+            int len;
+            while ((len = in.read(buf)) > 0) out.write(buf, 0, len);
+        }
+        conn.disconnect();
+        return tmp.getAbsolutePath();
+    }
+
     // --- Tool Implementations ---
 
     private JsonObject toolLoadFile(JsonObject args) throws Exception {
         String path = args.get("path").getAsString();
+
+        // Download from URL if needed
+        if (path.startsWith("http://") || path.startsWith("https://")) {
+            path = downloadToTemp(path);
+        }
+
         String lower = path.toLowerCase();
 
         // Extract from zip if needed
