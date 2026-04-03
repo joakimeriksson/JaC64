@@ -1336,7 +1336,6 @@ public class C64Screen extends ExtChip implements Observer {
       }
       notVisible = false;
       if (vPos < 0 || vPos >= 284) {
-        cpu.baLowUntil = 0;
         notVisible = true;
         if (STATE_DEBUG)
           monitor.info("FINISH next at " + vbeam);
