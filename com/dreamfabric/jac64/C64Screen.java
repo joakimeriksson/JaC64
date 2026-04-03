@@ -1692,11 +1692,12 @@ public class C64Screen extends ExtChip implements Observer {
       // Update screen
       if (updating) {
         if (vPos == 285) {
-          // Throttle to 50 Hz PAL. If audio already provides
-          // backpressure the frame will already take ~20ms and
-          // the sleep won't trigger.
+          // Throttle to 50 Hz only when audio driver has no sound
+          // (e.g. Android without blocking audio). With ReSID on
+          // desktop, audio output already provides the timing —
+          // double throttle causes audio glitches.
           long now = audioDriver.getMicros();
-          if (lastScan > 0 && !audioDriver.fullSpeed()) {
+          if (lastScan > 0 && !audioDriver.fullSpeed() && !audioDriver.hasSound()) {
             long frameElapsed = now - lastScan;
             long targetMicros = 20000; // 20ms = 50Hz PAL
             if (frameElapsed < targetMicros) {

@@ -91,7 +91,10 @@ public class AudioDriverAndroid extends AudioDriver {
 
     @Override
     public boolean hasSound() {
-        return audioTrack != null;
+        // Return false so C64Screen's sleep throttle provides frame
+        // pacing. Android AudioTrack buffers are too large to provide
+        // the tight backpressure that desktop Java Sound gives.
+        return false;
     }
 
     @Override

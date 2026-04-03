@@ -67,6 +67,7 @@ public class Keyboard {
   public static final int VK_SUBTRACT = 109;
   public static final int VK_DIVIDE = 111;
   public static final int VK_PLUS = 521;
+  public static final int VK_ALT = 18;
   public static final int VK_NUMPAD0 = 96;
   public static final int VK_NUMPAD2 = 98;
   public static final int VK_NUMPAD4 = 100;
@@ -532,6 +533,7 @@ public class Keyboard {
     case VK_NUMPAD6 :
       return USER_RIGHT;
     case VK_NUMPAD0:
+    case VK_ALT:
       return USER_FIRE;
     }
     return -1;
