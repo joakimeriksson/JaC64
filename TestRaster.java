@@ -193,7 +193,7 @@ public class TestRaster {
         if (disposition != null && disposition.toLowerCase().contains("filename=")) {
             String[] parts = disposition.split("(?i)filename=");
             if (parts.length > 1)
-                filename = parts[1].trim().replaceAll("^\"|\"$", "").split(";")[0].trim();
+                filename = parts[1].split(";")[0].trim().replaceAll("^\"|\"$", "").trim();
         }
         if (filename == null || filename.isEmpty()) {
             String path = url.getPath();

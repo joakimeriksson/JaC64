@@ -163,7 +163,10 @@ public class JaC64MCP {
                             while ((entry = zis.getNextEntry()) != null) {
                                 String n = entry.getName().toLowerCase();
                                 if (n.endsWith(".d64") || n.endsWith(".t64") || n.endsWith(".prg") || n.endsWith(".p00")) {
-                                    File tmp = File.createTempFile("jac64_", "_" + entry.getName());
+                                    String entryFile = entry.getName();
+                                    int sep = entryFile.lastIndexOf('/');
+                                    if (sep >= 0) entryFile = entryFile.substring(sep + 1);
+                                    File tmp = File.createTempFile("jac64_", "_" + entryFile);
                                     tmp.deleteOnExit();
                                     FileOutputStream fos = new FileOutputStream(tmp);
                                     byte[] buf = new byte[8192];
@@ -397,7 +400,7 @@ public class JaC64MCP {
         if (disposition != null && disposition.toLowerCase().contains("filename=")) {
             String[] parts = disposition.split("(?i)filename=");
             if (parts.length > 1) {
-                filename = parts[1].trim().replaceAll("^\"|\"$", "").split(";")[0].trim();
+                filename = parts[1].split(";")[0].trim().replaceAll("^\"|\"$", "").trim();
             }
         }
         if (filename == null || filename.isEmpty()) {
@@ -442,7 +445,10 @@ public class JaC64MCP {
             while ((entry = zis.getNextEntry()) != null) {
                 String n = entry.getName().toLowerCase();
                 if (n.endsWith(".d64") || n.endsWith(".t64") || n.endsWith(".prg") || n.endsWith(".p00")) {
-                    File tmp = File.createTempFile("jac64_", "_" + entry.getName());
+                    String entryFile = entry.getName();
+                    int sep = entryFile.lastIndexOf('/');
+                    if (sep >= 0) entryFile = entryFile.substring(sep + 1);
+                    File tmp = File.createTempFile("jac64_", "_" + entryFile);
                     tmp.deleteOnExit();
                     FileOutputStream fos = new FileOutputStream(tmp);
                     byte[] buf = new byte[8192];

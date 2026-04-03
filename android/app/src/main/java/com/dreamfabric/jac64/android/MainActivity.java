@@ -439,7 +439,11 @@ public class MainActivity extends Activity {
             String entryName = entry.getName().toLowerCase();
             if (entryName.endsWith(".d64") || entryName.endsWith(".t64")
                     || entryName.endsWith(".prg") || entryName.endsWith(".p00")) {
-                File out = new File(getCacheDir(), entry.getName());
+                // Use only the filename part, ignoring subdirectories in the zip
+                String entryFile = entry.getName();
+                int sep = entryFile.lastIndexOf('/');
+                if (sep >= 0) entryFile = entryFile.substring(sep + 1);
+                File out = new File(getCacheDir(), entryFile);
                 java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
                 byte[] buf = new byte[8192];
                 int len;
@@ -501,7 +505,7 @@ public class MainActivity extends Activity {
                 if (disposition != null && disposition.toLowerCase().contains("filename=")) {
                     String[] parts = disposition.split("(?i)filename=");
                     if (parts.length > 1) {
-                        filename = parts[1].trim().replaceAll("^\"|\"$", "").split(";")[0].trim();
+                        filename = parts[1].split(";")[0].trim().replaceAll("^\"|\"$", "").trim();
                     }
                 }
                 if (filename == null || filename.isEmpty()) {
