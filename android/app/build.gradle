@@ -38,6 +38,8 @@ android {
                 exclude 'JaC64MCP.java'
                 exclude 'C64Test.java'
                 exclude 'C64Applet.java'
+                exclude 'TestRaster.java'
+                exclude 'TestFastLoader.java'
                 exclude 'com/dreamfabric/gui/**'
                 exclude 'com/dreamfabric/jac64/C64Canvas.java'
                 exclude 'com/dreamfabric/jac64/AudioDriverSE.java'
