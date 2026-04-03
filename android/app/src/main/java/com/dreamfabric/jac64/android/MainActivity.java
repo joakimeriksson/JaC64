@@ -47,6 +47,10 @@ public class MainActivity extends Activity {
     private CPU cpu;
     private C64Screen screen;
     private C64Reader reader;
+
+    // Multi-disk support
+    private final java.util.List<String[]> diskImages = new java.util.ArrayList<>(); // {name, path}
+    private int currentDisk = -1;
     private EmulatorSurfaceView emulatorView;
     private VirtualKeyboardView keyboardView;
     private VirtualJoystickView joystickView;
@@ -432,6 +436,8 @@ public class MainActivity extends Activity {
     }
 
     private File extractFromZip(File zipFile) throws java.io.IOException {
+        diskImages.clear();
+        currentDisk = -1;
         java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
             new java.io.FileInputStream(zipFile));
         java.util.zip.ZipEntry entry;
@@ -439,7 +445,6 @@ public class MainActivity extends Activity {
             String entryName = entry.getName().toLowerCase();
             if (entryName.endsWith(".d64") || entryName.endsWith(".t64")
                     || entryName.endsWith(".prg") || entryName.endsWith(".p00")) {
-                // Use only the filename part, ignoring subdirectories in the zip
                 String entryFile = entry.getName();
                 int sep = entryFile.lastIndexOf('/');
                 if (sep >= 0) entryFile = entryFile.substring(sep + 1);
@@ -451,12 +456,13 @@ public class MainActivity extends Activity {
                     fos.write(buf, 0, len);
                 }
                 fos.close();
-                zis.close();
-                return out;
+                diskImages.add(new String[]{entryFile, out.getAbsolutePath()});
             }
         }
         zis.close();
-        return null;
+        if (diskImages.isEmpty()) return null;
+        currentDisk = 0;
+        return new File(diskImages.get(0)[1]);
     }
 
     private void showUrlDialog() {
@@ -473,6 +479,23 @@ public class MainActivity extends Activity {
                 }
             })
             .setNegativeButton("Cancel", null)
+            .show();
+    }
+
+    private void showSwapDiskDialog() {
+        String[] names = new String[diskImages.size()];
+        for (int i = 0; i < diskImages.size(); i++) {
+            names[i] = (i + 1) + ": " + diskImages.get(i)[0] + (i == currentDisk ? " (loaded)" : "");
+        }
+        new AlertDialog.Builder(this)
+            .setTitle("Swap Disk")
+            .setItems(names, (dialog, which) -> {
+                if (which != currentDisk) {
+                    reader.readDiskFromFile(diskImages.get(which)[1]);
+                    currentDisk = which;
+                    Toast.makeText(this, "Swapped to: " + diskImages.get(which)[0], Toast.LENGTH_SHORT).show();
+                }
+            })
             .show();
     }
 
@@ -595,6 +618,9 @@ public class MainActivity extends Activity {
         popup.getMenu().add(0, 40, 10, warpEnabled ? "Warp Speed OFF" : "Warp Speed ON");
         popup.getMenu().add(0, 41, 11, touchPaddleEnabled ? "Touch Paddle OFF" : "Touch Paddle ON");
         popup.getMenu().add(0, 50, 12, "Load URL");
+        if (diskImages.size() > 1) {
+            popup.getMenu().add(0, 60, 13, "Swap Disk (" + (currentDisk + 1) + "/" + diskImages.size() + ")");
+        }
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -620,6 +646,7 @@ public class MainActivity extends Activity {
                     joystickView.setVisibility(touchPaddleEnabled ? View.GONE : View.VISIBLE);
                     return true;
                 case 50: showUrlDialog(); return true;
+                case 60: showSwapDiskDialog(); return true;
             }
             return false;
         });

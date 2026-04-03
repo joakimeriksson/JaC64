@@ -28,6 +28,10 @@ public class JaC64MCP {
     private JFrame window;
     private final PrintStream mcpOut;
 
+    // Multi-disk support: list of extracted disk images from a zip
+    private final java.util.List<String[]> diskImages = new java.util.ArrayList<>(); // {name, path}
+    private int currentDisk = -1;
+
     public JaC64MCP(PrintStream mcpOut) {
         this.mcpOut = mcpOut;
     }
@@ -338,6 +342,9 @@ public class JaC64MCP {
         tools.add(toolDef("iec_trace", "Enable/disable IEC serial bus tracing to stderr",
             prop("enabled", "boolean", "true to start tracing, false to stop")));
 
+        tools.add(toolDef("swap_disk", "Swap disk in multi-disk games. Call with no arguments to list available disks. Call with disk number to swap.",
+            prop("disk", "integer", "Disk number to swap to (1-based). Omit to list available disks.")));
+
         result.add("tools", tools);
         return result;
     }
@@ -362,6 +369,7 @@ public class JaC64MCP {
                 case "set_sid": return toolSetSid(args);
                 case "cpu_state": return toolCpuState();
                 case "iec_trace": return toolIecTrace(args);
+                case "swap_disk": return toolSwapDisk(args);
                 case "fld_trace": scr.startFldTrace(); return toolResult("FLD trace started for 2 frames - check stdout");
                 default: return toolError("Unknown tool: " + name);
             }
@@ -437,8 +445,10 @@ public class JaC64MCP {
 
         String lower = path.toLowerCase();
 
-        // Extract from zip if needed
+        // Extract from zip if needed — extract ALL disk images for multi-disk support
         if (lower.endsWith(".zip")) {
+            diskImages.clear();
+            currentDisk = -1;
             java.util.zip.ZipInputStream zis = new java.util.zip.ZipInputStream(
                 new java.io.FileInputStream(path));
             java.util.zip.ZipEntry entry;
@@ -455,16 +465,17 @@ public class JaC64MCP {
                     int len;
                     while ((len = zis.read(buf)) > 0) fos.write(buf, 0, len);
                     fos.close();
-                    zis.close();
-                    path = tmp.getAbsolutePath();
-                    lower = path.toLowerCase();
-                    break;
+                    diskImages.add(new String[]{entryFile, tmp.getAbsolutePath()});
                 }
             }
-            if (lower.endsWith(".zip")) {
-                zis.close();
+            zis.close();
+            if (diskImages.isEmpty()) {
                 return toolError("No .d64/.t64/.prg/.p00 found in zip");
             }
+            // Use first disk
+            currentDisk = 0;
+            path = diskImages.get(0)[1];
+            lower = path.toLowerCase();
         }
 
         boolean mountOnly = args.has("mount_only") && args.get("mount_only").getAsBoolean();
@@ -479,7 +490,14 @@ public class JaC64MCP {
             waitReady();
             reader.readDiskFromFile(path);
             cpu.enterText("LOAD\"*\",8,1~");
-            return toolResult("Disk mounted and LOAD\"*\",8,1 typed. Drive LED will show loading activity.");
+            String msg = "Disk mounted and LOAD\"*\",8,1 typed. Drive LED will show loading activity.";
+            if (diskImages.size() > 1) {
+                msg += "\nMulti-disk: " + diskImages.size() + " disks available. Use swap_disk to switch:";
+                for (int i = 0; i < diskImages.size(); i++) {
+                    msg += "\n  " + (i + 1) + ": " + diskImages.get(i)[0] + (i == currentDisk ? " (loaded)" : "");
+                }
+            }
+            return toolResult(msg);
         } else if (lower.endsWith(".t64")) {
             cpu.reset();
             waitReady();
@@ -496,6 +514,29 @@ public class JaC64MCP {
         }
 
         return toolError("Unsupported file type: " + path);
+    }
+
+    private JsonObject toolSwapDisk(JsonObject args) throws Exception {
+        if (diskImages.isEmpty()) {
+            return toolError("No multi-disk set loaded. Load a zip with multiple disk images first.");
+        }
+        if (!args.has("disk") || args.get("disk").isJsonNull()) {
+            // List available disks
+            StringBuilder sb = new StringBuilder("Available disks:");
+            for (int i = 0; i < diskImages.size(); i++) {
+                sb.append("\n  ").append(i + 1).append(": ").append(diskImages.get(i)[0]);
+                if (i == currentDisk) sb.append(" (loaded)");
+            }
+            return toolResult(sb.toString());
+        }
+        int disk = args.get("disk").getAsInt() - 1; // convert to 0-based
+        if (disk < 0 || disk >= diskImages.size()) {
+            return toolError("Invalid disk number. Valid range: 1-" + diskImages.size());
+        }
+        String diskPath = diskImages.get(disk)[1];
+        reader.readDiskFromFile(diskPath);
+        currentDisk = disk;
+        return toolResult("Swapped to disk " + (disk + 1) + ": " + diskImages.get(disk)[0]);
     }
 
     private JsonObject toolTypeText(JsonObject args) {
