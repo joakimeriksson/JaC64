@@ -22,7 +22,7 @@ public class VirtualKeyboardView extends View {
         {"CTRL", "Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "@", "*", "\u2191", "RSTR"},
         {"R/S", "SL", "A", "S", "D", "F", "G", "H", "J", "K", "L", ":", ";", "=", "RETURN"},
         {"C=", "SHFT", "Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "SHFT", "U", "D"},
-        {"", "", "", "SPACE", "", "", "", "", "", "", "", "", "L", "", "R"}
+        {"F1", "F3", "F5", "F7", "SPACE", "", "", "", "", "", "", "", "L", "", "R"}
     };
 
     // C64 keyboard matrix positions: {row, col, flags}
@@ -37,7 +37,7 @@ public class VirtualKeyboardView extends View {
         // C=, LSHIFT, Z, X, C, V, B, N, M, comma, period, /, RSHIFT, CRS-UP, CRS-DOWN
         {{7,5,0}, {1,7,0}, {1,4,0}, {2,7,0}, {2,4,0}, {3,7,0}, {3,4,0}, {4,7,0}, {4,4,0}, {5,7,0}, {5,4,0}, {6,7,0}, {6,4,0}, {0,7,1}, {0,7,0}},
         // (empty x3), SPACE, (empty x8), CRS-LEFT, (empty), CRS-RIGHT
-        {{-1,0,0}, {-1,0,0}, {-1,0,0}, {7,4,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {0,2,1}, {-1,0,0}, {0,2,0}}
+        {{0,4,0}, {0,5,0}, {0,6,0}, {0,3,0}, {7,4,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {-1,0,0}, {0,2,1}, {-1,0,0}, {0,2,0}}
     };
 
     // Width weight for each key in each row (wider keys get more weight)
