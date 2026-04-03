@@ -28,9 +28,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
 
   public static final int NMI_DELAY = 2;
   public static final int IRQ_DELAY = 2;
+  public static final int IRQ_RELEASE_DELAY = 3;
   
   public static final int NMI_INT = 1;
   public static final int IRQ_INT = 2;
+  private static final long IRQ_RELEASE_DISABLED = Long.MAX_VALUE;
 
   // Needed by ...
   protected PatchListener list;
@@ -47,6 +49,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public boolean NMILastLow = false;
   private boolean NMIPending = false;
   private boolean IRQLow = false;
+  private boolean irqRequested = false;
   public int lastInterrupt = 0;
   public boolean busAvailable = true;
   public long baLowUntil = 0;
@@ -68,10 +71,14 @@ public abstract class MOS6510Core extends MOS6510Ops {
 
   protected long nmiCycleStart = 0;
   protected long irqCycleStart = 0;
+  protected long irqReleaseCycle = IRQ_RELEASE_DISABLED;
 
   protected EventQueue scheduler = new EventQueue();
 
   private String[] debugInfo;
+  private final boolean irqTraceEnabled =
+      Boolean.getBoolean("jac64.irqTrace");
+  private PrintStream irqTraceOut;
 
   public MOS6510Core(IMonitor m, String cb) {
     monitor = m;
@@ -93,13 +100,59 @@ public abstract class MOS6510Core extends MOS6510Ops {
     return cycles;
   }
 
-  public void setIRQLow(boolean low) {
-    if (!IRQLow && low) {
-      // If low -> will trigger an IRQ!
-      checkInterrupt = true;
-      irqCycleStart = cycles + IRQ_DELAY;
+  private void traceIrqLine(String event) {
+    if (!irqTraceEnabled) {
+      return;
     }
-    IRQLow = low;
+    if (irqTraceOut == null) {
+      String path = System.getProperty("jac64.irqTraceFile",
+          "/tmp/jac64_irq_line.log");
+      try {
+        irqTraceOut = new PrintStream(path);
+      } catch (Exception e) {
+        irqTraceOut = System.out;
+      }
+    }
+    irqTraceOut.println(event + " clk=" + cycles +
+        " baLowUntil=" + baLowUntil +
+        " pc=$" + Integer.toHexString(pc & 0xffff) +
+        " irqStart=" + irqCycleStart +
+        " irqLow=" + IRQLow +
+        " req=" + irqRequested);
+  }
+
+  private void refreshInterruptCheck() {
+    checkInterrupt = NMIPending || IRQLow || resetFlag || jumpTo != -1 || brk;
+  }
+
+  private void updatePendingIRQLineState() {
+    if (!irqRequested && IRQLow && irqReleaseCycle != IRQ_RELEASE_DISABLED
+        && cycles >= irqReleaseCycle) {
+      IRQLow = false;
+      irqReleaseCycle = IRQ_RELEASE_DISABLED;
+      refreshInterruptCheck();
+    }
+  }
+
+  public void setIRQLow(boolean low) {
+    if (low) {
+      irqReleaseCycle = IRQ_RELEASE_DISABLED;
+      if (!irqRequested) {
+        // The first active IRQ source makes the CPU-visible IRQ line go low.
+        irqRequested = true;
+        IRQLow = true;
+        irqCycleStart = cycles + IRQ_DELAY;
+        traceIrqLine("IRQ-ASSERT");
+      }
+    } else if (irqRequested) {
+      irqRequested = false;
+      if (IRQLow) {
+        // The 6510 does not see the IRQ input line release immediately.
+        irqReleaseCycle = cycles + IRQ_RELEASE_DELAY;
+        traceIrqLine("IRQ-RELEASE-PEND");
+      }
+    }
+    refreshInterruptCheck();
   }
 
   public void setNMILow(boolean low) {
@@ -129,6 +182,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected int interruptInExec = 0;
   protected boolean disableInterupt = false;
   protected int irqEnableDelayOps = 0;
+  private boolean rmwDummyWrite = false;
 
   // Used for actual address...
   protected int rindex = 0;
@@ -269,6 +323,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   }
 
   public void emulateOp() {
+    updatePendingIRQLineState();
     boolean hadIrqEnableDelay = irqEnableDelayOps > 0;
     // Before executing an operation - check for interrupts!!!
     if (checkInterrupt) {
@@ -284,7 +339,8 @@ public abstract class MOS6510Core extends MOS6510Ops {
         NMILastLow = NMILow;
         // Just the interrupt handling... do nothing more...
         return;
-      } else if ((IRQLow && cycles >= irqCycleStart && irqEnableDelayOps == 0) || brk) {
+      } else if ((IRQLow && cycles >= irqCycleStart
+          && irqEnableDelayOps == 0) || brk) {
         if (!disableInterupt) {
           log("IRQ interrupt > " + IRQLow + " BRK: " +  brk);
           lastInterrupt = IRQ_INT;
@@ -455,8 +511,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
     // -------------------------------------------------------------------
 
     // If RMW - it will write before proceeding
-    if (read && write) {
+    boolean rmwWrite = read && write;
+    if (rmwWrite) {
+      rmwDummyWrite = true;
       writeByte(adr, data);
+      rmwDummyWrite = false;
     }
 
     switch(op) {
@@ -573,9 +632,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
     case RTI:
       fetchByte(s | 0x100);
       tmp = pop();
-      boolean irqWasDisabled = disableInterupt;
+      boolean irqWasDisabledOnRti = disableInterupt;
       setStatusByte(tmp);
-      if (irqWasDisabled && !disableInterupt) {
+      if (irqWasDisabledOnRti && !disableInterupt) {
         irqEnableDelayOps = 1;
       }
       pc = pop() + (pop() << 8);
@@ -610,7 +669,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
       break;
     case PLP:
       tmp = pop();
-      irqWasDisabled = disableInterupt;
+      boolean irqWasDisabled = disableInterupt;
       setStatusByte(tmp);
       if (irqWasDisabled && !disableInterupt) {
         irqEnableDelayOps = 1;
@@ -888,6 +947,8 @@ public abstract class MOS6510Core extends MOS6510Ops {
     NMILastLow = false;
     NMIPending = false;
     IRQLow = false;
+    irqRequested = false;
+    irqReleaseCycle = IRQ_RELEASE_DISABLED;
     log("Set IRQLOW to false...");
     resetFlag = false;
 
@@ -911,6 +972,8 @@ public abstract class MOS6510Core extends MOS6510Ops {
     NMIPending = false;
     brk = false;
     IRQLow = false;
+    irqRequested = false;
+    irqReleaseCycle = IRQ_RELEASE_DISABLED;
     log("Set IRQLOW to false...");
     resetFlag = true;
     checkInterrupt = true;
@@ -964,6 +1027,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
   }
 
   public boolean getIRQLow() {
+    updatePendingIRQLineState();
 	  return IRQLow;
+  }
+
+  public boolean isRmwDummyWrite() {
+    return rmwDummyWrite;
   }
 }

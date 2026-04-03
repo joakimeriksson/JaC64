@@ -373,7 +373,7 @@ public class C64Screen extends ExtChip implements Observer {
 
   private boolean shouldTraceRasterReads() {
     int pc = cpu.getPC() & 0xffff;
-    return fldTrace && pc >= 0x0b00 && pc <= 0x1600;
+    return fldTrace && pc >= 0x0a20 && pc <= 0x1600;
   }
 
   private boolean shouldTraceRasterWrites() {
@@ -396,6 +396,15 @@ public class C64Screen extends ExtChip implements Observer {
       }
     }
     return mask;
+  }
+
+  private void setBaLowUntil(long until, String source) {
+    long oldUntil = cpu.baLowUntil;
+    cpu.baLowUntil = until;
+    if (oldUntil != until) {
+      ((CPU) cpu).traceBaEvent("BA-SET src=" + source + " old=" + oldUntil +
+          " new=" + until);
+    }
   }
 
   private void scheduleRasterIrq() {
@@ -428,6 +437,44 @@ public class C64Screen extends ExtChip implements Observer {
     rasterIrqClock += (long) RASTER_LINES * VICConstants.SCAN_RATE;
   }
 
+  private void updateVicIrqLine() {
+    if ((irqFlags & 1) == 0) {
+      irqTriggered = false;
+    }
+
+    if ((irqMask & 0x0f & irqFlags) != 0) {
+      irqFlags |= 0x80;
+      setIRQ(VIC_IRQ);
+    } else {
+      irqFlags &= 0x7f;
+      clearIRQ(VIC_IRQ);
+    }
+  }
+
+  private void handleLateRasterIrqAcknowledge(boolean rmwDummyWrite) {
+    if (rasterIrqClock == RASTER_IRQ_DISABLED
+        || raster < 0 || raster >= RASTER_LINES) {
+      return;
+    }
+
+    long clk = cpu.cycles;
+    if (rmwDummyWrite) {
+      if (clk - 1 > rasterIrqClock) {
+        if (clk - 2 == rasterIrqClock) {
+          advanceRasterIrqClock();
+        } else {
+          triggerRasterIrq(clk);
+        }
+      }
+    } else if (clk > rasterIrqClock) {
+      if (clk - 1 == rasterIrqClock) {
+        advanceRasterIrqClock();
+      } else {
+        triggerRasterIrq(clk);
+      }
+    }
+  }
+
   private void triggerRasterIrq(long irqClock) {
     irqFlags |= 0x1;
     if ((irqMask & 1) != 0) {
@@ -443,7 +490,9 @@ public class C64Screen extends ExtChip implements Observer {
     if (fldTrace) {
       fldOut.println("IRQ-FIRE line=" + raster + " clk=" + irqClock +
           " next=" + rasterIrqClock + " vbeam=" + vbeam +
-          " cyc=" + (irqClock - lastLine));
+          " cyc=" + (irqClock - lastLine) +
+          " baLowUntil=" + cpu.baLowUntil +
+          " pc=$" + Integer.toHexString(cpu.getPC() & 0xffff));
     }
   }
 
@@ -461,7 +510,7 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   private void handleBadLineStart(int vicCycle, boolean wasVisible) {
-    cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+    setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-START");
 
     if (vicCycle <= 13) {
       rc = 0;
@@ -999,33 +1048,30 @@ public class C64Screen extends ExtChip implements Observer {
 
     case 0xd019 : {
       if ((data & 0x80) != 0) data = 0xff;
-      int latchval = 0xff ^ data;
-      if (IRQDEBUG)
+      if (IRQDEBUG) {
         monitor.info("Latching VIC-II: " + Integer.toString(data, 16)
-            + " on " + Integer.toString(irqFlags, 16) +
-            " latch: " + Integer.toString(latchval, 16));
-
-      irqFlags &= latchval;
-      if ((irqFlags & 1) == 0) {
-        irqTriggered = false;
+            + " on " + Integer.toString(irqFlags, 16));
       }
 
-      // Is this "flagged" off?
-      if ((irqMask & 0x0f & irqFlags) == 0) {
-        clearIRQ(VIC_IRQ);
+      if (((CPU) cpu).isRmwDummyWrite()) {
+        irqFlags &= ~((data & 0x0f) | 0x80);
+        if ((data & 1) != 0) {
+          handleLateRasterIrqAcknowledge(true);
+        }
+        updateVicIrqLine();
+        break;
       }
+
+      if ((data & 1) != 0) {
+        handleLateRasterIrqAcknowledge(false);
+      }
+      irqFlags &= ~((data & 0x0f) | 0x80);
+      updateVicIrqLine();
     }
     break;
     case 0xd01a:
       irqMask = data;
-
-      // Check if IRQ should trigger or clear!
-      if ((irqMask & 0x0f & irqFlags) != 0) {
-        irqFlags |= 0x80;
-        setIRQ(VIC_IRQ);
-      } else {
-        clearIRQ(VIC_IRQ);
-      }
+      updateVicIrqLine();
 
       if (IRQDEBUG) {
         monitor.info("Changing IRQ mask to: " +
@@ -1329,7 +1375,7 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[3].readSpriteData();
       }
       if (sprites[5].dma) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_SP5;
+        setBaLowUntil(lastLine + VICConstants.BA_SP5, "SPR5");
       }
       break;
     case 2:
@@ -1339,7 +1385,7 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[4].readSpriteData();
       }
       if (sprites[6].dma) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_SP6;
+        setBaLowUntil(lastLine + VICConstants.BA_SP6, "SPR6");
       }
       break;
     case 4:
@@ -1349,7 +1395,7 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[5].readSpriteData();
       }
       if (sprites[7].dma) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_SP7;
+        setBaLowUntil(lastLine + VICConstants.BA_SP7, "SPR7");
       }
       break;
     case 6:
@@ -1399,7 +1445,7 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     case 11: // Set badline fetching...
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C11");
       }
       break;
     case 12: // First visible cycle (on screen)
@@ -1420,7 +1466,7 @@ public class C64Screen extends ExtChip implements Observer {
       vc = vcBase;
       vmli = 0;
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C13");
         if (BAD_LINE_DEBUG) System.out.println("#### RC = 0 (" + rc + ") at "
             + vbeam + " vc: " + vc);
         rc = 0;
@@ -1431,7 +1477,7 @@ public class C64Screen extends ExtChip implements Observer {
       drawSprites();
       mpos += 8;
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C14");
       }
       break;
     case 15:
@@ -1441,7 +1487,7 @@ public class C64Screen extends ExtChip implements Observer {
       mpos += 8;
 
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C15");
       }
 
       // Turn off sprite DMA if finished reading!
@@ -1456,7 +1502,7 @@ public class C64Screen extends ExtChip implements Observer {
         borderState &= 0xfd;
       }
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C16");
         fetchBadLineData(vmli);
       }
 
@@ -1474,7 +1520,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C17");
         fetchBadLineData(vmli);
       }
       drawGraphics(mpos + horizScroll);
@@ -1484,7 +1530,7 @@ public class C64Screen extends ExtChip implements Observer {
       // Cycle 18 - 53
     default:
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-FETCH");
         fetchBadLineData(vmli);
       }
       drawGraphics(mpos + horizScroll);
@@ -1494,7 +1540,7 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     case 54:
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C54");
         fetchBadLineData(vmli);
       }
       int mult = 1;
@@ -1522,7 +1568,7 @@ public class C64Screen extends ExtChip implements Observer {
         mult = mult << 1;
       }
       if (sprites[0].dma) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_SP0;
+        setBaLowUntil(lastLine + VICConstants.BA_SP0, "SPR0");
       }
 
       drawGraphics(mpos + horizScroll);
@@ -1536,7 +1582,7 @@ public class C64Screen extends ExtChip implements Observer {
         borderState |= 2;
       }
       if (badLine) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_BADLINE;
+        setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C55");
         fetchBadLineData(vmli);
       }
       drawGraphics(mpos + horizScroll);
@@ -1568,7 +1614,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       if (sprites[1].dma) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_SP1;
+        setBaLowUntil(lastLine + VICConstants.BA_SP1, "SPR1");
       }
       break;
     case 57:
@@ -1605,7 +1651,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       if (sprites[2].dma) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_SP2;
+        setBaLowUntil(lastLine + VICConstants.BA_SP2, "SPR2");
       }
 
       break;
@@ -1632,12 +1678,12 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[2].readSpriteData();
       }
       if (sprites[3].dma) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_SP3;
+        setBaLowUntil(lastLine + VICConstants.BA_SP3, "SPR3");
       }
       break;
     case 62:
       if (sprites[4].dma) {
-        cpu.baLowUntil = lastLine + VICConstants.BA_SP4;
+        setBaLowUntil(lastLine + VICConstants.BA_SP4, "SPR4");
       }
       // Reset sprites so that they can be repainted again...
       for (int i = 0; i < sprites.length; i++) {

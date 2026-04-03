@@ -39,7 +39,7 @@ public class VICConstants {
   // Next line...
   public static final int BA_SP2 = SCAN_RATE + 0;
   public static final int BA_SP3 = SCAN_RATE + 2;
-  public static final int BA_SP4 = SCAN_RATE + 4;
+  public static final int BA_SP4 = SCAN_RATE + 5;
   // Current line...
   public static final int BA_SP5 = 6; // On at 1, off at >6 (e.g. 7)
   public static final int BA_SP6 = 8;

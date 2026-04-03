@@ -52,6 +52,18 @@ public class CPU extends MOS6510Core {
   private C1541Emu c1541;
   private Loader loader;
   private int windex = 0;
+  private final int execTraceFrom =
+      Integer.getInteger("jac64.execTraceFrom", -1);
+  private final int execTraceTo =
+      Integer.getInteger("jac64.execTraceTo", -1);
+  private final boolean baTraceEnabled =
+      Boolean.getBoolean("jac64.baTrace");
+  private final int baTraceFromLine =
+      Integer.getInteger("jac64.baTraceFrom", -1);
+  private final int baTraceToLine =
+      Integer.getInteger("jac64.baTraceTo", -1);
+  private java.io.PrintStream execTraceOut;
+  private java.io.PrintStream baTraceOut;
 
   private int cheatMon[];
   private AutoStore[] autoStore;
@@ -92,9 +104,16 @@ public class CPU extends MOS6510Core {
   }
 
   private void waitForBus() {
+    boolean waited = baLowUntil > cycles;
+    if (waited) {
+      traceBaEvent("BA-WAIT-START until=" + baLowUntil);
+    }
     while (baLowUntil > cycles) {
       cycles++;
       schedule(cycles);
+    }
+    if (waited) {
+      traceBaEvent("BA-WAIT-END");
     }
   }
 
@@ -340,6 +359,95 @@ public class CPU extends MOS6510Core {
   public String getName() {
     return "C64 CPU";
   }
+
+  private void traceExecIfEnabled() {
+    if (execTraceFrom < 0 || execTraceTo < execTraceFrom) {
+      return;
+    }
+
+    int pcNow = pc & 0xffff;
+    if (pcNow < execTraceFrom || pcNow > execTraceTo) {
+      return;
+    }
+
+    if (execTraceOut == null) {
+      String path = System.getProperty("jac64.execTraceFile",
+          "/tmp/jac64_exec_trace.log");
+      try {
+        execTraceOut = new java.io.PrintStream(path);
+      } catch (Exception e) {
+        execTraceOut = System.out;
+      }
+    }
+
+    long lineClock = 0;
+    int rasterLine = -1;
+    if (chips instanceof C64Screen) {
+      C64Screen screen = (C64Screen) chips;
+      lineClock = screen.lastLine;
+      rasterLine = screen.vbeam;
+    }
+
+    String pcHex = Integer.toHexString(0x10000 | pcNow).substring(1);
+    execTraceOut.println("EXEC pc=$" + pcHex +
+        " vbeam=" + rasterLine +
+        " cyc=" + (cycles - lineClock) +
+        " clk=" + cycles +
+        " a=$" + Hex.hex2(acc & 0xff) +
+        " x=$" + Hex.hex2(x & 0xff) +
+        " y=$" + Hex.hex2(y & 0xff) +
+        " sp=$" + Hex.hex2(s & 0xff) +
+        " p=$" + Hex.hex2(getStatusByte() & 0xff));
+  }
+
+  private boolean shouldTraceBa() {
+    if (!baTraceEnabled) {
+      return false;
+    }
+    if (!(chips instanceof C64Screen)) {
+      return true;
+    }
+    if (baTraceFromLine < 0 || baTraceToLine < 0) {
+      return true;
+    }
+
+    int rasterLine = ((C64Screen) chips).vbeam;
+    if (baTraceFromLine <= baTraceToLine) {
+      return rasterLine >= baTraceFromLine && rasterLine <= baTraceToLine;
+    }
+    return rasterLine >= baTraceFromLine || rasterLine <= baTraceToLine;
+  }
+
+  public void traceBaEvent(String event) {
+    if (!shouldTraceBa()) {
+      return;
+    }
+    if (baTraceOut == null) {
+      String path = System.getProperty("jac64.baTraceFile",
+          "/tmp/jac64_ba_trace.log");
+      try {
+        baTraceOut = new java.io.PrintStream(path);
+      } catch (Exception e) {
+        baTraceOut = System.out;
+      }
+    }
+
+    long lineClock = 0;
+    int rasterLine = -1;
+    if (chips instanceof C64Screen) {
+      C64Screen screen = (C64Screen) chips;
+      lineClock = screen.lastLine;
+      rasterLine = screen.vbeam;
+    }
+
+    baTraceOut.println(event +
+        " clk=" + cycles +
+        " vbeam=" + rasterLine +
+        " cyc=" + (cycles - lineClock) +
+        " baLowUntil=" + baLowUntil +
+        " pc=$" + Integer.toHexString(pc & 0xffff));
+  }
+
   /**
    * The main emulation <code>loop</code>.
    *
@@ -367,6 +475,8 @@ public class CPU extends MOS6510Core {
                 lastInterrupt);
           }
         }
+
+        traceExecIfEnabled();
 
         // Run one instruction!
         emulateOp();
