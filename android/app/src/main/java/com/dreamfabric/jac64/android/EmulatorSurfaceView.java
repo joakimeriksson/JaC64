@@ -194,6 +194,7 @@ public class EmulatorSurfaceView extends SurfaceView
         public void run() {
             while (running) {
                 // Wait for frame-ready signal from VIC-II
+                boolean render;
                 synchronized (frameLock) {
                     if (!frameReady) {
                         try {
@@ -202,8 +203,10 @@ public class EmulatorSurfaceView extends SurfaceView
                             break;
                         }
                     }
+                    render = frameReady;
                     frameReady = false;
                 }
+                if (!render) continue;
 
                 Canvas canvas = null;
                 try {
