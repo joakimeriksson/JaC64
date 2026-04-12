@@ -281,7 +281,6 @@ public class CIA {
       }
       // Trigger interrupts if needed...
       updateInterrupts();
-      System.out.println(ciaID() + " ====> IE = " + ciaie);
       break;
     case CRA:
       timerA.writeCR(cycles, data);

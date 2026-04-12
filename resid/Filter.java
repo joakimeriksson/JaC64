@@ -166,6 +166,8 @@ public class Filter {
 	 */
 	protected int /* reg4 */vol;
 
+	public int getVol() { return vol; }
+
 	/**
 	 * Mixer DC offset.
 	 */

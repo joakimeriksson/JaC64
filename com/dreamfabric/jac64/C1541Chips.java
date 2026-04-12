@@ -927,6 +927,12 @@ public class C1541Chips extends ExtChip implements DiskListener {
     }
 
     if (DEBUG_GCR) log("Reading and GCR:ing sector: " + track + ", " + sector);
+    if (reader == null) {
+      // No disk inserted - return empty sector
+      gcrSectorLength = GCR_SECTOR_HEADER_AND_DATA_SIZE + getSectorGapSize();
+      gcrSector = new int[gcrSectorLength];
+      return;
+    }
     byte[] sectorBuf = reader.getSector(track, sector);
     int pos = 0;
     int cSum = 0;

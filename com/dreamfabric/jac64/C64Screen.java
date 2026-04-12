@@ -83,6 +83,10 @@ public class C64Screen extends ExtChip implements Observer {
 
   ExtChip sidChip;
 
+  public RESIDChip getSidChip() {
+    return (sidChip instanceof RESIDChip) ? (RESIDChip) sidChip : null;
+  }
+
   CIA cia[];
   //  C1541 c1541;
   C1541Chips c1541Chips;
@@ -1149,8 +1153,6 @@ public class C64Screen extends ExtChip implements Observer {
         if (ciaWrites++ > 20) {
           isrRunning = true;
           ciaWrites = 0;
-        } else {
-          System.out.println("startup CIA write# " + ciaWrites + ": set " + address + " to " + data);
         }
       }
       break;

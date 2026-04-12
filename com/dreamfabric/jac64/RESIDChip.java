@@ -28,6 +28,7 @@ public class RESIDChip extends ExtChip {
   private long startTimeNanos = 0;
 
   SID sid;
+  public SID getSID() { return sid; }
   int CPUFrq = 985248;
   int clocksPerSample = CPUFrq / SAMPLE_RATE;
   int clocksPerSampleRest = 0;

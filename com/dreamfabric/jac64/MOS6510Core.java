@@ -189,10 +189,14 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected int lastReadOP = 0;
 
   public int getSP() { return s; }
+  public void setSP(int sp) { s = sp & 0xFF; }
   public int getPC() { return pc; }
   public int getAcc() { return acc; }
+  public void setAcc(int a) { acc = a & 0xFF; }
   public int getX() { return x; }
+  public void setX(int xr) { x = xr & 0xFF; }
   public int getY() { return y; }
+  public void setY(int yr) { y = yr & 0xFF; }
   public int getStatus() { return getStatusByte(); }
 
   private final void doInterrupt(int adr, int status) {

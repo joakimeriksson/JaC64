@@ -168,7 +168,7 @@ public class SID {
 
 		public int /* reg16 */exponential_counter_period[] = new int[3];
 
-		int /* reg8 */envelope_counter[] = new int[3];
+		public int /* reg8 */envelope_counter[] = new int[3];
 
 		public EnvelopeGenerator.State envelope_state[] = new EnvelopeGenerator.State[3];
 
@@ -204,6 +204,10 @@ public class SID {
 
 	protected Voice voice[] = new Voice[] { new Voice(), new Voice(),
 			new Voice() };
+
+	public Voice getVoice(int index) {
+		return voice[index];
+	}
 
 	public Filter filter = new Filter();
 
