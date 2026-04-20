@@ -107,6 +107,10 @@ public class TestRaster {
 
         scr.setKeyboardEmulation(false);
 
+        if (Boolean.getBoolean("jac64.warp")) {
+            scr.setFullSpeed(true);
+        }
+
         new Thread(() -> cpu.start(), "C64-CPU").start();
     }
 
