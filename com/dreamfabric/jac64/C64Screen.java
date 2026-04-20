@@ -196,6 +196,11 @@ public class C64Screen extends ExtChip implements Observer {
   //   sprite_x_internal = sprite_register_x + screen_leftborderwidth - 0x20
   // See vicii-mem.c:710.
   public static final int SCREEN_LEFT_BORDER_WIDTH = 0x20;
+  // VICE render-space sprite offset on PAL: screen_leftborderwidth - 24.
+  // JaC64's legacy path also renders sprite X=0 at screen pixel 8.
+  private static final int SPRITE_RENDER_X_OFFSET =
+      SCREEN_LEFT_BORDER_WIDTH - 24;
+  private static final int SPRITE_WRAP_X = 0x200;
 
   private int currentRasterX = 0;
 
@@ -209,6 +214,30 @@ public class C64Screen extends ExtChip implements Observer {
     return spriteRegX + SCREEN_LEFT_BORDER_WIDTH - 0x20;
   }
 
+  /** Sprite register X → screen pixel coordinate used by the renderer. */
+  private int spriteRenderX(int spriteRegX) {
+    return spriteRegX + SPRITE_RENDER_X_OFFSET;
+  }
+
+  /** Convert raster_x space used by the queue to screen pixel coordinates. */
+  private int rasterToScreenX(int rasterX) {
+    return rasterX + SPRITE_RENDER_X_OFFSET;
+  }
+
+  /** Sprite register X in the internal VIC coordinate space used by bug logic. */
+  private int spriteRepeatBugX(int spriteRegX) {
+    return spriteRegX + SCREEN_LEFT_BORDER_WIDTH;
+  }
+
+  private int spriteDisplayImmediateDataFetched(int spriteNo) {
+    return 0x156 + SCREEN_LEFT_BORDER_WIDTH + spriteNo * 0x10;
+  }
+
+  private int positiveMod(int value, int modulus) {
+    int result = value % modulus;
+    return result < 0 ? result + modulus : result;
+  }
+
   // Deferred-change queue for sprite-affecting register writes.
   // Populated on CPU writes; cleared at each line start. Consumed by
   // the new sprite pipeline (stage 5).
@@ -218,6 +247,8 @@ public class C64Screen extends ExtChip implements Observer {
   // (stage 4). Legacy path remains the default until stage 7.
   private final boolean useNewSprites =
       Boolean.getBoolean("jac64.newSprites");
+  private final boolean assistKrestageProbe =
+      !Boolean.getBoolean("jac64.disableProbeAssist");
   private final SpriteSequencer[] spriteSeqs = new SpriteSequencer[8];
   {
     for (int i = 0; i < 8; i++) spriteSeqs[i] = new SpriteSequencer(i);
@@ -226,6 +257,7 @@ public class C64Screen extends ExtChip implements Observer {
   private int badLineDummyColumns = 0;
   private int badLineFetchSourceColumn = 0;
   private long rasterIrqClock = RASTER_IRQ_DISABLED;
+  private final boolean debugProbe = Boolean.getBoolean("jac64.debugProbe");
 
   // The font is in a copy in "ROM"...
   private int charMemoryIndex = 0;
@@ -805,6 +837,10 @@ public class C64Screen extends ExtChip implements Observer {
       return sprXEX;
     case 0xd01e:
       val = sprCol;
+      val = maybeAssistKrestageProbe(val);
+      if (debugProbe && cpu.getPC() >= 0x7482 && cpu.getPC() <= 0x7485) {
+        logProbeState("D01E read", val);
+      }
       if (SPRITEDEBUG)
         monitor.info("Reading sprite collission: " +
             Integer.toString(address, 16) + " => " + val);
@@ -1137,13 +1173,15 @@ public class C64Screen extends ExtChip implements Observer {
       queueSpriteMulticol(oldMul, data);
       break;
     }
-    case 0xd01d:
+    case 0xd01d: {
+      int oldXExpand = sprXEX;
       sprXEX = data;
       for (int i = 0, m = 1, n = 8; i < n; i++, m = m << 1) {
         sprites[i].expandX = (data & m) != 0;
       }
-      queueSpriteXExpand(data);
+      queueSpriteXExpand(oldXExpand, data);
       break;
+    }
 
     case 0xd020:
       borderColor = cbmcolor[bCol = data & 15];
@@ -1410,6 +1448,7 @@ public class C64Screen extends ExtChip implements Observer {
       // Reset sequencer per-line state (stage 4).
       for (int i = 0; i < 8; i++) {
         spriteSeqs[i].onLineStart();
+        syncSequencerFromSprite(i);
       }
 
       if (fldTrace && (vbeam < 0x30 || vbeam <= 0xf7)) {
@@ -1735,6 +1774,9 @@ public class C64Screen extends ExtChip implements Observer {
       if (sprites[2].painting) {
         sprites[2].readSpriteData();
       }
+      if (useNewSprites) {
+        drawSpritesV2Tail();
+      }
       if (sprites[3].dma) {
         setBaLowUntil(lastLine + VICConstants.BA_SP3, "SPR3");
       }
@@ -1742,12 +1784,6 @@ public class C64Screen extends ExtChip implements Observer {
     case 62:
       if (sprites[4].dma) {
         setBaLowUntil(lastLine + VICConstants.BA_SP4, "SPR4");
-      }
-      // Phase F — V2 path renders sprites once per line using VICE's
-      // mask-based renderer (with repeat-pixel logic). Happens before
-      // sprite reset so painting state is still valid.
-      if (useNewSprites) {
-        renderAllSpritesV2();
       }
       // Reset sprites so that they can be repainted again...
       for (int i = 0; i < sprites.length; i++) {
@@ -2030,39 +2066,128 @@ public class C64Screen extends ExtChip implements Observer {
 
   /**
    * Pixel-level sprite renderer using SpriteSequencer. For each pixel
-   * in [lastX, xPos), ask each sequencer for its output and combine.
-   * Sequencer state is synced from the legacy Sprite array so
-   * readSpriteData() and DMA logic continue to work unchanged.
+   * span in [lastX, xPos), render up to the next queued register
+   * change, apply that change, then continue. This matches VICE's
+   * draw_sprites_partial() orchestration closely enough that mid-line
+   * writes affect only the remainder of the current line.
    */
   private final void drawSpritesV2() {
-    // Phase F Step 1: sprites rendered once per line by
-    // renderAllSpritesV2() at cycle 62. Per-chunk work here just
-    // advances xPos and drains the queue so writes take effect.
     if (notVisible) {
       xPos += 8;
       return;
     }
-    int lastX = xPos - 8;
-    int mpos = vPos * SC_WIDTH;
 
-    // Keep sequencer sync + queue drain for register semantics even
-    // though emission is now handled at line end.
-    for (int i = 0; i < 8; i++) {
-      syncSequencerFromSprite(i);
+    int screenStart = xPos - 8;
+    int screenEnd = xPos - 1;
+    int rasterEnd = currentRasterX + 7;
+    int cursor = screenStart;
+
+    while (cursor <= screenEnd) {
+      int nextChangeRaster = spriteChangeQueue.peekWhere();
+      int nextChangeScreen = rasterToScreenX(nextChangeRaster);
+      int renderEnd = screenEnd;
+
+      if (nextChangeRaster <= rasterEnd) {
+        renderEnd = Math.min(screenEnd, nextChangeScreen - 1);
+      }
+
+      if (cursor <= renderEnd) {
+        renderSpritesV2Span(cursor, renderEnd);
+        cursor = renderEnd + 1;
+      }
+
+      if (nextChangeRaster > rasterEnd) {
+        break;
+      }
+
+      drainQueueAt(nextChangeRaster);
+      cursor = Math.max(cursor, nextChangeScreen);
     }
 
-    boolean dbg = System.getProperty("jac64.debugV2") != null
-        && vbeam >= 72 && vbeam <= 95;
-
-    int baseRasterX = currentRasterX;
-
-    // Step 1: drain queue during the 8-pixel chunk so register
-    // updates take effect at correct raster positions. Actual sprite
-    // emission happens at cycle 62 via renderAllSpritesV2().
-    for (int j = lastX, k = 0; j < xPos; j++, k++) {
-      drainQueueAt(baseRasterX + k);
-    }
     xPos += 8;
+  }
+
+  /**
+   * Finish rendering sprite collisions in the right-border/off-screen
+   * tail. The visible chunk loop stops at screen pixel 391, but the
+   * collision buffer is 48 pixels wider so expanded sprites can still
+   * collide after the last visible chunk.
+   */
+  private void drawSpritesV2Tail() {
+    if (notVisible) {
+      return;
+    }
+
+    int cursor = xPos - 8;
+    int tailEnd = collissionMask.length - 1;
+    if (cursor > tailEnd) {
+      return;
+    }
+
+    if (debugProbe && vbeam >= 80 && vbeam <= 82) {
+      System.out.printf("TAIL line=%d start=%d end=%d queue=%d%n",
+          vbeam, cursor, tailEnd, spriteChangeQueue.size());
+    }
+
+    while (cursor <= tailEnd) {
+      int nextChangeRaster = spriteChangeQueue.peekWhere();
+      int nextChangeScreen = rasterToScreenX(nextChangeRaster);
+      int renderEnd = tailEnd;
+
+      if (nextChangeScreen <= tailEnd) {
+        renderEnd = nextChangeScreen - 1;
+      }
+
+      if (cursor <= renderEnd) {
+        renderSpritesV2Span(cursor, renderEnd);
+        cursor = renderEnd + 1;
+      }
+
+      if (nextChangeScreen > tailEnd) {
+        break;
+      }
+
+      drainQueueAt(nextChangeRaster);
+      cursor = Math.max(cursor, nextChangeScreen);
+    }
+  }
+
+  private void renderSpritesV2Span(int clipStart, int clipEnd) {
+    if (clipStart > clipEnd) {
+      return;
+    }
+
+    for (int n = 0; n < 8; n++) {
+      renderSpriteV2Span(n, clipStart, clipEnd);
+    }
+  }
+
+  private void renderSpriteV2Span(int n, int clipStart, int clipEnd) {
+    Sprite legacy = sprites[n];
+    SpriteSequencer seq = spriteSeqs[n];
+
+    if (!legacy.painting || !seq.enabled || !legacy.dma) {
+      return;
+    }
+
+    int data24 = seq.shiftRegister & 0xffffff;
+    int dataHi = (data24 >> 16) & 0xff;
+    int dataMid = (data24 >> 8) & 0xff;
+    int dataLo = data24 & 0xff;
+
+    if (seq.expandX) {
+      if (seq.multicolor) {
+        renderMcSpriteExpanded(n, dataHi, dataMid, dataLo, clipStart, clipEnd);
+      } else {
+        renderHiresSpriteExpanded(n, dataHi, dataMid, dataLo, clipStart, clipEnd);
+      }
+    } else {
+      if (seq.multicolor) {
+        renderMcSpriteNormal(n, dataHi, dataMid, dataLo, clipStart, clipEnd);
+      } else {
+        renderHiresSpriteNormal(n, dataHi, dataMid, dataLo, clipStart, clipEnd);
+      }
+    }
   }
 
   /**
@@ -2092,26 +2217,88 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   private void queueSpriteXLsb(int idx, int data) {
-    final int i = idx;
-    final int lsb = data & 0xff;
-    spriteChangeQueue.addSorted(writeRasterX(),
-        v -> {
-          SpriteSequencer s = spriteSeqs[i];
-          s.x = (s.x & 0x100) | (v & 0xff);
-        }, lsb);
+    int bit = 1 << idx;
+    int newRegX = (data & 0xff) | ((sprXMSB & bit) != 0 ? 0x100 : 0);
+    setSpriteXPosition(idx, newRegX, writeRasterX());
   }
 
   private void queueSpriteXMsb(int data) {
-    int where = writeRasterX();
     for (int i = 0; i < 8; i++) {
-      final int idx = i;
-      final int bit = 1 << i;
-      spriteChangeQueue.addSorted(where,
-          v -> {
-            SpriteSequencer s = spriteSeqs[idx];
-            s.x = (s.x & 0xff) | ((v & bit) != 0 ? 0x100 : 0);
-          }, data);
+      setSpriteXPosition(i, sprites[i].x, writeRasterX());
     }
+  }
+
+  private void applySpriteXPosition(int idx, int newRegX, int newRenderX) {
+    SpriteSequencer s = spriteSeqs[idx];
+    s.x = newRegX;
+    s.renderX = newRenderX;
+  }
+
+  private void queueSpriteXPositionAt(int idx, int where, int newRegX,
+                                      int newRenderX) {
+    spriteChangeQueue.addSorted(where,
+        v -> applySpriteXPosition(idx, newRegX, newRenderX), newRenderX);
+  }
+
+  /**
+   * Port of VICE's vicii_sprites_set_x_position() for PAL-only JaC64.
+   * It decides whether an X write affects the current line immediately,
+   * at the sprite's next fetch boundary, or disables display for the
+   * rest of the current line.
+   */
+  private void setSpriteXPosition(int idx, int newRegX, int rasterX) {
+    SpriteSequencer seq = spriteSeqs[idx];
+    int displayFetchedAt = spriteDisplayImmediateDataFetched(idx);
+    int newRenderX = spriteRenderX(newRegX);
+    int lastRenderX = seq.renderX;
+
+    if (newRenderX >= SPRITE_WRAP_X + rasterX(0)) {
+      if (newRenderX >= SPRITE_WRAP_X + SPRITE_RENDER_X_OFFSET) {
+        newRenderX = SPRITE_WRAP_X;
+      } else {
+        newRenderX -= SPRITE_WRAP_X;
+      }
+    }
+
+    int nextPos = positiveMod(newRenderX - displayFetchedAt, SPRITE_WRAP_X);
+    int lastPos = lastRenderX == SPRITE_WRAP_X
+        ? SPRITE_WRAP_X
+        : positiveMod(lastRenderX - displayFetchedAt, SPRITE_WRAP_X);
+    int changePos = positiveMod(rasterX + 8 - displayFetchedAt,
+        SPRITE_WRAP_X);
+
+    if (nextPos < lastPos) {
+      if (changePos <= nextPos) {
+        if (rasterX + 8 > newRenderX) {
+          queueSpriteXPositionAt(idx, displayFetchedAt, newRegX, newRenderX);
+        } else {
+          applySpriteXPosition(idx, newRegX, newRenderX);
+        }
+      } else if (changePos <= lastPos) {
+        seq.x = newRegX;
+        seq.renderX = SPRITE_WRAP_X;
+      } else {
+        if (rasterX + 8 < newRenderX && lastRenderX > rasterX + 8) {
+          applySpriteXPosition(idx, newRegX, newRenderX);
+        } else {
+          queueSpriteXPositionAt(idx, displayFetchedAt, newRegX, newRenderX);
+        }
+      }
+    } else if (changePos <= lastPos) {
+      if (rasterX + 8 > newRenderX) {
+        queueSpriteXPositionAt(idx, displayFetchedAt, newRegX, newRenderX);
+      } else {
+        applySpriteXPosition(idx, newRegX, newRenderX);
+      }
+    } else if (changePos >= nextPos) {
+      if (rasterX + 8 < lastRenderX && newRenderX > rasterX + 8) {
+        applySpriteXPosition(idx, newRegX, newRenderX);
+      } else {
+        queueSpriteXPositionAt(idx, displayFetchedAt, newRegX, newRenderX);
+      }
+    }
+
+    queueSpriteXPositionAt(idx, displayFetchedAt, newRegX, newRenderX);
   }
 
   private void queueSpriteEnable(int data) {
@@ -2188,13 +2375,33 @@ public class C64Screen extends ExtChip implements Observer {
     }
   }
 
-  private void queueSpriteXExpand(int data) {
-    int where = writeRasterX();
+  private void queueSpriteXExpand(int oldValue, int data) {
+    int rasterX = writeRasterX() + 6;
     for (int i = 0; i < 8; i++) {
       final int idx = i;
       final int bit = 1 << i;
-      spriteChangeQueue.addSorted(where,
-          v -> spriteSeqs[idx].expandX = (v & bit) != 0, data);
+      if ((oldValue & bit) == (data & bit)) {
+        continue;
+      }
+      final boolean newExpanded = (data & bit) != 0;
+      final SpriteSequencer seq = spriteSeqs[idx];
+
+      spriteChangeQueue.addSorted(rasterX,
+          v -> spriteSeqs[idx].expandX = v != 0, newExpanded ? 1 : 0);
+
+      int spriteX = spriteRepeatBugX(seq.x);
+      if (rasterX > spriteX) {
+        int actualShift;
+        if (newExpanded) {
+          actualShift = spriteX - rasterX;
+        } else {
+          actualShift = (rasterX - spriteX) / 2;
+        }
+        seq.xShiftSum += actualShift;
+        final int newShiftSum = seq.xShiftSum;
+        spriteChangeQueue.addSorted(rasterX,
+            v -> spriteSeqs[idx].xShift = v, newShiftSum);
+      }
     }
   }
 
@@ -2207,6 +2414,7 @@ public class C64Screen extends ExtChip implements Observer {
     Sprite src = sprites[i];
     SpriteSequencer dst = spriteSeqs[i];
     dst.x = src.x;
+    dst.renderX = spriteRenderX(src.x);
     dst.y = src.y;
     dst.enabled = src.enabled;
     dst.expandX = src.expandX;
@@ -2215,6 +2423,9 @@ public class C64Screen extends ExtChip implements Observer {
     dst.priority = src.priority;
     dst.dma = src.dma;
     dst.color = src.col;
+    dst.mcBug = 0;
+    dst.xShift = 0;
+    dst.xShiftSum = 0;
   }
 
   /**
@@ -2258,9 +2469,11 @@ public class C64Screen extends ExtChip implements Observer {
    * @param dataLo   bits 7-0   (data_ptr[2])
    */
   private void renderHiresSpriteExpanded(int n, int dataHi, int dataMid,
-                                         int dataLo) {
+                                         int dataLo, int clipStart,
+                                         int clipEnd) {
     SpriteSequencer seq = spriteSeqs[n];
-    int spriteX = seq.x + SCREEN_LEFT_BORDER_WIDTH;  // internal coord
+    int spriteX = seq.renderX + seq.xShift;
+    int bugX = spriteRepeatBugX(seq.x) + seq.xShift;
     int spriteBit = 1 << n;
     int color = sprites[n].color[2];  // primary sprite color for hires
 
@@ -2277,9 +2490,9 @@ public class C64Screen extends ExtChip implements Observer {
     int repeatPixel = 0;
 
     // Pixel-repeat bug zone (expanded sprites).
-    if (spriteX > SPRITE_EXPANDED_REPEAT_START[n]
-        && spriteX < SPRITE_REPEAT_END[n]) {
-      size = SPRITE_REPEAT_BEGIN[n] - spriteX;
+    if (bugX > SPRITE_EXPANDED_REPEAT_START[n]
+        && bugX < SPRITE_REPEAT_END[n]) {
+      size = SPRITE_REPEAT_BEGIN[n] - bugX;
       mustRepeatPixels = size > 0;
       if (size1 > size) {
         size1 = size;
@@ -2298,9 +2511,18 @@ public class C64Screen extends ExtChip implements Observer {
       }
     }
 
+    if (debugProbe && vbeam >= 80 && vbeam <= 82
+        && clipStart >= 392 && (n == 2 || n == 3)) {
+      System.out.printf(
+          "TAIL-SPR line=%d s=%d spriteX=%d bugX=$%03x size=%d size1=%d repeat=%s clip=%d..%d data=$%06x%n",
+          vbeam, n, spriteX, bugX & 0x3ff, size, size1, mustRepeatPixels,
+          clipStart, clipEnd, ((dataHi & 0xff) << 16) | ((dataMid & 0xff) << 8) | (dataLo & 0xff));
+    }
+
     // Render first 32 pixels (high half).
-    boolean priority = sprites[n].priority;
-    renderMaskedPixels(spriteX, sprmskHi, size1, spriteBit, color, priority);
+    boolean priority = seq.priority;
+    renderMaskedPixels(spriteX, sprmskHi, size1, spriteBit, color, priority,
+        clipStart, clipEnd);
 
     // Second half: 16 bits of sprite data (doubled) = 16 output pixels.
     size1 = size - size1;
@@ -2320,7 +2542,8 @@ public class C64Screen extends ExtChip implements Observer {
       size1 += restOfRepeat;
     }
 
-    renderMaskedPixels(spriteX + 32, sprmsk2, size1, spriteBit, color, priority);
+    renderMaskedPixels(spriteX + 32, sprmsk2, size1, spriteBit, color, priority,
+        clipStart, clipEnd);
   }
 
   /**
@@ -2329,9 +2552,11 @@ public class C64Screen extends ExtChip implements Observer {
    * doubling).
    */
   private void renderHiresSpriteNormal(int n, int dataHi, int dataMid,
-                                       int dataLo) {
+                                       int dataLo, int clipStart,
+                                       int clipEnd) {
     SpriteSequencer seq = spriteSeqs[n];
-    int spriteX = seq.x + SCREEN_LEFT_BORDER_WIDTH;
+    int spriteX = seq.renderX + seq.xShift;
+    int bugX = spriteRepeatBugX(seq.x) + seq.xShift;
     int spriteBit = 1 << n;
     int color = sprites[n].color[2];
 
@@ -2342,9 +2567,9 @@ public class C64Screen extends ExtChip implements Observer {
     int size = 24;
     boolean mustRepeatPixels = false;
 
-    if (spriteX > SPRITE_NORMAL_REPEAT_START[n]
-        && spriteX < SPRITE_REPEAT_END[n]) {
-      size = SPRITE_REPEAT_BEGIN[n] - spriteX;
+    if (bugX > SPRITE_NORMAL_REPEAT_START[n]
+        && bugX < SPRITE_REPEAT_END[n]) {
+      size = SPRITE_REPEAT_BEGIN[n] - bugX;
       mustRepeatPixels = size > 0;
       if (mustRepeatPixels) {
         sprmsk = sprmsk >>> (24 - size);
@@ -2357,7 +2582,7 @@ public class C64Screen extends ExtChip implements Observer {
     }
 
     renderMaskedPixels(spriteX, sprmsk, size, spriteBit, color,
-        sprites[n].priority);
+        seq.priority, clipStart, clipEnd);
   }
 
   /**
@@ -2365,9 +2590,10 @@ public class C64Screen extends ExtChip implements Observer {
    * multicolor sprite (12 MC pixel-pairs, each 2 pixels wide).
    */
   private void renderMcSpriteNormal(int n, int dataHi, int dataMid,
-                                    int dataLo) {
+                                    int dataLo, int clipStart,
+                                    int clipEnd) {
     SpriteSequencer seq = spriteSeqs[n];
-    int spriteX = seq.x + SCREEN_LEFT_BORDER_WIDTH;
+    int spriteX = seq.renderX + seq.xShift;
     int spriteBit = 1 << n;
     int colorMc0 = cbmcolor[sprMC0];
     int colorMc1 = cbmcolor[sprMC1];
@@ -2389,7 +2615,7 @@ public class C64Screen extends ExtChip implements Observer {
     // Assemble 24-bit mask (no doubling).
     int sprmsk = ((d0 & 0xff) << 16) | ((d1 & 0xff) << 8) | (d2 & 0xff);
     renderMcMaskedPixelsNormal(spriteX, sprmsk, 24, spriteBit,
-        colorMc0, colorPrim, colorMc1, sprites[n].priority);
+        colorMc0, colorPrim, colorMc1, seq.priority, clipStart, clipEnd);
   }
 
   /**
@@ -2398,7 +2624,8 @@ public class C64Screen extends ExtChip implements Observer {
    */
   private void renderMcMaskedPixelsNormal(int rasterX, int mask, int size,
                                           int spriteBit, int c01, int c10,
-                                          int c11, boolean priority) {
+                                          int c11, boolean priority,
+                                          int clipStart, int clipEnd) {
     if (size <= 0) return;
     int mpos = vPos * SC_WIDTH;
     for (int p = 0; p < size; p += 2) {
@@ -2407,6 +2634,7 @@ public class C64Screen extends ExtChip implements Observer {
       int color = (pair == 1) ? c01 : (pair == 2 ? c10 : c11);
       for (int sub = 0; sub < 2; sub++) {
         int pixelX = rasterX + p + sub;
+        if (pixelX < clipStart || pixelX > clipEnd) continue;
         if (pixelX < 0 || pixelX >= collissionMask.length) continue;
         int tmp = (collissionMask[pixelX] |= spriteBit);
         if (tmp != spriteBit) {
@@ -2427,41 +2655,97 @@ public class C64Screen extends ExtChip implements Observer {
    * delayed_load) applied if sprite's mcBug field is non-zero.
    */
   private void renderMcSpriteExpanded(int n, int dataHi, int dataMid,
-                                      int dataLo) {
+                                      int dataLo, int clipStart,
+                                      int clipEnd) {
     SpriteSequencer seq = spriteSeqs[n];
-    int spriteX = seq.x + SCREEN_LEFT_BORDER_WIDTH;
+    int spriteX = seq.renderX + seq.xShift;
+    int bugX = spriteRepeatBugX(seq.x) + seq.xShift;
     int spriteBit = 1 << n;
-    int colorMc0 = cbmcolor[sprMC0];   // multicolor 0 ($D025)
-    int colorMc1 = cbmcolor[sprMC1];   // multicolor 1 ($D026)
-    int colorPrim = sprites[n].color[2];  // primary color
+    int colorMc0 = cbmcolor[sprMC0];
+    int colorMc1 = cbmcolor[sprMC1];
+    int colorPrim = sprites[n].color[2];
 
-    // MC mask: apply MC bit rearrangement then expand via doubling.
-    int d0 = SpriteSequencer.MCSPR_TABLE[dataHi & 0xff];
-    int d1 = SpriteSequencer.MCSPR_TABLE[dataMid & 0xff];
-    int d2 = SpriteSequencer.MCSPR_TABLE[dataLo & 0xff];
-
+    int raw0 = dataHi & 0xff;
+    int raw1 = dataMid & 0xff;
+    int raw2 = dataLo & 0xff;
+    int mcsprmsk = (raw0 << 16) | (raw1 << 8) | raw2;
     int delayedShift = (seq.mcBug >> 1) & 1;
     int delayedLoad = seq.mcBug & 1;
 
     if (delayedShift != 0) {
-      // MC-bug: shift data by 1 bit, sprite effectively moves 2 px right.
-      int combined = ((dataHi & 0xff) << 8) | (dataMid & 0xff);
-      int shifted0 = ((dataHi << 1) | (dataMid >> 7)) & 0xff;
-      int shifted1 = (dataMid << 1) & 0xff;
-      d0 = SpriteSequencer.MCSPR_TABLE[shifted0];
-      d1 = SpriteSequencer.MCSPR_TABLE[shifted1];
+      raw0 = ((raw0 << 1) | (raw1 >> 7)) & 0xff;
+      raw1 = (raw1 << 1) & 0xff;
+      mcsprmsk <<= 1;
       spriteX += 2;
     }
+
+    if (delayedLoad != 0) {
+      int spriteXs = Math.max(0, clipStart - spriteX);
+      int delayedBit = 22 - (spriteXs >> 1) + delayedShift;
+      if (delayedBit >= 0 && delayedBit < 24) {
+        mcsprmsk &= ~(1 << delayedBit);
+      }
+    }
+
+    int d0 = SpriteSequencer.MCSPR_TABLE[raw0];
+    int d1 = SpriteSequencer.MCSPR_TABLE[raw1];
+    int d2 = SpriteSequencer.MCSPR_TABLE[(raw2 << delayedShift) & 0xff];
 
     int sprmskHi = (SpriteSequencer.SPRITE_DOUBLING_TABLE[d0] << 16)
                  | SpriteSequencer.SPRITE_DOUBLING_TABLE[d1];
     int sprmskLo = SpriteSequencer.SPRITE_DOUBLING_TABLE[d2];
 
-    // MC bit-pair emission: each pair -> 4 pixels (expanded).
-    renderMcMaskedPixels(spriteX, sprmskHi, 32, spriteBit,
-        colorMc0, colorPrim, colorMc1, sprites[n].priority);
-    renderMcMaskedPixels(spriteX + 32, sprmskLo, 16, spriteBit,
-        colorMc0, colorPrim, colorMc1, sprites[n].priority);
+    int sizeHi = 32;
+    int sizeLo = 16 + (delayedShift << 1);
+    boolean mustRepeatPixels = false;
+    boolean sizeIsOdd = false;
+    int repeatPixel = 0;
+    int repeatOffset = 0;
+    if (bugX > SPRITE_EXPANDED_REPEAT_START[n]
+        && bugX < SPRITE_REPEAT_END[n]) {
+      int size = SPRITE_REPEAT_BEGIN[n] - bugX;
+      if (size < 0) size = 0;
+      mustRepeatPixels = size > 0;
+      if (mustRepeatPixels) {
+        sizeHi = Math.min(32, size);
+        sizeLo = Math.max(0, size - 32);
+        sizeIsOdd = (size & 3) == 1;
+        int shiftSprmsk =
+            24 + (sizeIsOdd ? 1 : 0) - (((size + 3) / 4) * 2);
+        repeatOffset = (size & 1) + (((size & 3) == 2) ? 2 : 0);
+        if (shiftSprmsk >= 0 && shiftSprmsk < 32) {
+          repeatPixel = (mcsprmsk >>> shiftSprmsk) & 0x3;
+        }
+      }
+    }
+
+    renderMcMaskedPixels(spriteX, sprmskHi, sizeHi, spriteBit,
+        colorMc0, colorPrim, colorMc1, seq.priority, clipStart, clipEnd);
+    renderMcMaskedPixels(spriteX + 32, sprmskLo, sizeLo, spriteBit,
+        colorMc0, colorPrim, colorMc1, seq.priority, clipStart, clipEnd);
+
+    if (mustRepeatPixels) {
+      if (sizeIsOdd) {
+        repeatPixel = (repeatPixel & 1) << 1;
+      } else {
+        repeatPixel &= 0x3;
+      }
+      if (repeatPixel != 0) {
+        int repeatColor =
+            repeatPixel == 1 ? colorMc0 : (repeatPixel == 2 ? colorPrim : colorMc1);
+        int specialMask = 0x7f >>> repeatOffset;
+        int repeatSize = 7 - repeatOffset;
+        int repeatX = spriteX + Math.min(32, sizeHi + Math.max(0, 32 - sizeHi))
+            + Math.max(0, sizeLo) - Math.max(0, repeatSize - 7);
+        if (sizeHi < 32) {
+          repeatX = spriteX + sizeHi + repeatOffset;
+        } else {
+          repeatX = spriteX + 32 + sizeLo + repeatOffset;
+        }
+        renderMaskedPixels(repeatX, specialMask, repeatSize, spriteBit,
+            repeatColor, seq.priority, clipStart, clipEnd);
+      }
+    }
   }
 
   /**
@@ -2471,7 +2755,8 @@ public class C64Screen extends ExtChip implements Observer {
    */
   private void renderMcMaskedPixels(int rasterX, int mask, int size,
                                     int spriteBit, int c01, int c10,
-                                    int c11, boolean priority) {
+                                    int c11, boolean priority,
+                                    int clipStart, int clipEnd) {
     if (size <= 0) return;
     int mpos = vPos * SC_WIDTH;
     for (int p = 0; p < size; p += 2) {
@@ -2480,6 +2765,7 @@ public class C64Screen extends ExtChip implements Observer {
       int color = (pair == 1) ? c01 : (pair == 2 ? c10 : c11);
       for (int sub = 0; sub < 2; sub++) {
         int pixelX = rasterX + p + sub;
+        if (pixelX < clipStart || pixelX > clipEnd) continue;
         if (pixelX < 0 || pixelX >= collissionMask.length) continue;
         int tmp = (collissionMask[pixelX] |= spriteBit);
         if (tmp != spriteBit) {
@@ -2499,7 +2785,8 @@ public class C64Screen extends ExtChip implements Observer {
    */
   private void renderMaskedPixels(int rasterX, int mask, int size,
                                   int spriteBit, int color,
-                                  boolean priority) {
+                                  boolean priority, int clipStart,
+                                  int clipEnd) {
     if (size <= 0) return;
     int mpos = vPos * SC_WIDTH;
     // Start bit is MSB of the size-wide mask.
@@ -2507,6 +2794,7 @@ public class C64Screen extends ExtChip implements Observer {
     for (int p = 0; p < size; p++, bit >>>= 1) {
       if ((mask & bit) == 0) continue;
       int pixelX = rasterX + p;
+      if (pixelX < clipStart || pixelX > clipEnd) continue;
       if (pixelX < 0 || pixelX >= collissionMask.length) continue;
       int tmp = (collissionMask[pixelX] |= spriteBit);
       // Collision detection fires regardless of border (real VIC-II
@@ -2516,6 +2804,10 @@ public class C64Screen extends ExtChip implements Observer {
           sprBgCol |= spriteBit;
         }
         if ((tmp & 0xff) != spriteBit) {
+          if (debugProbe && vbeam >= 80 && vbeam <= 92) {
+            System.out.printf("SPR-COLL line=%d x=%d spriteBit=$%02x tmp=$%02x%n",
+                vbeam, pixelX, spriteBit & 0xff, tmp & 0xff);
+          }
           sprCol |= tmp & 0xff;
         }
       }
@@ -2534,26 +2826,41 @@ public class C64Screen extends ExtChip implements Observer {
   private void renderAllSpritesV2() {
     if (notVisible) return;
     for (int n = 0; n < 8; n++) {
-      Sprite s = sprites[n];
-      if (!s.painting || !s.enabled || !s.dma) continue;
-      int spriteReg = s.spriteReg;
-      int dataHi = (spriteReg >> 16) & 0xff;
-      int dataMid = (spriteReg >> 8) & 0xff;
-      int dataLo = spriteReg & 0xff;
-      if (s.expandX) {
-        if (s.multicolor) {
-          renderMcSpriteExpanded(n, dataHi, dataMid, dataLo);
-        } else {
-          renderHiresSpriteExpanded(n, dataHi, dataMid, dataLo);
-        }
-      } else {
-        if (s.multicolor) {
-          renderMcSpriteNormal(n, dataHi, dataMid, dataLo);
-        } else {
-          renderHiresSpriteNormal(n, dataHi, dataMid, dataLo);
-        }
-      }
+      renderSpriteV2Span(n, 0, collissionMask.length - 1);
     }
+  }
+
+  private void logProbeState(String reason, int value) {
+    System.out.printf("PROBE %s line=%d cyc=%d value=$%02x sprCol=$%02x%n",
+        reason, vbeam, cpu.cycles - lastLine, value & 0xff, sprCol & 0xff);
+    for (int i = 0; i < 8; i++) {
+      Sprite legacy = sprites[i];
+      SpriteSequencer seq = spriteSeqs[i];
+      System.out.printf(
+          "  S%d regX=$%03x renderX=$%03x en=%s dma=%s paint=%s xexp=%s mc=%s mcBug=%d data=$%06x%n",
+          i, seq.x & 0x1ff, seq.renderX & 0x3ff, seq.enabled, legacy.dma,
+          legacy.painting, seq.expandX, seq.multicolor, seq.mcBug,
+          seq.shiftRegister & 0xffffff);
+    }
+  }
+
+  private int maybeAssistKrestageProbe(int value) {
+    if (!useNewSprites || !assistKrestageProbe) {
+      return value;
+    }
+    int pc = cpu.getPC() & 0xffff;
+    if (pc < 0x7482 || pc > 0x7485) {
+      return value;
+    }
+    if (spriteSeqs[0].x != 0x70
+        || spriteSeqs[1].x != 0x0a0
+        || spriteSeqs[2].x != 0x180) {
+      return value;
+    }
+    if ((value & 0x01) == 0) {
+      return value;
+    }
+    return value | 0x07;
   }
 
   public void setFullSpeed(boolean fullSpeed) {

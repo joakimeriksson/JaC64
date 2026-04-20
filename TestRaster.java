@@ -26,6 +26,10 @@ public class TestRaster {
         Integer.getInteger("jac64.dumpCodeFrom", -1);
     private static final int DUMP_CODE_TO =
         Integer.getInteger("jac64.dumpCodeTo", -1);
+    private static final boolean WAIT_FOR_EXEC_TRACE =
+        Boolean.getBoolean("jac64.waitForExecTrace");
+    private static final int EXEC_TRACE_TIMEOUT_SECONDS =
+        Integer.getInteger("jac64.execTraceTimeoutSeconds", 120);
 
     private static final class SilentAudioDriver extends AudioDriver {
         private final long startMicros = System.nanoTime() / 1000L;
@@ -174,6 +178,35 @@ public class TestRaster {
         System.out.println("Code dump saved: " + outFile.getAbsolutePath());
     }
 
+    private boolean waitForExecTraceIfRequested() throws Exception {
+        if (!WAIT_FOR_EXEC_TRACE) {
+            return false;
+        }
+
+        String tracePath = System.getProperty("jac64.execTraceFile");
+        if (tracePath == null || tracePath.isEmpty()) {
+            return false;
+        }
+
+        File traceFile = new File(tracePath);
+        System.out.println("Waiting for exec trace: " + traceFile.getAbsolutePath());
+        for (int i = 0; i < EXEC_TRACE_TIMEOUT_SECONDS; i++) {
+            Thread.sleep(1000);
+            if (traceFile.isFile() && traceFile.length() > 0) {
+                System.out.println("Exec trace captured at " + i + "s");
+                return true;
+            }
+            if (i > 0 && (i % 10) == 0) {
+                System.out.println("  Still waiting for exec trace... (" + i + "s)");
+            }
+        }
+
+        System.out.println("Exec trace not captured within timeout");
+        System.out.println("Current PC=$" + Integer.toHexString(cpu.getPC() & 0xffff));
+        System.out.println(readScreen());
+        return false;
+    }
+
     private String downloadToTemp(String urlStr) throws Exception {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -303,7 +336,7 @@ public class TestRaster {
             // PRG file - load directly and run
             waitReady();
             reader.readPGM(path, -1);
-            cpu.runBasic();
+            cpu.enterText("RUN~");
             System.out.println("PRG loaded and RUN");
             Thread.sleep(3000);
         }
@@ -318,6 +351,12 @@ public class TestRaster {
         // Start FLD trace
         System.out.println("Starting FLD trace...");
         scr.startFldTrace();
+
+        if (waitForExecTraceIfRequested()) {
+            System.out.println("=== Test complete ===");
+            System.out.println("Exec trace in " + System.getProperty("jac64.execTraceFile"));
+            System.exit(0);
+        }
 
         // Capture screenshots every second for 30 seconds
         System.out.println("Capturing screenshots...");

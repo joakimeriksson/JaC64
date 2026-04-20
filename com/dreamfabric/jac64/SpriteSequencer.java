@@ -39,6 +39,7 @@ public final class SpriteSequencer {
 
   // Register state (updated by C64Screen on CPU writes / raster-change queue drain).
   public int x;                  // 0..511 (9 bits: lsb + msb)
+  public int renderX;            // screen-space X used by mask-based rendering
   public int y;
   public int color;              // 0..15
   public boolean enabled;        // $D015 bit
@@ -47,6 +48,8 @@ public final class SpriteSequencer {
   public boolean multicolor;     // $D01C bit
   public boolean priority;       // $D01B bit (sprite behind bg)
   public boolean dma;            // internally managed by VIC
+  public int xShift;             // VICE d01d_store x_shift
+  public int xShiftSum;          // accumulated x_shift_sum
 
   // Sprite data shift register (24 bits, high bit emits first).
   // Loaded by readSpriteData via C64Screen.loadSequencerData. VICE

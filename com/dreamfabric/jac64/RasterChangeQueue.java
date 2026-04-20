@@ -33,6 +33,10 @@ public final class RasterChangeQueue {
     return size;
   }
 
+  public int peekWhere() {
+    return size > 0 ? where[0] : Integer.MAX_VALUE;
+  }
+
   /**
    * Add a pending change to apply at raster_x = {@code where}. Inserts
    * in sorted order so drains happen in correct sequence.
