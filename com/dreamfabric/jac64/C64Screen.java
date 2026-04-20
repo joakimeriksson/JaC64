@@ -1421,8 +1421,10 @@ public class C64Screen extends ExtChip implements Observer {
             " d016=$" + Integer.toHexString(control2));
       }
 
-      // Clear the collission masks each line...
-      for (int i = 0, n = SC_WIDTH; i < n; i++) {
+      // Clear the collission masks each line. Array is SC_WIDTH+48
+      // to cover expanded sprites that span past the visible area —
+      // we must clear the full length so stale bits don't persist.
+      for (int i = 0, n = collissionMask.length; i < n; i++) {
         collissionMask[i] = 0;
       }
       break;
@@ -2233,11 +2235,13 @@ public class C64Screen extends ExtChip implements Observer {
   // -------------------------------------------------------------------
 
   private static final int[] SPRITE_EXPANDED_REPEAT_START = new int[8];
-  private static final int[] SPRITE_REPEAT_END = new int[8];
-  private static final int[] SPRITE_REPEAT_BEGIN = new int[8];
+  private static final int[] SPRITE_NORMAL_REPEAT_START   = new int[8];
+  private static final int[] SPRITE_REPEAT_END            = new int[8];
+  private static final int[] SPRITE_REPEAT_BEGIN          = new int[8];
   static {
     for (int n = 0; n < 8; n++) {
       SPRITE_EXPANDED_REPEAT_START[n] = 0x11a + 0x20 + n * 0x10;
+      SPRITE_NORMAL_REPEAT_START[n]   = 0x132 + 0x20 + n * 0x10;
       SPRITE_REPEAT_END[n]            = 0x157 + 0x20 + n * 0x10;
       SPRITE_REPEAT_BEGIN[n]          = SPRITE_REPEAT_END[n] - 0xc;
     }
@@ -2317,6 +2321,103 @@ public class C64Screen extends ExtChip implements Observer {
     }
 
     renderMaskedPixels(spriteX + 32, sprmsk2, size1, spriteBit, color, priority);
+  }
+
+  /**
+   * Port of draw_hires_sprite_normal from VICE (vicii-sprites.c:657).
+   * Non-expanded 24-pixel hires sprite. Data is used directly (no
+   * doubling).
+   */
+  private void renderHiresSpriteNormal(int n, int dataHi, int dataMid,
+                                       int dataLo) {
+    SpriteSequencer seq = spriteSeqs[n];
+    int spriteX = seq.x + SCREEN_LEFT_BORDER_WIDTH;
+    int spriteBit = 1 << n;
+    int color = sprites[n].color[2];
+
+    int sprmsk = ((dataHi & 0xff) << 16)
+               | ((dataMid & 0xff) << 8)
+               | (dataLo & 0xff);
+
+    int size = 24;
+    boolean mustRepeatPixels = false;
+
+    if (spriteX > SPRITE_NORMAL_REPEAT_START[n]
+        && spriteX < SPRITE_REPEAT_END[n]) {
+      size = SPRITE_REPEAT_BEGIN[n] - spriteX;
+      mustRepeatPixels = size > 0;
+      if (mustRepeatPixels) {
+        sprmsk = sprmsk >>> (24 - size);
+        int repeatPixel = sprmsk & 1;
+        for (int i = 0; i < 7; i++) {
+          sprmsk = (sprmsk << 1) | repeatPixel;
+        }
+        size += 7;
+      }
+    }
+
+    renderMaskedPixels(spriteX, sprmsk, size, spriteBit, color,
+        sprites[n].priority);
+  }
+
+  /**
+   * Port of draw_mc_sprite_normal from VICE. Non-expanded 24-pixel
+   * multicolor sprite (12 MC pixel-pairs, each 2 pixels wide).
+   */
+  private void renderMcSpriteNormal(int n, int dataHi, int dataMid,
+                                    int dataLo) {
+    SpriteSequencer seq = spriteSeqs[n];
+    int spriteX = seq.x + SCREEN_LEFT_BORDER_WIDTH;
+    int spriteBit = 1 << n;
+    int colorMc0 = cbmcolor[sprMC0];
+    int colorMc1 = cbmcolor[sprMC1];
+    int colorPrim = sprites[n].color[2];
+
+    int d0 = SpriteSequencer.MCSPR_TABLE[dataHi & 0xff];
+    int d1 = SpriteSequencer.MCSPR_TABLE[dataMid & 0xff];
+    int d2 = SpriteSequencer.MCSPR_TABLE[dataLo & 0xff];
+
+    int delayedShift = (seq.mcBug >> 1) & 1;
+    if (delayedShift != 0) {
+      int shifted0 = ((dataHi << 1) | (dataMid >> 7)) & 0xff;
+      int shifted1 = (dataMid << 1) & 0xff;
+      d0 = SpriteSequencer.MCSPR_TABLE[shifted0];
+      d1 = SpriteSequencer.MCSPR_TABLE[shifted1];
+      spriteX += 1;  // non-expanded: shift is 1 pixel
+    }
+
+    // Assemble 24-bit mask (no doubling).
+    int sprmsk = ((d0 & 0xff) << 16) | ((d1 & 0xff) << 8) | (d2 & 0xff);
+    renderMcMaskedPixelsNormal(spriteX, sprmsk, 24, spriteBit,
+        colorMc0, colorPrim, colorMc1, sprites[n].priority);
+  }
+
+  /**
+   * Render MC pixels in non-expanded mode: each bit-pair covers 2
+   * output pixels.
+   */
+  private void renderMcMaskedPixelsNormal(int rasterX, int mask, int size,
+                                          int spriteBit, int c01, int c10,
+                                          int c11, boolean priority) {
+    if (size <= 0) return;
+    int mpos = vPos * SC_WIDTH;
+    for (int p = 0; p < size; p += 2) {
+      int pair = (mask >>> (size - 2 - p)) & 0x3;
+      if (pair == 0) continue;
+      int color = (pair == 1) ? c01 : (pair == 2 ? c10 : c11);
+      for (int sub = 0; sub < 2; sub++) {
+        int pixelX = rasterX + p + sub;
+        if (pixelX < 0 || pixelX >= collissionMask.length) continue;
+        int tmp = (collissionMask[pixelX] |= spriteBit);
+        if (tmp != spriteBit) {
+          if ((tmp & 0x100) != 0) sprBgCol |= spriteBit;
+          if ((tmp & 0xff) != spriteBit) sprCol |= tmp & 0xff;
+        }
+        if (borderState == 0 && pixelX < SC_WIDTH) {
+          if (!priority || (tmp & 0x100) == 0) mem[mpos + pixelX] = color;
+        }
+      }
+    }
   }
 
   /**
@@ -2445,8 +2546,13 @@ public class C64Screen extends ExtChip implements Observer {
         } else {
           renderHiresSpriteExpanded(n, dataHi, dataMid, dataLo);
         }
+      } else {
+        if (s.multicolor) {
+          renderMcSpriteNormal(n, dataHi, dataMid, dataLo);
+        } else {
+          renderHiresSpriteNormal(n, dataHi, dataMid, dataLo);
+        }
       }
-      // Step 2 pending: non-expanded variants.
     }
   }
 
