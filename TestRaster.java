@@ -10,8 +10,10 @@ import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.*;
+import java.nio.charset.StandardCharsets;
 import javax.imageio.ImageIO;
 import javax.net.ssl.*;
+import javax.swing.JFrame;
 
 import com.dreamfabric.jac64.*;
 import com.dreamfabric.c64utils.*;
@@ -26,71 +28,17 @@ public class TestRaster {
         Integer.getInteger("jac64.dumpCodeFrom", -1);
     private static final int DUMP_CODE_TO =
         Integer.getInteger("jac64.dumpCodeTo", -1);
+    private static final boolean DIRECT_SYS_LAUNCH =
+        Boolean.getBoolean("jac64.directSysLaunch");
     private static final boolean WAIT_FOR_EXEC_TRACE =
         Boolean.getBoolean("jac64.waitForExecTrace");
     private static final int EXEC_TRACE_TIMEOUT_SECONDS =
         Integer.getInteger("jac64.execTraceTimeoutSeconds", 120);
 
-    private static final class SilentAudioDriver extends AudioDriver {
-        private final long startMicros = System.nanoTime() / 1000L;
-        private boolean fullSpeed;
-        private int masterVolume;
-
-        @Override
-        public void init(int sampleRate, int bufferSize) {
-        }
-
-        @Override
-        public void write(byte[] buffer) {
-        }
-
-        @Override
-        public long getMicros() {
-            return (System.nanoTime() / 1000L) - startMicros;
-        }
-
-        @Override
-        public boolean hasSound() {
-            return false;
-        }
-
-        @Override
-        public int available() {
-            return Integer.MAX_VALUE;
-        }
-
-        @Override
-        public int getMasterVolume() {
-            return masterVolume;
-        }
-
-        @Override
-        public void setMasterVolume(int v) {
-            masterVolume = v;
-        }
-
-        @Override
-        public void shutdown() {
-        }
-
-        @Override
-        public void setSoundOn(boolean on) {
-        }
-
-        @Override
-        public void setFullSpeed(boolean full) {
-            fullSpeed = full;
-        }
-
-        @Override
-        public boolean fullSpeed() {
-            return fullSpeed;
-        }
-    }
-
     private CPU cpu;
     private C64Screen scr;
     private C64Reader reader;
+    private JFrame window;
 
     private void initEmulator() {
         SIDMixer.DL_BUFFER_SIZE = 16384;
@@ -99,11 +47,8 @@ public class TestRaster {
         scr = new C64Screen(monitor, true);
         cpu.init(scr);
 
-        // Use a silent driver so the harness can run headless on machines
-        // without a working Java Sound output line.
-        AudioDriver audioDriver = new SilentAudioDriver();
-        scr.init(cpu, audioDriver);
-        audioDriver.setMasterVolume(0); // silent but still running
+        C64Canvas canvas = C64Canvas.setupDesktop(scr, cpu, true);
+        scr.setSoundOn(false);
 
         reader = new C64Reader();
         reader.setCPU(cpu);
@@ -111,11 +56,25 @@ public class TestRaster {
 
         scr.setKeyboardEmulation(false);
 
+        window = new JFrame("JaC64 Raster Test");
+        window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        window.setBackground(Color.black);
+        window.setLayout(new BorderLayout());
+        window.getContentPane().add(canvas, BorderLayout.CENTER);
+        window.pack();
+        window.setSize(386 * 2 + 10, 284 * 2 + 70);
+        window.setVisible(true);
+
+        canvas.setFocusable(true);
+        canvas.requestFocusInWindow();
+
         if (Boolean.getBoolean("jac64.warp")) {
             scr.setFullSpeed(true);
         }
 
-        new Thread(() -> cpu.start(), "C64-CPU").start();
+        Thread cpuThread = new Thread(() -> cpu.start(), "C64-CPU");
+        cpuThread.setDaemon(true);
+        cpuThread.start();
     }
 
     private void waitReady() {
@@ -207,6 +166,102 @@ public class TestRaster {
         return false;
     }
 
+    private int detectBasicSysAddress() {
+        int[] memory = cpu.getMemory();
+        int basicStart = 0x0801;
+        int nextLine = (memory[basicStart] & 0xff) | ((memory[basicStart + 1] & 0xff) << 8);
+        if (nextLine <= basicStart + 4) {
+            System.out.println("No BASIC stub at $0801, nextLine=$" + Integer.toHexString(nextLine));
+            return -1;
+        }
+
+        for (int pos = basicStart + 4; pos < nextLine; pos++) {
+            if ((memory[pos] & 0xff) != 0x9e) {
+                continue;
+            }
+
+            StringBuilder digits = new StringBuilder();
+            for (int i = pos + 1; i < nextLine; i++) {
+                int ch = memory[i] & 0xff;
+                if (ch == 0) {
+                    break;
+                }
+                if (ch >= '0' && ch <= '9') {
+                    digits.append((char) ch);
+                    continue;
+                }
+                if (ch == ' ') {
+                    continue;
+                }
+                break;
+            }
+            if (digits.length() == 0) {
+                System.out.println("SYS token found but no digits at $"
+                    + Integer.toHexString(pos));
+                return -1;
+            }
+            try {
+                return Integer.parseInt(digits.toString());
+            } catch (NumberFormatException e) {
+                System.out.println("Failed to parse SYS digits: " + digits);
+                return -1;
+            }
+        }
+        System.out.println(String.format(
+            "No SYS token at $0801 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+            memory[basicStart] & 0xff, memory[basicStart + 1] & 0xff,
+            memory[basicStart + 2] & 0xff, memory[basicStart + 3] & 0xff,
+            memory[basicStart + 4] & 0xff, memory[basicStart + 5] & 0xff,
+            memory[basicStart + 6] & 0xff, memory[basicStart + 7] & 0xff,
+            memory[basicStart + 8] & 0xff, memory[basicStart + 9] & 0xff,
+            memory[basicStart + 10] & 0xff, memory[basicStart + 11] & 0xff));
+        return -1;
+    }
+
+    private void waitForBasicIdle(int timeoutSeconds) throws Exception {
+        for (int i = 0; i < timeoutSeconds * 10; i++) {
+            int pc = cpu.getPC() & 0xffff;
+            if ((pc >= 0xfda3 && pc <= 0xfdc0) || findScreenText("READY.") >= 0) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+    }
+
+    private int findScreenText(String text) {
+        int[] memory = cpu.getMemory();
+        int screenBase = 0x0400;
+        int len = text.length();
+        for (int row = 0; row < 25; row++) {
+            for (int col = 0; col <= 40 - len; col++) {
+                boolean match = true;
+                for (int i = 0; i < len; i++) {
+                    int ch = memory[screenBase + row * 40 + col + i] & 0xff;
+                    if (petsciiToAscii(ch) != text.charAt(i)) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match) {
+                    return row * 40 + col;
+                }
+            }
+        }
+        return -1;
+    }
+
+    private void waitForScreenText(String text, int timeoutSeconds) throws Exception {
+        for (int i = 0; i < timeoutSeconds * 10; i++) {
+            if (findScreenText(text) >= 0) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        System.out.println(text + " not reached within timeout");
+        System.out.println("Current PC=$" + Integer.toHexString(cpu.getPC() & 0xffff));
+        System.out.println(readScreen());
+    }
+
     private String downloadToTemp(String urlStr) throws Exception {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
@@ -288,6 +343,7 @@ public class TestRaster {
         System.out.println("=== JaC64 Raster Test ===");
         initEmulator();
         waitReady();
+        waitForScreenText("READY.", 30);
 
         // Download/resolve source
         String path;
@@ -308,7 +364,7 @@ public class TestRaster {
                 Thread.sleep(1000);
                 if (scr.ready()) {
                     String screen = readScreen();
-                    if (screen.contains("READY.") && !screen.contains("LOADING")) {
+                    if (findScreenText("READY.") >= 0 && !screen.contains("LOADING")) {
                         System.out.println("Load complete at " + i + "s");
                         break;
                     }
@@ -334,10 +390,23 @@ public class TestRaster {
             }
         } else {
             // PRG file - load directly and run
-            waitReady();
             reader.readPGM(path, -1);
-            cpu.enterText("RUN~");
-            System.out.println("PRG loaded and RUN");
+            if (Boolean.getBoolean("jac64.sysJump")) {
+                int sysAddress = detectBasicSysAddress();
+                if (sysAddress >= 0) {
+                    waitForBasicIdle(10);
+                    cpu.jumpToSubroutine(sysAddress);
+                    System.out.println("PRG loaded and jumped to SYS " + sysAddress);
+                } else {
+                    waitForBasicIdle(10);
+                    cpu.enterText("RUN~");
+                    System.out.println("PRG loaded and RUN");
+                }
+            } else {
+                waitForBasicIdle(10);
+                cpu.enterText("RUN~");
+                System.out.println("PRG loaded and RUN");
+            }
             Thread.sleep(3000);
         }
 

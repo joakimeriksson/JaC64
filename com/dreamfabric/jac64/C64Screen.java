@@ -838,8 +838,8 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd01e:
       val = sprCol;
       val = maybeAssistKrestageProbe(val);
-      if (debugProbe && cpu.getPC() >= 0x7482 && cpu.getPC() <= 0x7485) {
-        logProbeState("D01E read", val);
+      if (debugProbe) {
+        logProbeState("D01E read @ PC=$" + Integer.toHexString(cpu.getPC() & 0xffff), val);
       }
       if (SPRITEDEBUG)
         monitor.info("Reading sprite collission: " +
@@ -2131,6 +2131,13 @@ public class C64Screen extends ExtChip implements Observer {
 
     while (cursor <= tailEnd) {
       int nextChangeRaster = spriteChangeQueue.peekWhere();
+      // Empty queue (peekWhere returns Integer.MAX_VALUE) — render to
+      // tail end and break. Guard against integer overflow in
+      // rasterToScreenX when the queue is empty.
+      if (nextChangeRaster == Integer.MAX_VALUE) {
+        renderSpritesV2Span(cursor, tailEnd);
+        break;
+      }
       int nextChangeScreen = rasterToScreenX(nextChangeRaster);
       int renderEnd = tailEnd;
 
