@@ -247,8 +247,11 @@ public class C64Screen extends ExtChip implements Observer {
   // (stage 4). Legacy path remains the default until stage 7.
   private final boolean useNewSprites =
       Boolean.getBoolean("jac64.newSprites");
+  // Probe assist is now disabled by default — the writeRasterX +8
+  // fix produces the correct $D01E naturally. Enable via
+  // -Djac64.enableProbeAssist=true as a safety valve only.
   private final boolean assistKrestageProbe =
-      !Boolean.getBoolean("jac64.disableProbeAssist");
+      Boolean.getBoolean("jac64.enableProbeAssist");
   private final SpriteSequencer[] spriteSeqs = new SpriteSequencer[8];
   {
     for (int i = 0; i < 8; i++) spriteSeqs[i] = new SpriteSequencer(i);
@@ -2219,8 +2222,19 @@ public class C64Screen extends ExtChip implements Observer {
    * at the correct pixel position, matching VICE's `VICII_RASTER_X`
    * sampling of `maincpu_clk`.
    */
+  // VICE samples raster_x at the cycle AFTER the write completes
+  // (one CPU cycle beyond the CPU's clk at store time). JaC64's CPU
+  // does cycles++ inside writeByte before invoking the write handler,
+  // so currentRasterX reflects the write cycle itself — one VIC cycle
+  // (8 pixels) earlier than VICE. Add 8 to align with VICE's sampling.
+  // This offset was determined empirically: it makes Krestage 3's
+  // probe pass naturally (sprite 1 MC-bug fires, collision with
+  // sprite 5 at its extended edge produces bit 1 of $D01E).
+  private static final int WRITE_RASTER_X_OFFSET =
+      Integer.getInteger("jac64.writeRasterXOffset", 8);
+
   private int writeRasterX() {
-    return currentRasterX - 8;
+    return currentRasterX + WRITE_RASTER_X_OFFSET;
   }
 
   private void queueSpriteXLsb(int idx, int data) {
