@@ -45,6 +45,7 @@ public class CPU extends MOS6510Core {
   // The state of the program (runs if running = true)
   public boolean running = true;
   public boolean pause = false;
+  private volatile boolean pausedState = false;
 
   private static final long CYCLES_PER_DEBUG = 10000000;
   public static final boolean DEBUG = false;
@@ -308,18 +309,23 @@ public class CPU extends MOS6510Core {
   // Takes the thread and loops!!!
   public void start() {
     run(0xfce2); // Power UP reset routine!
-    if (pause) {
-      while (pause) {
-        System.out.println("Entering pause mode...");
-        synchronized(this) {
+    while (pause || running) {
+      pausedState = true;
+      System.out.println("Entering pause mode...");
+      synchronized(this) {
+        while (pause) {
           try {
             wait();
           } catch (Exception e) {
           }
         }
-        System.out.println("Exiting pause mode...");
-        loop();
       }
+      if (!running) {
+        break;
+      }
+      pausedState = false;
+      System.out.println("Exiting pause mode...");
+      loop();
     }
   }
 
@@ -333,6 +339,23 @@ public class CPU extends MOS6510Core {
       running = true;
     }
     notify();
+  }
+
+  public boolean pauseAndWait(long timeoutMs) {
+    setPause(true);
+    long deadline = System.currentTimeMillis() + timeoutMs;
+    while (!pausedState) {
+      if (System.currentTimeMillis() >= deadline) {
+        return false;
+      }
+      try {
+        Thread.sleep(1);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return false;
+      }
+    }
+    return true;
   }
 
   public synchronized void stop() {
@@ -354,6 +377,63 @@ public class CPU extends MOS6510Core {
   public void setPC(int startAdress) {
     // The processor flags
     pc = startAdress;
+  }
+
+  private void setStatusFromByte(int status) {
+    carry = (status & 0x01) != 0;
+    zero = (status & 0x02) != 0;
+    disableInterupt = (status & 0x04) != 0;
+    decimal = (status & 0x08) != 0;
+    brk = (status & 0x10) != 0;
+    overflow = (status & 0x40) != 0;
+    sign = (status & 0x80) != 0;
+  }
+
+  public boolean callSubroutine(int address, long timeoutMs) {
+    if (!pausedState && !pauseAndWait(timeoutMs)) {
+      return false;
+    }
+
+    int returnAddress = pc & 0xffff;
+    int jsrReturn = (returnAddress - 1) & 0xffff;
+
+    memory[(s & 0xff) | 0x100] = (jsrReturn >> 8) & 0xff;
+    s = (s - 1) & 0xff;
+    memory[(s & 0xff) | 0x100] = jsrReturn & 0xff;
+    s = (s - 1) & 0xff;
+
+    // BASIC SYS uses these locations to seed the machine-code registers.
+    acc = memory[0x030c] & 0xff;
+    x = memory[0x030d] & 0xff;
+    y = memory[0x030e] & 0xff;
+    setStatusFromByte(memory[0x030f] & 0xff);
+    pc = address & 0xffff;
+
+    setPause(false);
+    return true;
+  }
+
+  public void jumpToSubroutine(int address) {
+    int stubAddress = 0x033c;
+    int basicSysReturn = 0xe147;
+
+    // BASIC SYS uses these locations to seed the machine-code registers.
+    acc = memory[0x030c] & 0xff;
+    x = memory[0x030d] & 0xff;
+    y = memory[0x030e] & 0xff;
+    setStatusFromByte(memory[0x030f] & 0xff);
+
+    // Match the observed VICE/BASIC SYS entry frame closely enough for
+    // bootstrap code that keys off TSX/SP on entry.
+    s = 0xf8;
+
+    memory[stubAddress] = 0x20;
+    memory[stubAddress + 1] = address & 0xff;
+    memory[stubAddress + 2] = (address >> 8) & 0xff;
+    memory[stubAddress + 3] = 0x4c;
+    memory[stubAddress + 4] = basicSysReturn & 0xff;
+    memory[stubAddress + 5] = (basicSysReturn >> 8) & 0xff;
+    jump(stubAddress);
   }
 
   public String getName() {
