@@ -27,7 +27,7 @@ public class SIDPlayerEngine {
     // Components
     private CPU cpu;
     private C64Screen screen;
-    private AudioDriverSE audioDriver;
+    private AudioDriver audioDriver;
     private PSIDFile psid;
 
     // Playback state
@@ -56,12 +56,14 @@ public class SIDPlayerEngine {
      * Initialize the engine using the full C64Screen chip emulation.
      * This gives us real CIA timers, VIC-II, and proper IRQ handling,
      * so both PSID and RSID tunes work correctly.
+     *
+     * @param audioDriver platform-specific audio output
+     * @param loader platform-specific resource loader (for ROMs)
      */
-    public void init() {
-        audioDriver = new AudioDriverSE();
+    public void init(AudioDriver audioDriver, Loader loader) {
+        this.audioDriver = audioDriver;
 
         DefaultIMon monitor = new DefaultIMon();
-        SELoader loader = new SELoader();
         cpu = new CPU(monitor, null, loader);
         screen = new C64Screen(monitor, false);
         cpu.init(screen);

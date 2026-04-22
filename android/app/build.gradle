@@ -45,6 +45,11 @@ android {
                 exclude 'com/dreamfabric/jac64/AudioDriverSE.java'
                 exclude 'com/dreamfabric/jac64/SELoader.java'
                 exclude 'android/**'
+                // JSIDPlay: include engine/data classes, exclude Swing UI
+                exclude 'com/dreamfabric/jsidplay/JSIDPlay.java'
+                exclude 'com/dreamfabric/jsidplay/SIDPlayerFrame.java'
+                exclude 'com/dreamfabric/jsidplay/SIDVisualizationPanel.java'
+                exclude 'com/dreamfabric/jsidplay/HVSCBrowser.java'
             }
             assets.srcDirs = ['src/main/assets']
         }
