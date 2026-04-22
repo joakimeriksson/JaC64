@@ -549,6 +549,9 @@ public class C64Screen extends ExtChip implements Observer {
     }
   }
 
+  private static final boolean TRACE_VIC_IRQ =
+      Boolean.getBoolean("jac64.traceVicIrq");
+
   private void triggerRasterIrq(long irqClock) {
     irqFlags |= 0x1;
     if ((irqMask & 1) != 0) {
@@ -556,6 +559,17 @@ public class C64Screen extends ExtChip implements Observer {
       irqTriggered = true;
       setIRQ(VIC_IRQ);
       lastIRQ = irqClock;
+      if (TRACE_VIC_IRQ) {
+        System.err.println("VIC-RASTER-IRQ raster=" + raster
+            + " clk=" + irqClock + " vbeam=" + vbeam
+            + " mask=$" + Integer.toHexString(irqMask)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
+    } else if (TRACE_VIC_IRQ) {
+      System.err.println("VIC-RASTER-MATCH(no-irq) raster=" + raster
+          + " clk=" + irqClock + " vbeam=" + vbeam
+          + " mask=$" + Integer.toHexString(irqMask)
+          + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
     }
     if (rasterIrqClock != RASTER_IRQ_DISABLED && rasterIrqClock <= irqClock) {
       advanceRasterIrqClock();
@@ -586,7 +600,7 @@ public class C64Screen extends ExtChip implements Observer {
   private void handleBadLineStart(int vicCycle, boolean wasVisible) {
     setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-START");
 
-    if (vicCycle <= 13) {
+    if (vicCycle <= 13 && !Boolean.getBoolean("jac64.fliRcFix")) {
       rc = 0;
     }
 
@@ -1052,6 +1066,13 @@ public class C64Screen extends ExtChip implements Observer {
             " y=$" + Integer.toHexString(cpu.y & 0xff) +
             " dispEn=" + displayEnabled);
       }
+      if (Boolean.getBoolean("jac64.traceFli")) {
+        System.err.println("D011=$" + Integer.toHexString(data)
+            + " vbeam=" + vbeam + " cyc=" + vicCycle
+            + " vScroll=" + vScroll + " badLine=" + badLine
+            + " bmap=" + ((data & 0x20) != 0)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
 
       extended = (data & 0x40) != 0;
       blankRow = (data & 0x08) == 0;
@@ -1113,6 +1134,13 @@ public class C64Screen extends ExtChip implements Observer {
       videoMode = (extended ? 0x02 : 0)
       | (multiCol ? 0x01 : 0) | (((control1 & 0x20) != 0)
           ? 0x04 : 0x00);
+      if (Boolean.getBoolean("jac64.traceFli")) {
+        int vicCycleNow = (int) (cpu.cycles - lastLine);
+        System.err.println("D016=$" + Integer.toHexString(data)
+            + " vbeam=" + vbeam + " cyc=" + vicCycleNow
+            + " mc=" + multiCol + " videoMode=" + videoMode
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
       break;
 
     case 0xd017:
@@ -1123,10 +1151,22 @@ public class C64Screen extends ExtChip implements Observer {
       queueSpriteYExpand(data);
       break;
 
-    case 0xd018:
+    case 0xd018: {
       vicMem = data;
       setVideoMem();
+      if (Boolean.getBoolean("jac64.traceFli")) {
+        int vicCycleNow = (int) (cpu.cycles - lastLine);
+        System.err.println("D018=$" + Integer.toHexString(data)
+            + " vbeam=" + vbeam + " cyc=" + vicCycleNow
+            + " videoMatrix=$" + Integer.toHexString(videoMatrix)
+            + " vicBase=$" + Integer.toHexString(vicBase)
+            + " D011=$" + Integer.toHexString(control1)
+            + " D016=$" + Integer.toHexString(control2)
+            + " mc=" + multiCol
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
       break;
+    }
 
     case 0xd019 : {
       if ((data & 0x80) != 0) data = 0xff;
@@ -1154,6 +1194,12 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd01a:
       irqMask = data;
       updateVicIrqLine();
+      if (TRACE_VIC_IRQ) {
+        System.err.println("D01A=$" + Integer.toHexString(data)
+            + " clk=" + cpu.cycles + " vbeam=" + vbeam
+            + " raster=" + raster + " flags=$" + Integer.toHexString(irqFlags)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
 
       if (IRQDEBUG) {
         monitor.info("Changing IRQ mask to: " +
@@ -1569,7 +1615,9 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C13");
         if (BAD_LINE_DEBUG) System.out.println("#### RC = 0 (" + rc + ") at "
             + vbeam + " vc: " + vc);
-        rc = 0;
+        if (!Boolean.getBoolean("jac64.fliRcFix")) {
+          rc = 0;
+        }
       }
       break;
     case 14:
@@ -1902,6 +1950,23 @@ public class C64Screen extends ExtChip implements Observer {
 
       data = memory[position + rc];
 
+      if (false && Boolean.getBoolean("jac64.traceBitmap") && vmli == 20
+          && vbeam >= 120 && vbeam <= 125) {
+        System.err.println("TEXT vbeam=" + vbeam + " vmli=" + vmli
+            + " vc=" + vc + " rc=" + rc
+            + " charCode=$" + Integer.toHexString(vicCharCache[vmli] & 0xff)
+            + " charMemIdx=$" + Integer.toHexString(charMemoryIndex)
+            + " pos=$" + Integer.toHexString(position + rc)
+            + " data=$" + Integer.toHexString(data & 0xff)
+            + " pen=$" + Integer.toHexString(penColor)
+            + " bgcol=$" + Integer.toHexString(bgcol)
+            + " videoMatrix=$" + Integer.toHexString(videoMatrix)
+            + " vicBase=$" + Integer.toHexString(vicBase)
+            + " vicMem=$" + Integer.toHexString(vicMem)
+            + " control1=$" + Integer.toHexString(control1)
+            + " mc=" + multiCol + " ext=" + extended);
+      }
+
       if (multiCol && pcol > 7) {
         multiColor[3] = cbmcolor[pcol & 7];
         for (int pix = 0; pix < 8; pix += 2) {
@@ -1952,6 +2017,20 @@ public class C64Screen extends ExtChip implements Observer {
       bgcol = cbmcolor[vmliData & 0x0f];
 
       data = memory[position];
+
+      if (Boolean.getBoolean("jac64.traceBitmap") && vmli == 0
+          && vbeam >= 80 && vbeam <= 82) {
+        System.err.println("BITMAP vbeam=" + vbeam + " vmli=" + vmli
+            + " vc=" + vc + " rc=" + rc
+            + " pos=$" + Integer.toHexString(position)
+            + " data=$" + Integer.toHexString(data & 0xff)
+            + " vmliData=$" + Integer.toHexString(vmliData & 0xff)
+            + " pen=$" + Integer.toHexString(penColor)
+            + " bg=$" + Integer.toHexString(bgcol)
+            + " videoMatrix=$" + Integer.toHexString(videoMatrix)
+            + " vicBase=$" + Integer.toHexString(vicBase)
+            + " mc=" + multiCol);
+      }
 
       if (multiCol) {
         multiColor[1] =

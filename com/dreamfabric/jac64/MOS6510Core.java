@@ -108,7 +108,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
       String path = System.getProperty("jac64.irqTraceFile",
           "/tmp/jac64_irq_line.log");
       try {
-        irqTraceOut = new PrintStream(path);
+        irqTraceOut = new PrintStream(new java.io.FileOutputStream(path), true);
       } catch (Exception e) {
         irqTraceOut = System.out;
       }
@@ -178,7 +178,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected long nr_ins = 0;
   protected long nr_irq = 0;
   protected long start = System.currentTimeMillis();
-  protected int pc;
+  protected volatile int pc;
   protected int interruptInExec = 0;
   protected boolean disableInterupt = false;
   protected int irqEnableDelayOps = 0;
