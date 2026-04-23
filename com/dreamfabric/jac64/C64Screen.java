@@ -2280,14 +2280,17 @@ public class C64Screen extends ExtChip implements Observer {
     int dataHi = (data24 >> 16) & 0xff;
     int dataMid = (data24 >> 8) & 0xff;
     int dataLo = data24 & 0xff;
-    if (Boolean.getBoolean("jac64.traceSprData")
-        && clipStart == xPos - 8 && data24 != 0 && data24 != 0xffffff) {
-      System.err.println("SPR" + n + " vbeam=" + vbeam + " renderX=$"
+    // Fire only for the span where the sprite would first render its
+    // leftmost visible pixel (renderX within this span) and only when the
+    // shift register has real data. That gives us the actual first-display-line.
+    if (Boolean.getBoolean("jac64.traceSprFirstPaint")
+        && data24 != 0 && data24 != 0xffffff
+        && vbeam >= 248 && vbeam <= 256) {
+      System.err.println("SPR" + n + " vbeam=" + vbeam + " clip=" + clipStart
+          + ".." + clipEnd + " renderX=$"
           + Integer.toHexString(seq.renderX & 0x3ff)
-          + " expY=" + seq.expandY + " expX=" + seq.expandX
-          + " mc=" + seq.multicolor + " color=$"
-          + Integer.toHexString(sprites[n].color[2] & 0xf)
-          + " data=$" + String.format("%06x", data24));
+          + " data=$" + String.format("%06x", data24)
+          + " paint=" + sprites[n].painting + " dma=" + sprites[n].dma);
     }
 
     if (seq.expandX) {
@@ -3111,14 +3114,14 @@ public class C64Screen extends ExtChip implements Observer {
       int b0 = memory[pointer + nextByte] & 0xff;
       int b1 = memory[pointer + nextByte + 1] & 0xff;
       int b2 = memory[pointer + nextByte + 2] & 0xff;
-      if (Boolean.getBoolean("jac64.traceSprFetch") && spriteNo == 3
-          && vbeam >= 60 && vbeam <= 100) {
-        System.err.println("SPR3-FETCH vbeam=" + vbeam + " ptr=$"
-            + Integer.toHexString(pointer) + " nb=" + nextByte
-            + " bytes=$" + String.format("%02x%02x%02x", b0, b1, b2)
+      if (Boolean.getBoolean("jac64.traceSprFetch")
+          && vbeam >= 248 && vbeam <= 256) {
+        System.err.println("SPR" + spriteNo + "-FETCH vbeam=" + vbeam
+            + " cyc=" + (cpu.cycles - lastLine)
+            + " ptr=$" + Integer.toHexString(pointer)
             + " ptrByte=$" + Integer.toHexString(memory[spr0BlockSel + spriteNo] & 0xff)
-            + " spr0Sel=$" + Integer.toHexString(spr0BlockSel)
-            + " vicBank=$" + Integer.toHexString(vicBank));
+            + " nb=" + nextByte
+            + " bytes=$" + String.format("%02x%02x%02x", b0, b1, b2));
       }
       nextByte += 3;
       spriteReg = (b0 << 16) | (b1 << 8) | b2;
