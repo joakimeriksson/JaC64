@@ -200,7 +200,11 @@ public class C64Screen extends ExtChip implements Observer {
   // JaC64's legacy path also renders sprite X=0 at screen pixel 8.
   private static final int SPRITE_RENDER_X_OFFSET =
       SCREEN_LEFT_BORDER_WIDTH - 24;
-  private static final int SPRITE_WRAP_X = 0x200;
+  // PAL sprite X wraps at 504 (0x1F8), per VICE
+  // vicii-timing.c VICII_PAL_SPRITE_WRAP_X. Earlier value 0x200 (512)
+  // let sprites at X=504..511 escape the wrap — visible in Krestage 3
+  // banner as a ghost letter bleeding behind the K on the left.
+  private static final int SPRITE_WRAP_X = 0x1F8;
 
   private int currentRasterX = 0;
 
