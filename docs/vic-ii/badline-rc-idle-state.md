@@ -8,8 +8,10 @@
 > rendering code.
 > Source of truth: `../vice-emu/vice/src/viciisc/vicii-cycle.c`.
 >
-> Status (2026-04-22): authoritative VICE logic documented; JaC64 deviations
-> noted; open questions flagged.
+> Status (2026-04-23): authoritative VICE logic documented; JaC64 now
+> models idle→display transition correctly; Krestage 3 intro clean,
+> beast scene renders detailed image; flag `-Djac64.fliRcFix` no longer
+> needed.
 
 ## The three variables that matter
 
@@ -150,67 +152,74 @@ pattern is constant. That is exactly what
 [Christian Bauer's VIC article](https://www.zimmers.net/cbmpics/cbm/c64/vic-ii.txt)
 §3.14 describes.
 
-## What JaC64 does (and does not)
+## What JaC64 does (current, post-fix)
 
-At the time of writing JaC64 does not model `idle_state` explicitly. It
-models a similar signal called `gfxVisible`:
+JaC64 models `gfxVisible` as its analogue of VICE's `idle_state`. The
+three places it is updated:
 
 ```java
-// C64Screen.java:1780
+// C64Screen.java:1794 — cycle 57 (VICE's cycle 58 "update_rc")
 if (rc == 7) {
     vcBase = vc;
-    gfxVisible = false;   // analogue of idle_state = 1
+    gfxVisible = false;    // enter idle
 }
-
-// C64Screen.java:1792
 if (badLine || gfxVisible) {
     rc = (rc + 1) & 7;
-    gfxVisible = true;    // analogue of idle_state = 0
+    gfxVisible = true;     // exit idle
+}
+
+// C64Screen.java:1619 — cycle 13 (VICE's cycle 14 "update_vc")
+if (badLine) {
+    if (!gfxVisible) {
+        rc = 0;            // idle → display transition
+    }
+    gfxVisible = true;     // now in display state
 }
 ```
 
-That end-of-line block is a reasonable translation of VICE's cycle-58
-"update RC". The subtle break is at the start-of-line side.
+This matches VICE's three observable transitions:
 
-JaC64 has two places that set `rc = 0`:
+| moment                          | VICE behaviour               | JaC64 |
+|---------------------------------|------------------------------|-------|
+| every cycle                     | `check_badline` reruns       | `badLine = isBadLine()` at cyc 0 |
+| cycle 14, `!idle && badline`    | no rc change                 | rc unchanged ✓ |
+| cycle 14, `idle && badline`     | `rc = 0` + exit idle         | rc=0 + gfxVisible=true ✓ |
+| cycle 58, `rc == 7`             | enter idle, vcbase=vc        | gfxVisible=false, vcBase=vc ✓ |
+| cycle 58, `!idle \|\| badline`  | rc++, exit idle              | rc++, gfxVisible=true ✓ |
 
-1. `handleBadLineStart(vicCycle, wasVisible)` at `C64Screen.java:603`,
-   triggered by mid-line `$D011` writes that turn on badline before cycle 14.
-2. The cycle-13 case at `C64Screen.java:1619`, triggered on every badline.
+### The bug this replaced
 
-Both are gated today behind `-Djac64.fliRcFix=true` so the rc-reset is
-*skipped*. With the flag on:
+Before the fix, JaC64 had an unconditional `if (badLine) gfxVisible = true`
+running **every cycle** (not just at cyc 13). So by the time cyc 13 ran,
+`gfxVisible` was already true regardless of whether we had just exited idle
+at the previous line's rc=7. The `!gfxVisible` guard never fired; rc never
+reset at char-row boundaries; and the first rendered line of each char row
+inherited rc=7 from the previous row — producing the static horizontal
+streaks on the intro runners that this investigation started with.
 
-- Krestage 3's beast scene changes from vertical color stripes to a
-  recognizable image — more bitmap detail is produced than VICE would
-  produce.
-- The intro runners develop short static horizontal streaks on some scan
-  lines.
+Removing that per-cycle unconditional set, and making `gfxVisible = true`
+happen **only** inside the cyc-13 badline block (alongside the rc-reset
+decision), restored bit-for-bit match with the pre-fliRcFix baseline on
+the intro while preserving the char-row advance needed for Krestage 3's
+beast scene.
 
-These two observations together say that *never* resetting rc is not the
-same as VICE, and the "better-looking" beast scene is probably a
-coincidence: rc walks 0→7 naturally and the bitmap data at those
-offsets happens to encode more image than row 0 alone.
+## Verified scenes
 
-## The open questions
+- **Krestage 3 intro** (runners at vbeam 75-165): identical to
+  pre-fix rendering. MD5 match, 0 pixel diff.
+- **Krestage 3 beast scene** (FLI bitmap at vbeam 50-200): wolf/lion/figure
+  visible with correct detail; no horizontal stripe regression.
+- **Let's Scroll It**: BASIC startup screen renders correctly.
 
-1. **Does VICE really render Krestage 3's beast scene as nothing but
-   horizontal stripes?** If yes, our pre-fix output was correct and the fix
-   is a misleading prettification. If no, VICE has some additional
-   mechanism (sprite overlays? mid-line `vicBase` tricks we haven't traced?)
-   that accounts for the image detail.
-2. **Where do the intro streaks come from?** The intro has only three
-   `$D011` writes (at boot). There are no mid-line badline transitions.
-   Disabling the fliRcFix flag removes the streaks. That strongly suggests
-   the fliRcFix path fires somewhere we don't expect — possibly in the
-   initial badline of each char row when rc was still 7 from the previous
-   row (see "double-render at char-row boundary" in TODO).
-3. **Is `gfxVisible` the right proxy for `idle_state`?** VICE's check
-   `!idle_state || bad_line` at cycle 58 corresponds roughly to
-   `badLine || gfxVisible` in JaC64, and we've verified the advance
-   semantics match. But the *reset* semantics may differ — VICE resets on
-   every badline; JaC64 behind the flag resets only when not already
-   visible, which is not strictly equivalent.
+## Open follow-ups
+
+- No broader demo corpus tested yet (Deus Ex Machina, Comaland, Dutch
+  Breeze). Smart fix should be safe but should be visually verified.
+- FLI beast scene still has dithered noise vs. VICE's clean rendering —
+  that's a different, probably color-RAM-fetch-timing issue, not rc/idle.
+- Side-effect check: does the more-correct `gfxVisible` affect anything
+  that keyed off the old unconditional set? Search turned up no obvious
+  consumers, but haven't run the Lorenz CPU suite yet.
 
 ## Reproducing
 

@@ -600,7 +600,16 @@ public class C64Screen extends ExtChip implements Observer {
   private void handleBadLineStart(int vicCycle, boolean wasVisible) {
     setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-START");
 
-    if (vicCycle <= 13 && !Boolean.getBoolean("jac64.fliRcFix")) {
+    // VICE resets rc only on idle→display transition (see
+    // docs/vic-ii/badline-rc-idle-state.md). wasVisible=false means
+    // the chip was idle before this mid-line badline, so rc should
+    // reset. In steady display state (FLI, or already-visible
+    // rendering within a char row) rc continues advancing.
+    if (vicCycle <= 13 && !wasVisible) {
+      rc = 0;
+    }
+    // Debug flag retained for regression testing.
+    if (vicCycle <= 13 && Boolean.getBoolean("jac64.forceRcReset")) {
       rc = 0;
     }
 
@@ -1443,9 +1452,11 @@ public class C64Screen extends ExtChip implements Observer {
       triggerRasterIrq(rasterIrqClock);
     }
 
-    if (badLine) {
-      gfxVisible = true;
-    }
+    // NOTE: gfxVisible is deliberately not set here. Entering display
+    // state happens at cycle 13 (mapped from VICE's cycle 14
+    // "update_vc"), which is where we also test !gfxVisible to decide
+    // whether rc should reset. Setting it earlier collapses the
+    // idle→display transition and makes FLI's char-row advance wrong.
 
     switch (vicCycle) {
     case 0:
@@ -1615,9 +1626,13 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C13");
         if (BAD_LINE_DEBUG) System.out.println("#### RC = 0 (" + rc + ") at "
             + vbeam + " vc: " + vc);
-        if (!Boolean.getBoolean("jac64.fliRcFix")) {
+        // VICE's cycle 14 "update_vc": rc resets only on idle→display
+        // transition. After the decision, the chip is in display
+        // state. See docs/vic-ii/badline-rc-idle-state.md.
+        if (!gfxVisible) {
           rc = 0;
         }
+        gfxVisible = true;
       }
       break;
     case 14:
@@ -2258,11 +2273,22 @@ public class C64Screen extends ExtChip implements Observer {
     if (!legacy.painting || !seq.enabled || !legacy.dma) {
       return;
     }
+    int mask = Integer.getInteger("jac64.spriteDisableMask", 0);
+    if ((mask & (1 << n)) != 0) return;
 
     int data24 = seq.shiftRegister & 0xffffff;
     int dataHi = (data24 >> 16) & 0xff;
     int dataMid = (data24 >> 8) & 0xff;
     int dataLo = data24 & 0xff;
+    if (Boolean.getBoolean("jac64.traceSprData")
+        && clipStart == xPos - 8 && data24 != 0 && data24 != 0xffffff) {
+      System.err.println("SPR" + n + " vbeam=" + vbeam + " renderX=$"
+          + Integer.toHexString(seq.renderX & 0x3ff)
+          + " expY=" + seq.expandY + " expX=" + seq.expandX
+          + " mc=" + seq.multicolor + " color=$"
+          + Integer.toHexString(sprites[n].color[2] & 0xf)
+          + " data=$" + String.format("%06x", data24));
+    }
 
     if (seq.expandX) {
       if (seq.multicolor) {
@@ -2590,8 +2616,16 @@ public class C64Screen extends ExtChip implements Observer {
     int repeatPixel = 0;
 
     // Pixel-repeat bug zone (expanded sprites).
-    if (bugX > SPRITE_EXPANDED_REPEAT_START[n]
+    if (!Boolean.getBoolean("jac64.disableRepeatBug")
+        && bugX > SPRITE_EXPANDED_REPEAT_START[n]
         && bugX < SPRITE_REPEAT_END[n]) {
+      if (Boolean.getBoolean("jac64.traceSpriteRepeat")) {
+        System.err.println("SPR-REPEAT-EXP s=" + n + " vbeam=" + vbeam
+            + " regX=$" + Integer.toHexString(seq.x & 0x1ff)
+            + " bugX=$" + Integer.toHexString(bugX & 0x3ff)
+            + " xShift=" + seq.xShift
+            + " expX=" + seq.expandX + " mc=" + seq.multicolor);
+      }
       size = SPRITE_REPEAT_BEGIN[n] - bugX;
       mustRepeatPixels = size > 0;
       if (size1 > size) {
@@ -2667,8 +2701,16 @@ public class C64Screen extends ExtChip implements Observer {
     int size = 24;
     boolean mustRepeatPixels = false;
 
-    if (bugX > SPRITE_NORMAL_REPEAT_START[n]
+    if (!Boolean.getBoolean("jac64.disableRepeatBug")
+        && bugX > SPRITE_NORMAL_REPEAT_START[n]
         && bugX < SPRITE_REPEAT_END[n]) {
+      if (Boolean.getBoolean("jac64.traceSpriteRepeat")) {
+        System.err.println("SPR-REPEAT-NRM s=" + n + " vbeam=" + vbeam
+            + " regX=$" + Integer.toHexString(seq.x & 0x1ff)
+            + " bugX=$" + Integer.toHexString(bugX & 0x3ff)
+            + " xShift=" + seq.xShift
+            + " mc=" + seq.multicolor);
+      }
       size = SPRITE_REPEAT_BEGIN[n] - bugX;
       mustRepeatPixels = size > 0;
       if (mustRepeatPixels) {
@@ -3066,9 +3108,20 @@ public class C64Screen extends ExtChip implements Observer {
 
     void readSpriteData() {
       pointer = vicBank + memory[spr0BlockSel + spriteNo] * 0x40;
-      spriteReg = ((memory[pointer + nextByte++] & 0xff) << 16) |
-      ((memory[pointer + nextByte++] & 0xff)  << 8) |
-      memory[pointer + nextByte++];
+      int b0 = memory[pointer + nextByte] & 0xff;
+      int b1 = memory[pointer + nextByte + 1] & 0xff;
+      int b2 = memory[pointer + nextByte + 2] & 0xff;
+      if (Boolean.getBoolean("jac64.traceSprFetch") && spriteNo == 3
+          && vbeam >= 60 && vbeam <= 100) {
+        System.err.println("SPR3-FETCH vbeam=" + vbeam + " ptr=$"
+            + Integer.toHexString(pointer) + " nb=" + nextByte
+            + " bytes=$" + String.format("%02x%02x%02x", b0, b1, b2)
+            + " ptrByte=$" + Integer.toHexString(memory[spr0BlockSel + spriteNo] & 0xff)
+            + " spr0Sel=$" + Integer.toHexString(spr0BlockSel)
+            + " vicBank=$" + Integer.toHexString(vicBank));
+      }
+      nextByte += 3;
+      spriteReg = (b0 << 16) | (b1 << 8) | b2;
 
       if (!expandY) expFlipFlop = false;
 
