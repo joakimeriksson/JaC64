@@ -447,16 +447,27 @@ public class C64Screen extends ExtChip implements Observer {
    * opening trick relies on toggling $D016 between cyc 17 and 18 so
    * neither latch fires, keeping the previous (open) vborder state.
    */
-  private void checkVBorderBottomAndLatch() {
+  /**
+   * Port of VICE check_vborder_top + check_vborder_bottom.
+   * Updates set_vborder using CURRENT rsel + DEN. Safe to call on any
+   * cycle — VICE runs these two checks every cycle
+   * (viciisc/vicii-cycle.c:477-479).
+   */
+  private void checkVBorderTopBottom() {
     int rsel = (control1 & 0x08) != 0 ? 1 : 0;
+    int den = (control1 & 0x10) != 0 ? 1 : 0;
     int stopLine = rsel == 1 ? 251 : 247;
+    int startLine = rsel == 1 ? 51 : 55;
     if (vbeam == stopLine) {
       setVBorder = true;
     }
-    int startLine = rsel == 1 ? 51 : 55;
-    if (vbeam == startLine && displayEnabled) {
+    if (vbeam == startLine && den == 1) {
       setVBorder = false;
     }
+  }
+
+  private void checkVBorderBottomAndLatch() {
+    checkVBorderTopBottom();
     if (setVBorder) {
       borderState |= 1;
     } else {
@@ -1499,6 +1510,24 @@ public class C64Screen extends ExtChip implements Observer {
     // whether rc should reset. Setting it earlier collapses the
     // idle→display transition and makes FLI's char-row advance wrong.
 
+    // Per-cycle vborder top/bottom checks — VICE runs these every
+    // cycle via check_vborder_top / check_vborder_bottom. Cheap to
+    // evaluate and necessary for mid-line rsel toggles (bottom-border
+    // opening trick) to work at the exact cycle the demo expects.
+    if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+      checkVBorderTopBottom();
+      // Cycle 1 latch (VICE vicii-cycle.c:480). Also latch vborder
+      // into borderState bit 0 here. The hborder latch at cyc 17/18
+      // does its own latch too.
+      if (vicCycle == 0) {
+        if (setVBorder) {
+          borderState |= 1;
+        } else {
+          borderState &= 0xfe;
+        }
+      }
+    }
+
     switch (vicCycle) {
     case 0:
       // vbeam already incremented before the raster compare above
@@ -1728,13 +1757,6 @@ public class C64Screen extends ExtChip implements Observer {
 
       break;
     case 17:
-      if (Boolean.getBoolean("jac64.traceBorderState")
-          && vbeam >= 249 && vbeam <= 253) {
-        System.err.println("CASE17 vbeam=" + vbeam
-            + " hideColumn=" + hideColumn
-            + " borderState=$" + Integer.toHexString(borderState)
-            + " control2=$" + Integer.toHexString(control2));
-      }
       if (hideColumn) {
         if (Boolean.getBoolean("jac64.viceBorderLatch")) {
           checkVBorderBottomAndLatch();
