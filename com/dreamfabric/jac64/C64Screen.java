@@ -200,6 +200,9 @@ public class C64Screen extends ExtChip implements Observer {
   private boolean vBorder = true;
   private boolean mainBorder = true;
 
+  private long lastD021Cycles = -1;
+  private int lastD021InLine = -1;
+
   int borderColor = cbmcolor[0];
   int bgColor = cbmcolor[1];
 
@@ -1356,10 +1359,17 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[i].color[0] = bgColor;
       }
       if (Boolean.getBoolean("jac64.traceColorWrites")) {
+        int inLine = (int) (cpu.cycles - lastLine);
+        long deltaCycles = (lastD021Cycles < 0) ? 0 : cpu.cycles - lastD021Cycles;
+        int deltaInLine = (lastD021InLine < 0) ? 0 : inLine - lastD021InLine;
         System.err.println("D021=$" + Integer.toHexString(data & 0xff)
             + " vbeam=" + vbeam
-            + " cyc=" + (int) (cpu.cycles - lastLine)
-            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+            + " cyc=" + inLine
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff)
+            + " dClk=" + deltaCycles
+            + " dCyc=" + deltaInLine);
+        lastD021Cycles = cpu.cycles;
+        lastD021InLine = inLine;
       }
       break;
     case 0xd022:

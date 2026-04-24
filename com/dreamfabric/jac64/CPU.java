@@ -104,18 +104,38 @@ public class CPU extends MOS6510Core {
     }
   }
 
+  // 6510 BA/AEC grace: when the VIC pulls BA low the AEC signal follows
+  // with a 3-cycle delay, letting the CPU complete up to 3 more READ
+  // cycles before releasing the bus. Writes stall immediately (no grace).
+  // Set via `-Djac64.baGrace=false` to disable for A/B comparison.
+  private static final boolean BA_GRACE_ENABLED =
+      !"false".equalsIgnoreCase(System.getProperty("jac64.baGrace", "true"));
+  private int baReadsGrace = 3;
+
   private void waitForBus() {
-    boolean waited = baLowUntil > cycles;
-    if (waited) {
-      traceBaEvent("BA-WAIT-START until=" + baLowUntil);
+    waitForBus(false);
+  }
+
+  private void waitForBus(boolean isRead) {
+    if (baLowUntil <= cycles) {
+      // BA high — refill grace for the next transition
+      baReadsGrace = 3;
+      return;
     }
+    // BA is currently low.
+    if (isRead && BA_GRACE_ENABLED && baReadsGrace > 0) {
+      // Consume one read-grace cycle and proceed without stalling.
+      baReadsGrace--;
+      return;
+    }
+    traceBaEvent("BA-WAIT-START until=" + baLowUntil);
     while (baLowUntil > cycles) {
       cycles++;
       schedule(cycles);
     }
-    if (waited) {
-      traceBaEvent("BA-WAIT-END");
-    }
+    traceBaEvent("BA-WAIT-END");
+    // BA released — refill grace for the next transition
+    baReadsGrace = 3;
   }
 
   // Reads the memory with all respect to all flags...
@@ -125,7 +145,7 @@ public class CPU extends MOS6510Core {
 
     /* Chips work first, then CPU */
     schedule(cycles);
-    waitForBus();
+    waitForBus(true);
 
     if ((romFlag & adr) == romFlag) {
       return memory[rindex = adr | 0x10000];
@@ -476,7 +496,11 @@ public class CPU extends MOS6510Core {
     }
 
     String pcHex = Integer.toHexString(0x10000 | pcNow).substring(1);
+    int op0 = memory[pcNow] & 0xff;
+    int op1 = memory[(pcNow + 1) & 0xffff] & 0xff;
+    int op2 = memory[(pcNow + 2) & 0xffff] & 0xff;
     execTraceOut.println("EXEC pc=$" + pcHex +
+        " op=" + Hex.hex2(op0) + "," + Hex.hex2(op1) + "," + Hex.hex2(op2) +
         " vbeam=" + rasterLine +
         " cyc=" + (cycles - lineClock) +
         " clk=" + cycles +
