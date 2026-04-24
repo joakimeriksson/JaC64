@@ -170,14 +170,18 @@ public class C64Screen extends ExtChip implements Observer {
   boolean paintBorder = false;
   boolean paintSideBorder = false;
 
-  // Separate "set_vborder" state from latched vborder (bit 0 of
-  // borderState). Port of VICE vicii-cycle.c check_vborder_bottom and
-  // check_hborder. set_vborder is updated only at the hborder-left
-  // check cycles (17 if CSEL=1, 18 if CSEL=0); the vborder latch
-  // copies from set_vborder at that same moment. Demos can keep
-  // bottom border open by writing $D016 around cyc 17/18 so neither
-  // check fires, leaving set_vborder / vborder untouched.
+  // Port of VICE vicii-cycle.c border state:
+  //   setVBorder — continuously updated by check_vborder_top /
+  //                check_vborder_bottom (every cycle in VICE).
+  //   vBorder    — latched from setVBorder at cyc 1 and at the
+  //                left-border checks (cyc 17/18) in check_hborder.
+  //   mainBorder — true = border pixels drawn here. Closes at
+  //                cyc 56/57 via ChkBrdR0/R1; opens at cyc 17/18 via
+  //                ChkBrdL0/L1 BUT only if vBorder is 0.
+  // Used only when -Djac64.viceBorderLatch=true to gate rendering.
   private boolean setVBorder = true;
+  private boolean vBorder = true;
+  private boolean mainBorder = true;
 
   int borderColor = cbmcolor[0];
   int bgColor = cbmcolor[1];
@@ -448,10 +452,10 @@ public class C64Screen extends ExtChip implements Observer {
    * neither latch fires, keeping the previous (open) vborder state.
    */
   /**
-   * Port of VICE check_vborder_top + check_vborder_bottom.
-   * Updates set_vborder using CURRENT rsel + DEN. Safe to call on any
-   * cycle — VICE runs these two checks every cycle
-   * (viciisc/vicii-cycle.c:477-479).
+   * VICE check_vborder_top + check_vborder_bottom combined.
+   * Updates {@link #setVBorder} using CURRENT {@code control1} (rsel
+   * + DEN). Safe to call every cycle — VICE runs both checks every
+   * cycle (viciisc/vicii-cycle.c:477-479).
    */
   private void checkVBorderTopBottom() {
     int rsel = (control1 & 0x08) != 0 ? 1 : 0;
@@ -466,13 +470,40 @@ public class C64Screen extends ExtChip implements Observer {
     }
   }
 
-  private void checkVBorderBottomAndLatch() {
+  /**
+   * VICE check_hborder left-side: runs at cyc 17 if CSEL=1, cyc 18 if
+   * CSEL=0. Latches vBorder from setVBorder, and if vBorder is 0
+   * opens mainBorder (viciisc/vicii-cycle.c:188-195).
+   */
+  private void checkHBorderLeft() {
     checkVBorderTopBottom();
-    if (setVBorder) {
-      borderState |= 1;
-    } else {
-      borderState &= 0xfe;
+    vBorder = setVBorder;
+    if (!vBorder) {
+      mainBorder = false;
     }
+  }
+
+  /**
+   * VICE check_hborder right-side: runs at cyc 56 if CSEL=0, cyc 57
+   * if CSEL=1. Closes mainBorder (viciisc/vicii-cycle.c:196-199).
+   */
+  private void checkHBorderRight() {
+    mainBorder = true;
+  }
+
+  /** Single gate for rendering: VICE's main_border. */
+  private boolean borderClosed() {
+    if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+      return mainBorder;
+    }
+    return borderState != 0;
+  }
+
+  private boolean vBorderOnly() {
+    if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+      return vBorder;
+    }
+    return (borderState & 1) != 0;
   }
 
   private boolean isBadLine(int scroll) {
@@ -1739,7 +1770,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 16:
       if (!hideColumn) {
         if (Boolean.getBoolean("jac64.viceBorderLatch")) {
-          checkVBorderBottomAndLatch();
+          checkHBorderLeft();
         }
         borderState &= 0xfd;
       }
@@ -1759,7 +1790,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 17:
       if (hideColumn) {
         if (Boolean.getBoolean("jac64.viceBorderLatch")) {
-          checkVBorderBottomAndLatch();
+          checkHBorderLeft();
         }
         borderState &= 0xfd;
       }
@@ -1825,6 +1856,9 @@ public class C64Screen extends ExtChip implements Observer {
     case 55:
       if (hideColumn) {
         borderState |= 2;
+        if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+          checkHBorderRight();
+        }
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C55");
@@ -1840,6 +1874,9 @@ public class C64Screen extends ExtChip implements Observer {
     case 56:
       if (!hideColumn) {
         borderState |= 2;
+        if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+          checkHBorderRight();
+        }
       }
 
       drawBackground();
@@ -1983,7 +2020,7 @@ public class C64Screen extends ExtChip implements Observer {
       return;
     }
     int bpos = mpos;
-    int currentBg = borderState > 0 ? borderColor : bgColor;
+    int currentBg = borderClosed() ? borderColor : bgColor;
     for (int i = 0; i < 8; i++) {
       mem[bpos++] = currentBg;
     }
@@ -1998,16 +2035,16 @@ public class C64Screen extends ExtChip implements Observer {
    */
   private final void drawGraphics(int mpos) {
     if (notVisible) {
-      if (gfxVisible && !paintBorder && (borderState & 1) == 0) {
+      if (gfxVisible && !paintBorder && !vBorderOnly()) {
         vc++;
       }
       vmli++;
       return;
     }
 
-    if (!gfxVisible || paintBorder || (borderState & 1) == 1) {
+    if (!gfxVisible || paintBorder || vBorderOnly()) {
       mpos -= horizScroll;
-      int color = (paintBorder || (borderState > 0)) ? borderColor : bgColor;
+      int color = (paintBorder || borderClosed()) ? borderColor : bgColor;
       for (int i = mpos, n = mpos + 8; i < n; i++) {
         mem[i] = color;
       }
@@ -2868,7 +2905,7 @@ public class C64Screen extends ExtChip implements Observer {
           if ((tmp & 0x100) != 0) sprBgCol |= spriteBit;
           if ((tmp & 0xff) != spriteBit) sprCol |= tmp & 0xff;
         }
-        if (borderState == 0 && pixelX < SC_WIDTH) {
+        if (!borderClosed() && pixelX < SC_WIDTH) {
           if (!priority || (tmp & 0x100) == 0) mem[mpos + pixelX] = color;
         }
       }
@@ -2999,7 +3036,7 @@ public class C64Screen extends ExtChip implements Observer {
           if ((tmp & 0x100) != 0) sprBgCol |= spriteBit;
           if ((tmp & 0xff) != spriteBit) sprCol |= tmp & 0xff;
         }
-        if (borderState == 0 && pixelX < SC_WIDTH) {
+        if (!borderClosed() && pixelX < SC_WIDTH) {
           if (!priority || (tmp & 0x100) == 0) mem[mpos + pixelX] = color;
         }
       }
@@ -3038,7 +3075,7 @@ public class C64Screen extends ExtChip implements Observer {
           sprCol |= tmp & 0xff;
         }
       }
-      if (borderState == 0 && pixelX < SC_WIDTH) {
+      if (!borderClosed() && pixelX < SC_WIDTH) {
         if (!priority || (tmp & 0x100) == 0) {
           mem[mpos + pixelX] = color;
         }
