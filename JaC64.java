@@ -127,6 +127,11 @@ public class JaC64 implements ActionListener, KeyEventDispatcher {
     C64Win.setResizable(true);
     C64Win.setVisible(true);
 
+    // Optional live sprite debug window.
+    if (Boolean.getBoolean("jac64.spriteDebug")) {
+      com.dreamfabric.jac64.SpriteDebugWindow.attach(scr);
+    }
+
     KeyboardFocusManager.
       getCurrentKeyboardFocusManager().addKeyEventDispatcher(this);
 

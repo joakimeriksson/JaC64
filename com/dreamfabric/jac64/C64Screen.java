@@ -79,7 +79,7 @@ public class C64Screen extends ExtChip implements Observer {
   private boolean DOUBLE = false;
   private int reset = 100;
 
-  private int[] memory;
+  int[] memory;
 
   ExtChip sidChip;
 
@@ -112,7 +112,7 @@ public class C64Screen extends ExtChip implements Observer {
   // This is an IEC emulation (non ROM based)
   boolean emulateDisk = false; //true; //!CPU.EMULATE_1541; // false;
 
-  private int[] cbmcolor = VICConstants.COLOR_SETS[0];
+  int[] cbmcolor = VICConstants.COLOR_SETS[0];
 
   // -------------------------------------------------------------------
   // VIC-II variables
@@ -3202,7 +3202,8 @@ public class C64Screen extends ExtChip implements Observer {
   // -------------------------------------------------------------------
   // Internal sprite class to handle all data for sprites
   // -------------------------------------------------------------------
-  private class Sprite {
+  // Package-private so debug tools (SpriteDebugWindow) can inspect state.
+  class Sprite {
 
     boolean painting = false;
     boolean dma = false;
