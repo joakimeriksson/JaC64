@@ -171,6 +171,13 @@ public class CPU extends MOS6510Core {
       chips.performWrite(adr, data, cycles);
     } else {
       memory[windex = adr] = data;
+      if (Boolean.getBoolean("jac64.traceSprPtrWrites")
+          && adr >= 0x07F8 && adr <= 0x07FF) {
+        System.err.println("SPRPTR-WR adr=$" + Integer.toHexString(adr)
+            + " val=$" + Integer.toHexString(data & 0xff)
+            + " clk=" + cycles
+            + " pc=$" + Integer.toHexString(pc & 0xffff));
+      }
     }
   }
 
