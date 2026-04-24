@@ -493,14 +493,14 @@ public class C64Screen extends ExtChip implements Observer {
 
   /** Single gate for rendering: VICE's main_border. */
   private boolean borderClosed() {
-    if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+    if (true /* viceBorderLatch default on */) {
       return mainBorder;
     }
     return borderState != 0;
   }
 
   private boolean vBorderOnly() {
-    if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+    if (true /* viceBorderLatch default on */) {
       return vBorder;
     }
     return (borderState & 1) != 0;
@@ -1545,7 +1545,7 @@ public class C64Screen extends ExtChip implements Observer {
     // cycle via check_vborder_top / check_vborder_bottom. Cheap to
     // evaluate and necessary for mid-line rsel toggles (bottom-border
     // opening trick) to work at the exact cycle the demo expects.
-    if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+    if (true /* viceBorderLatch default on */) {
       checkVBorderTopBottom();
       // Cycle 1 latch (VICE vicii-cycle.c:480). Also latch vborder
       // into borderState bit 0 here. The hborder latch at cyc 17/18
@@ -1627,9 +1627,20 @@ public class C64Screen extends ExtChip implements Observer {
       for (int i = 0, n = collissionMask.length; i < n; i++) {
         collissionMask[i] = 0;
       }
+      // VICE SprPtr(3) / SprDma0(3) at PAL cyc 1 = JaC64 case 0 end.
+      if (true /* spriteFetchAligned default on */
+          && sprites[3].dma) {
+        sprites[3].readSpriteData();
+      }
       break;
     case 1: // Sprite data - sprite 3
-      if (sprites[3].dma) {
+      // VICE fetches SprPtr(3) at PAL cyc 1 Phi1 — that maps to our
+      // "case 0 end". When jac64.spriteFetchAligned is on, SPR3-7
+      // fetches moved to cases 0/2/4/6/8 (one VIC cycle earlier)
+      // matching VICE timing. The 9-sprite multiplex trick and mid-
+      // line $07F8+n pointer writes depend on this alignment.
+      if (!true /* spriteFetchAligned default on */
+          && sprites[3].dma) {
         sprites[3].readSpriteData();
       }
       if (sprites[5].dma) {
@@ -1637,9 +1648,14 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 2:
+      if (true /* spriteFetchAligned default on */
+          && sprites[4].dma) {
+        sprites[4].readSpriteData();
+      }
       break;
     case 3:
-      if (sprites[4].dma) {
+      if (!true /* spriteFetchAligned default on */
+          && sprites[4].dma) {
         sprites[4].readSpriteData();
       }
       if (sprites[6].dma) {
@@ -1647,9 +1663,14 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 4:
+      if (true /* spriteFetchAligned default on */
+          && sprites[5].dma) {
+        sprites[5].readSpriteData();
+      }
       break;
     case 5:
-      if (sprites[5].dma) {
+      if (!true /* spriteFetchAligned default on */
+          && sprites[5].dma) {
         sprites[5].readSpriteData();
       }
       if (sprites[7].dma) {
@@ -1657,16 +1678,26 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 6:
+      if (true /* spriteFetchAligned default on */
+          && sprites[6].dma) {
+        sprites[6].readSpriteData();
+      }
       break;
     case 7:
-      if (sprites[6].dma) {
+      if (!true /* spriteFetchAligned default on */
+          && sprites[6].dma) {
         sprites[6].readSpriteData();
       }
       break;
     case 8:
+      if (true /* spriteFetchAligned default on */
+          && sprites[7].dma) {
+        sprites[7].readSpriteData();
+      }
       break;
     case 9:
-      if (sprites[7].dma) {
+      if (!true /* spriteFetchAligned default on */
+          && sprites[7].dma) {
         sprites[7].readSpriteData();
       }
 
@@ -1674,7 +1705,7 @@ public class C64Screen extends ExtChip implements Observer {
       // -Djac64.viceBorderLatch=true, bottom-border updates are
       // deferred to case 16/17 (VICE's check_hborder latch), so we
       // skip them here. The sprite.lineFinished housekeeping stays.
-      if (!Boolean.getBoolean("jac64.viceBorderLatch")) {
+      if (!true /* viceBorderLatch default on */) {
         if (blankRow) {
           if (vbeam == 247) {
             borderState |= 1;
@@ -1769,7 +1800,7 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     case 16:
       if (!hideColumn) {
-        if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+        if (true /* viceBorderLatch default on */) {
           checkHBorderLeft();
         }
         borderState &= 0xfd;
@@ -1789,7 +1820,7 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     case 17:
       if (hideColumn) {
-        if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+        if (true /* viceBorderLatch default on */) {
           checkHBorderLeft();
         }
         borderState &= 0xfd;
@@ -1856,7 +1887,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 55:
       if (hideColumn) {
         borderState |= 2;
-        if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+        if (true /* viceBorderLatch default on */) {
           checkHBorderRight();
         }
       }
@@ -1874,7 +1905,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 56:
       if (!hideColumn) {
         borderState |= 2;
-        if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+        if (true /* viceBorderLatch default on */) {
           checkHBorderRight();
         }
       }
