@@ -170,6 +170,15 @@ public class C64Screen extends ExtChip implements Observer {
   boolean paintBorder = false;
   boolean paintSideBorder = false;
 
+  // Separate "set_vborder" state from latched vborder (bit 0 of
+  // borderState). Port of VICE vicii-cycle.c check_vborder_bottom and
+  // check_hborder. set_vborder is updated only at the hborder-left
+  // check cycles (17 if CSEL=1, 18 if CSEL=0); the vborder latch
+  // copies from set_vborder at that same moment. Demos can keep
+  // bottom border open by writing $D016 around cyc 17/18 so neither
+  // check fires, leaving set_vborder / vborder untouched.
+  private boolean setVBorder = true;
+
   int borderColor = cbmcolor[0];
   int bgColor = cbmcolor[1];
 
@@ -425,6 +434,34 @@ public class C64Screen extends ExtChip implements Observer {
   public void setDisplayOffset(int x, int y) {
     offsetX = x;
     offsetY = y;
+  }
+
+  /**
+   * Port of VICE {@code check_vborder_bottom} and the vborder latch
+   * inside {@code check_hborder} (viciisc/vicii-cycle.c:175-200).
+   *
+   * Called only at the cycle where the left-border check fires
+   * (cyc 17 if CSEL=1, cyc 18 if CSEL=0). Uses the CURRENT rsel from
+   * {@code control1} bit 3 to decide the bottom-stop line (247 if
+   * RSEL=0/24-row, 251 if RSEL=1/25-row). The demo's bottom-border
+   * opening trick relies on toggling $D016 between cyc 17 and 18 so
+   * neither latch fires, keeping the previous (open) vborder state.
+   */
+  private void checkVBorderBottomAndLatch() {
+    int rsel = (control1 & 0x08) != 0 ? 1 : 0;
+    int stopLine = rsel == 1 ? 251 : 247;
+    if (vbeam == stopLine) {
+      setVBorder = true;
+    }
+    int startLine = rsel == 1 ? 51 : 55;
+    if (vbeam == startLine && displayEnabled) {
+      setVBorder = false;
+    }
+    if (setVBorder) {
+      borderState |= 1;
+    } else {
+      borderState &= 0xfe;
+    }
   }
 
   private boolean isBadLine(int scroll) {
@@ -1573,29 +1610,35 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[7].readSpriteData();
       }
 
-      // Border management!
-      if (blankRow) {
-        if (vbeam == 247) {
-          borderState |= 1;
+      // Border management. Legacy path stays default. When
+      // -Djac64.viceBorderLatch=true, bottom-border updates are
+      // deferred to case 16/17 (VICE's check_hborder latch), so we
+      // skip them here. The sprite.lineFinished housekeeping stays.
+      if (!Boolean.getBoolean("jac64.viceBorderLatch")) {
+        if (blankRow) {
+          if (vbeam == 247) {
+            borderState |= 1;
+          }
+        } else {
+          if (vbeam == 251) {
+            borderState |= 1;
+          }
+          if (vbeam == 51) {
+            borderState &= 0xfe;
+          }
         }
-      } else {
-        if (vbeam == 251) {
-          borderState |= 1;
-        }
-        if (vbeam == 51) {
+        if (vbeam == 55) {
           borderState &= 0xfe;
-
-          for (int i = 0, n = 7; i < n; i++) {
-            if (!sprites[i].painting) {
-              sprites[i].lineFinished = true;
-            }
+        }
+      }
+      if (!blankRow && vbeam == 51) {
+        for (int i = 0, n = 7; i < n; i++) {
+          if (!sprites[i].painting) {
+            sprites[i].lineFinished = true;
           }
         }
       }
-      // No border after vbeam 55 (ever?)
       if (vbeam == 55) {
-        borderState &= 0xfe;
-
         for (int i = 0, n = 7; i < n; i++) {
           if (!sprites[i].painting)
             sprites[i].lineFinished = true;
@@ -1666,6 +1709,9 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     case 16:
       if (!hideColumn) {
+        if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+          checkVBorderBottomAndLatch();
+        }
         borderState &= 0xfd;
       }
       if (badLine) {
@@ -1682,7 +1728,17 @@ public class C64Screen extends ExtChip implements Observer {
 
       break;
     case 17:
+      if (Boolean.getBoolean("jac64.traceBorderState")
+          && vbeam >= 249 && vbeam <= 253) {
+        System.err.println("CASE17 vbeam=" + vbeam
+            + " hideColumn=" + hideColumn
+            + " borderState=$" + Integer.toHexString(borderState)
+            + " control2=$" + Integer.toHexString(control2));
+      }
       if (hideColumn) {
+        if (Boolean.getBoolean("jac64.viceBorderLatch")) {
+          checkVBorderBottomAndLatch();
+        }
         borderState &= 0xfd;
       }
 
