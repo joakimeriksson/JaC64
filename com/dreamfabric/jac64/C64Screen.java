@@ -1343,11 +1343,23 @@ public class C64Screen extends ExtChip implements Observer {
 
     case 0xd020:
       borderColor = cbmcolor[bCol = data & 15];
+      if (Boolean.getBoolean("jac64.traceColorWrites")) {
+        System.err.println("D020=$" + Integer.toHexString(data & 0xff)
+            + " vbeam=" + vbeam
+            + " cyc=" + (int) (cpu.cycles - lastLine)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
       break;
     case 0xd021:
       bgColor = cbmcolor[bgCol[0] = data & 15];
       for (int i = 0, n = 8; i < n; i++) {
         sprites[i].color[0] = bgColor;
+      }
+      if (Boolean.getBoolean("jac64.traceColorWrites")) {
+        System.err.println("D021=$" + Integer.toHexString(data & 0xff)
+            + " vbeam=" + vbeam
+            + " cyc=" + (int) (cpu.cycles - lastLine)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
       }
       break;
     case 0xd022:
