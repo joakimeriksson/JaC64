@@ -140,6 +140,23 @@ public class C64Screen extends ExtChip implements Observer {
   int vicMem = 0;
   int vicMemDDRA = 0;
   int vicMemDATA = 0;
+
+  // Per-frame sprite-state history for the debug window. Captured at
+  // end of each scan line; deduped by (x, pointer, nextByte) so
+  // multiplex positions appear as separate entries.
+  public static final int SPRITE_FRAME_MAX = 16;
+  public final int[][] spriteFrameX = new int[8][SPRITE_FRAME_MAX];
+  public final int[][] spriteFrameY = new int[8][SPRITE_FRAME_MAX];
+  public final int[][] spriteFramePtr = new int[8][SPRITE_FRAME_MAX];
+  public final int[][] spriteFrameNb = new int[8][SPRITE_FRAME_MAX];
+  public final int[] spriteFrameCount = new int[8];
+  // Cached view for the previous frame — read by SpriteDebugWindow so
+  // the window shows stable data for the whole frame.
+  public final int[][] spriteFrameXLast = new int[8][SPRITE_FRAME_MAX];
+  public final int[][] spriteFrameYLast = new int[8][SPRITE_FRAME_MAX];
+  public final int[][] spriteFramePtrLast = new int[8][SPRITE_FRAME_MAX];
+  public final int[][] spriteFrameNbLast = new int[8][SPRITE_FRAME_MAX];
+  public final int[] spriteFrameCountLast = new int[8];
   // Read for debugging on other places...
   public int vbeam = 0; // read at d012
   public int raster = 0;
@@ -1519,6 +1536,29 @@ public class C64Screen extends ExtChip implements Observer {
     // At cycle 0, increment vbeam BEFORE the raster compare
     // (real VIC-II updates raster counter at start of line)
     if (vicCycle == 0) {
+      // Before advancing: capture each active sprite's current state
+      // into this frame's history buffer (dedup by X/ptr/nextByte).
+      for (int i = 0; i < 8; i++) {
+        Sprite sp = sprites[i];
+        if (!sp.enabled) continue;
+        int cnt = spriteFrameCount[i];
+        boolean dup = false;
+        for (int j = 0; j < cnt; j++) {
+          if (spriteFrameX[i][j] == sp.x
+              && spriteFramePtr[i][j] == sp.pointer
+              && spriteFrameNb[i][j] == sp.nextByte) {
+            dup = true; break;
+          }
+        }
+        if (!dup && cnt < SPRITE_FRAME_MAX) {
+          spriteFrameX[i][cnt] = sp.x;
+          spriteFrameY[i][cnt] = sp.y;
+          spriteFramePtr[i][cnt] = sp.pointer;
+          spriteFrameNb[i][cnt] = sp.nextByte;
+          spriteFrameCount[i] = cnt + 1;
+        }
+      }
+
       vbeam = (vbeam + 1) % 312;
       if (vbeam == 0) {
         frame++;
@@ -1526,6 +1566,16 @@ public class C64Screen extends ExtChip implements Observer {
           fldTrace = false;
           fldOut.println("=== FLD TRACE END ===");
           fldOut.close();
+        }
+        // Publish this frame's history and reset for next frame.
+        for (int i = 0; i < 8; i++) {
+          int cnt = spriteFrameCount[i];
+          spriteFrameCountLast[i] = cnt;
+          System.arraycopy(spriteFrameX[i], 0, spriteFrameXLast[i], 0, cnt);
+          System.arraycopy(spriteFrameY[i], 0, spriteFrameYLast[i], 0, cnt);
+          System.arraycopy(spriteFramePtr[i], 0, spriteFramePtrLast[i], 0, cnt);
+          System.arraycopy(spriteFrameNb[i], 0, spriteFrameNbLast[i], 0, cnt);
+          spriteFrameCount[i] = 0;
         }
       }
       vPos = vbeam - (FIRST_VISIBLE_VBEAM + 1);

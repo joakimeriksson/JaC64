@@ -5,25 +5,27 @@ import java.awt.image.BufferedImage;
 import javax.swing.*;
 
 /**
- * Live debug window showing the 8 VIC-II sprites' current state: pointer,
- * X/Y position, enable / expansion / multicolor flags, color registers,
- * and a visualization of the current sprite data (all 63 bytes).
+ * Live debug window showing the 8 VIC-II sprites, with every unique
+ * multiplex instance captured during the previous frame on the same
+ * row. Each row shows the "current live" state plus up to N historical
+ * position/data snapshots (one per unique X+pointer+nextByte tuple
+ * seen at any scan-line start during the frame). Makes the 9-sprite
+ * trick and per-line pointer swaps visible at a glance.
  *
- * Opens as a separate JFrame alongside the emulator window. Refreshes on
- * a 50 ms timer — cheap, unambiguously live, survives emulator speed
- * changes.
- *
- * Launch via {@link #attach(C64Screen)}; construct once per emulator.
+ * Launch with `-Djac64.spriteDebug=true` in JaC64's main class; the
+ * GUI auto-attaches it.
  */
 public class SpriteDebugWindow extends JFrame {
     private static final int SPRITE_W = 24;
     private static final int SPRITE_H = 21;
-    private static final int PIXEL_SCALE = 3;
-    private static final int ROW_HEIGHT = SPRITE_H * PIXEL_SCALE + 16;
-    private static final int INFO_WIDTH = 280;
+    private static final int PIXEL_SCALE = 2;
+    private static final int TILE_W = SPRITE_W * PIXEL_SCALE + 4;
+    private static final int TILE_H = SPRITE_H * PIXEL_SCALE + 14;
+    private static final int INFO_WIDTH = 200;
+    private static final int ROW_HEIGHT = TILE_H + 6;
 
     private final C64Screen screen;
-    private final SpritePanel[] panels = new SpritePanel[8];
+    private final SpriteRow[] rows = new SpriteRow[8];
     private final javax.swing.Timer refreshTimer;
 
     public static SpriteDebugWindow attach(C64Screen screen) {
@@ -35,35 +37,38 @@ public class SpriteDebugWindow extends JFrame {
     private SpriteDebugWindow(C64Screen screen) {
         super("JaC64 — Sprite debug");
         this.screen = screen;
-        setLayout(new GridLayout(8, 1, 0, 2));
+        setLayout(new GridLayout(8, 1, 0, 1));
         for (int i = 0; i < 8; i++) {
-            panels[i] = new SpritePanel(i);
-            add(panels[i]);
+            rows[i] = new SpriteRow(i);
+            add(rows[i]);
         }
         setDefaultCloseOperation(JFrame.HIDE_ON_CLOSE);
-        setSize(INFO_WIDTH + SPRITE_W * PIXEL_SCALE * 2 + 40, ROW_HEIGHT * 8 + 40);
+        // Width: info panel + N tiles, where N = SPRITE_FRAME_MAX
+        int w = INFO_WIDTH + TILE_W * C64Screen.SPRITE_FRAME_MAX + 20;
+        setSize(w, ROW_HEIGHT * 8 + 40);
         setLocationByPlatform(true);
 
         refreshTimer = new javax.swing.Timer(50, e -> {
-            for (SpritePanel p : panels) p.repaint();
+            for (SpriteRow p : rows) p.repaint();
         });
         refreshTimer.start();
     }
 
-    /**
-     * One row per sprite — left half shows metadata, right half renders
-     * the current sprite data using the sprite's colour registers.
-     */
-    private class SpritePanel extends JPanel {
+    private class SpriteRow extends JPanel {
         private final int idx;
-        private final BufferedImage img =
+        private final BufferedImage live =
             new BufferedImage(SPRITE_W, SPRITE_H, BufferedImage.TYPE_INT_RGB);
+        private final BufferedImage[] hist =
+            new BufferedImage[C64Screen.SPRITE_FRAME_MAX];
 
-        SpritePanel(int idx) {
+        SpriteRow(int idx) {
             this.idx = idx;
             setPreferredSize(new Dimension(0, ROW_HEIGHT));
             setBackground(Color.BLACK);
-            setForeground(Color.WHITE);
+            for (int i = 0; i < hist.length; i++) {
+                hist[i] = new BufferedImage(SPRITE_W, SPRITE_H,
+                    BufferedImage.TYPE_INT_RGB);
+            }
         }
 
         @Override
@@ -71,47 +76,66 @@ public class SpriteDebugWindow extends JFrame {
             super.paintComponent(g);
             C64Screen.Sprite s = screen.sprites[idx];
 
-            renderSpriteImage(s);
-
             Graphics2D g2 = (Graphics2D) g;
             g2.setColor(idx % 2 == 0 ? new Color(24, 24, 40) : new Color(12, 12, 24));
             g2.fillRect(0, 0, getWidth(), getHeight());
 
             // Metadata text
             g2.setColor(Color.LIGHT_GRAY);
-            g2.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11));
-            int y = 14;
+            g2.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 10));
+            int y = 12;
             g2.drawString(String.format("SPR%d  X=$%03X Y=$%02X",
-                idx, s.x & 0x1ff, s.y & 0xff), 6, y); y += 14;
-            g2.drawString(String.format("en=%-5s dma=%-5s paint=%s",
-                String.valueOf(s.enabled), String.valueOf(s.dma),
-                String.valueOf(s.painting)), 6, y); y += 14;
-            g2.drawString(String.format("expX=%-5s expY=%-5s mc=%s",
-                String.valueOf(s.expandX), String.valueOf(s.expandY),
-                String.valueOf(s.multicolor)), 6, y); y += 14;
-            g2.drawString(String.format("ptr=$%05X nb=%d",
-                s.pointer, s.nextByte), 6, y); y += 14;
-            g2.drawString(String.format("color=$%X pri=%s",
-                s.color[2] & 0xf, String.valueOf(s.priority)), 6, y); y += 14;
+                idx, s.x & 0x1ff, s.y & 0xff), 4, y); y += 12;
+            g2.drawString(String.format("en=%d dma=%d paint=%d",
+                s.enabled ? 1 : 0, s.dma ? 1 : 0, s.painting ? 1 : 0), 4, y); y += 12;
+            g2.drawString(String.format("expX=%d expY=%d mc=%d",
+                s.expandX ? 1 : 0, s.expandY ? 1 : 0,
+                s.multicolor ? 1 : 0), 4, y); y += 12;
+            g2.drawString(String.format("ptr=$%05X col=$%X",
+                s.pointer, s.color[2] & 0xf), 4, y); y += 12;
+            int count = screen.spriteFrameCountLast[idx];
+            g2.drawString(String.format("frame: %d instances", count), 4, y);
 
-            // Draw sprite preview
-            int scale = PIXEL_SCALE;
-            int imgX = INFO_WIDTH;
-            int imgY = 2;
-            g2.drawImage(img, imgX, imgY,
-                SPRITE_W * scale, SPRITE_H * scale, null);
-            g2.setColor(Color.DARK_GRAY);
-            g2.drawRect(imgX - 1, imgY - 1,
-                SPRITE_W * scale + 1, SPRITE_H * scale + 1);
+            // Live sprite (left-most tile)
+            renderSpriteImage(live, s.pointer & 0xffff,
+                s.multicolor, s.color[2] & 0xf);
+            drawTile(g2, INFO_WIDTH, live, "live", s.x & 0x1ff, s.y & 0xff);
+
+            // Historical frame instances — already deduped by
+            // (x, pointer, nextByte) in C64Screen's capture.
+            for (int i = 0; i < count && i < C64Screen.SPRITE_FRAME_MAX; i++) {
+                renderSpriteImage(hist[i],
+                    screen.spriteFramePtrLast[idx][i] & 0xffff,
+                    s.multicolor, s.color[2] & 0xf);
+                int xTile = INFO_WIDTH + (i + 1) * TILE_W;
+                drawTile(g2, xTile, hist[i],
+                    String.format("nb=%d", screen.spriteFrameNbLast[idx][i]),
+                    screen.spriteFrameXLast[idx][i] & 0x1ff,
+                    screen.spriteFrameYLast[idx][i] & 0xff);
+            }
         }
 
-        private void renderSpriteImage(C64Screen.Sprite s) {
+        private void drawTile(Graphics2D g2, int x, BufferedImage img,
+                              String label, int sx, int sy) {
+            int imgW = SPRITE_W * PIXEL_SCALE;
+            int imgH = SPRITE_H * PIXEL_SCALE;
+            g2.drawImage(img, x, 2, imgW, imgH, null);
+            g2.setColor(new Color(60, 60, 60));
+            g2.drawRect(x - 1, 1, imgW + 1, imgH + 1);
+            g2.setColor(Color.GRAY);
+            g2.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 9));
+            g2.drawString(label, x, imgH + 12);
+            g2.drawString(String.format("$%03X,$%02X", sx, sy),
+                x, imgH + 22);
+        }
+
+        private void renderSpriteImage(BufferedImage img, int base,
+                                        boolean mc, int colorReg) {
             int[] mem = screen.memory;
-            int base = s.pointer & 0xffff;
-            int bg = screen.cbmcolor[screen.bgColor & 0xf] | 0xff000000;
-            int fg = screen.cbmcolor[s.color[2] & 0xf] | 0xff000000;
+            int fg = screen.cbmcolor[colorReg] | 0xff000000;
             int mc1 = screen.cbmcolor[screen.bgCol[1] & 0xf] | 0xff000000;
             int mc2 = screen.cbmcolor[screen.bgCol[2] & 0xf] | 0xff000000;
+            int bg = 0xff000000; // transparent = black
 
             for (int row = 0; row < SPRITE_H; row++) {
                 int off = base + row * 3;
@@ -120,15 +144,13 @@ public class SpriteDebugWindow extends JFrame {
                 int b2 = mem[(off + 2) & 0xffff] & 0xff;
                 long data24 = (((long) b0) << 16) | (b1 << 8) | b2;
 
-                if (s.multicolor) {
-                    // 12 double-pixels per row in multicolor — duplicate each
-                    // to fill the 24-wide display area.
+                if (mc) {
                     for (int pair = 0; pair < 12; pair++) {
                         int shift = 22 - pair * 2;
                         int bits = (int) ((data24 >> shift) & 3);
                         int color;
                         switch (bits) {
-                            case 0: color = 0xff000000; break;          // transparent
+                            case 0: color = bg; break;
                             case 1: color = mc1; break;
                             case 2: color = fg; break;
                             default: color = mc2; break;
@@ -139,7 +161,7 @@ public class SpriteDebugWindow extends JFrame {
                 } else {
                     for (int x = 0; x < SPRITE_W; x++) {
                         int bit = 1 << (23 - x);
-                        int color = (data24 & bit) != 0 ? fg : 0xff000000;
+                        int color = (data24 & bit) != 0 ? fg : bg;
                         img.setRGB(x, row, color);
                     }
                 }
