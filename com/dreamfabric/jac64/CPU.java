@@ -172,7 +172,25 @@ public class CPU extends MOS6510Core {
     }
   }
 
-  // A byte is written directly to memory or to ioChips
+  // A byte is written directly to memory or to ioChips.
+  //
+  // VICE memory-bus split (jac64.viceMemBus, default OFF — opt-in):
+  //   - Memory writes (non-IO): schedule VIC catch-up FIRST, then apply the
+  //     write. Models Phi1/Phi2 hardware semantics — VIC's Phi1 read at
+  //     cycle N happens before CPU's Phi2 write, so VIC sees the OLD byte
+  //     for cycle N's fetch and the new byte takes effect from cycle N+1.
+  //   - IO writes ($D000-$DFFF): schedule AFTER the write, so the new VIC
+  //     register state is observed when VIC catches up (preserves the
+  //     side-border-open trick fixed in 4d05dc6).
+  //
+  // Tested against Krestage 3 scroll-in and did NOT fix the right-half
+  // color stripes — the artifact must have a different root cause. Keeping
+  // the option for future experimentation; default-off so we don't change
+  // any other demo's timing.
+  // Enable with -Djac64.viceMemBus=true.
+  private static final boolean VICE_MEM_BUS_SPLIT =
+      VICE_MEM_MODEL && Boolean.getBoolean("jac64.viceMemBus");
+
   protected final void writeByte(int adr, int data) {
     cycles++;
     if (!VICE_MEM_MODEL) {
@@ -199,7 +217,16 @@ public class CPU extends MOS6510Core {
     }
 
     adr &= 0xffff;
-    if (ioON && ((adr & 0xf000) == 0xd000)) {
+    final boolean isIO = ioON && ((adr & 0xf000) == 0xd000);
+
+    if (VICE_MEM_BUS_SPLIT && !isIO) {
+      // Phi1/Phi2 split: VIC's Phi1 fetch at cycle N runs BEFORE CPU's Phi2
+      // write applies, so catch up the VIC first. The actual memory[] update
+      // happens after — visible to VIC's case-(N+1) fetch onwards.
+      schedule(cycles);
+    }
+
+    if (isIO) {
       chips.performWrite(adr, data, cycles);
     } else {
       memory[windex = adr] = data;
@@ -211,10 +238,12 @@ public class CPU extends MOS6510Core {
             + " pc=$" + Integer.toHexString(pc & 0xffff));
       }
     }
-    if (VICE_MEM_MODEL) {
-      // VICE-style: write happens, then CLK_INC's vicii_cycle runs for this
-      // cycle. Schedule sees the post-write register state — critical for
-      // mid-line CSEL writes that drive the side-border-open trick.
+    if (VICE_MEM_MODEL && isIO) {
+      // IO writes: schedule AFTER so VIC observes the new register state
+      // (e.g. $D016 update for side-border-open BA check).
+      schedule(cycles);
+    } else if (VICE_MEM_MODEL && !VICE_MEM_BUS_SPLIT) {
+      // Fallback: previous 4d05dc6 behaviour (write-then-schedule for all).
       schedule(cycles);
     }
   }
