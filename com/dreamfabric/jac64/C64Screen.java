@@ -1836,12 +1836,12 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C13");
         if (BAD_LINE_DEBUG) System.out.println("#### RC = 0 (" + rc + ") at "
             + vbeam + " vc: " + vc);
-        // VICE's cycle 14 "update_vc": rc resets only on idle→display
-        // transition. After the decision, the chip is in display
-        // state. See docs/vic-ii/badline-rc-idle-state.md.
-        if (!gfxVisible) {
-          rc = 0;
-        }
+        // VICE's UpdateVc (cyc 14): unconditionally rc=0 when bad_line is
+        // true. The demo's $D011 timing controls whether bad_line is true
+        // at this cycle: writes BEFORE cyc 13 force a reset (e.g. FLI
+        // first line of each char row), writes AFTER (FLI lines 1-7)
+        // leave bad_line=false at this point so rc keeps incrementing.
+        rc = 0;
         gfxVisible = true;
       }
       break;
