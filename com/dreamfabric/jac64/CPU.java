@@ -104,13 +104,28 @@ public class CPU extends MOS6510Core {
     }
   }
 
-  // 6510 BA/AEC grace: when the VIC pulls BA low the AEC signal follows
-  // with a 3-cycle delay, letting the CPU complete up to 3 more READ
-  // cycles before releasing the bus. Writes stall immediately (no grace).
-  // Set via `-Djac64.baGrace=false` to disable for A/B comparison.
-  private static final boolean BA_GRACE_ENABLED =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.baGrace", "true"));
-  private int baReadsGrace = 3;
+  // VICE-style CPU/VIC interleaving model.
+  //
+  // VICE's pattern per memory access:
+  //   1. check_ba()       — uses BA flag set by the PREVIOUS vicii_cycle().
+  //                         Stalls if BA-low. Loops vicii_cycle until high.
+  //   2. read or write    — at current clock value.
+  //   3. CLK_INC()        — advances clock + runs vicii_cycle once for the
+  //                         new cycle. May set BA flag for the NEXT access.
+  //
+  // Key consequence: BA detection has 1-cycle of LATENCY relative to the
+  // VIC processing the BA-low cycle. This is what makes Krestage 3's side-
+  // border-open trick (DEC $D016 followed by ChkBrdR check) work — the DEC's
+  // dummy/final writes complete BEFORE the BA check observes their effect.
+  //
+  // JaC64 maps this as:
+  //   fetchByte: waitForBus  -> cycles++ -> schedule(cycles)   -> read
+  //   writeByte: cycles++    -> schedule(cycles)               -> write
+  //              (no waitForBus — VICE writes don't check BA)
+  //
+  // Set -Djac64.viceMem=false to revert to legacy ordering for A/B testing.
+  private static final boolean VICE_MEM_MODEL =
+      !"false".equalsIgnoreCase(System.getProperty("jac64.viceMem", "true"));
 
   private void waitForBus() {
     waitForBus(false);
@@ -118,14 +133,6 @@ public class CPU extends MOS6510Core {
 
   private void waitForBus(boolean isRead) {
     if (baLowUntil <= cycles) {
-      // BA high — refill grace for the next transition
-      baReadsGrace = 3;
-      return;
-    }
-    // BA is currently low.
-    if (isRead && BA_GRACE_ENABLED && baReadsGrace > 0) {
-      // Consume one read-grace cycle and proceed without stalling.
-      baReadsGrace--;
       return;
     }
     traceBaEvent("BA-WAIT-START until=" + baLowUntil);
@@ -134,18 +141,21 @@ public class CPU extends MOS6510Core {
       schedule(cycles);
     }
     traceBaEvent("BA-WAIT-END");
-    // BA released — refill grace for the next transition
-    baReadsGrace = 3;
   }
 
   // Reads the memory with all respect to all flags...
   protected final int fetchByte(int adr) {
-    /* a cycles passes for this read */
-    cycles++;
-
-    /* Chips work first, then CPU */
-    schedule(cycles);
-    waitForBus(true);
+    if (VICE_MEM_MODEL) {
+      /* VICE order: check_ba (with prev cycle's BA flag) -> CLK_INC. */
+      waitForBus(true);
+      cycles++;
+      schedule(cycles);
+    } else {
+      /* Legacy order: cycles++ -> schedule -> waitForBus. */
+      cycles++;
+      schedule(cycles);
+      waitForBus(true);
+    }
 
     if ((romFlag & adr) == romFlag) {
       return memory[rindex = adr | 0x10000];
@@ -165,9 +175,11 @@ public class CPU extends MOS6510Core {
   // A byte is written directly to memory or to ioChips
   protected final void writeByte(int adr, int data) {
     cycles++;
-
-    schedule(cycles);
-    waitForBus();
+    if (!VICE_MEM_MODEL) {
+      // Legacy: schedule + waitForBus BEFORE write. Writes can stall on BA-low.
+      schedule(cycles);
+      waitForBus();
+    }
     if (adr <= 1) {
       memory[adr] = data;
       int p = (memory[0] ^ 0xff) | memory[1];
@@ -198,6 +210,12 @@ public class CPU extends MOS6510Core {
             + " clk=" + cycles
             + " pc=$" + Integer.toHexString(pc & 0xffff));
       }
+    }
+    if (VICE_MEM_MODEL) {
+      // VICE-style: write happens, then CLK_INC's vicii_cycle runs for this
+      // cycle. Schedule sees the post-write register state — critical for
+      // mid-line CSEL writes that drive the side-border-open trick.
+      schedule(cycles);
     }
   }
 
