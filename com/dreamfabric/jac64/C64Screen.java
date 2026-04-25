@@ -318,6 +318,9 @@ public class C64Screen extends ExtChip implements Observer {
   private int cbufReg = 0;
   private int gbufMcFlop = 0;
   private int gbufPixelReg = 0;
+  private int vmode11Pipe = 0;   // BMM/ECM bits, latched at pixel 4 (rising) / 6 (falling)
+  private int vmode16Pipe = 0;   // MCM bit, latched at pixel 4
+  private int vmode16Pipe2 = 0;  // vmode16Pipe lagged 1 cycle (used for MC pixel-pair logic)
 
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
@@ -1874,10 +1877,16 @@ public class C64Screen extends ExtChip implements Observer {
       vc = vcBase;
       vmli = 0;
       // Reset VICE-style gfx pipeline shift register at line start so the
-      // first column's pre-XSCROLL pixels emit from a clean state.
+      // first column's pre-XSCROLL pixels emit from a clean state. Re-seed
+      // mode pipes from current registers — VICE's draw_graphics8 runs
+      // every cycle, but JaC64 only invokes drawGraphicsVice at cases
+      // 16-55, so we'd otherwise drift across non-display cycles.
       if (useViceGfx) {
         gbufReg = 0;
         gbufMcFlop = 0;
+        vmode11Pipe = (control1 & 0x60) >> 2;
+        vmode16Pipe = (control2 & 0x10) >> 2;
+        vmode16Pipe2 = vmode16Pipe;
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C13");
@@ -2189,16 +2198,28 @@ public class C64Screen extends ExtChip implements Observer {
    * VICE-style cycle-driven graphics renderer. Replaces drawGraphics()
    * when jac64.viceGfx=true. Mirrors src/viciisc/vicii-draw-cycle.c:
    * draw_graphics8(): per-pixel emit through an 8-pixel X-shift register
-   * with $D016 XSCROLL latched at i==xscroll, so mid-cycle XSCROLL/mode
-   * changes affect only un-emitted pixels (the C64's actual hardware
-   * behaviour, important for FLI scroll-in scenes).
+   * with $D016 XSCROLL latched at i==xscroll, and $D011/$D016 mode bits
+   * latched mid-cycle at pixels 4/6 (PAL 6569 color-latency edges). This
+   * matches the C64's actual hardware behaviour where mid-cycle register
+   * writes affect only un-emitted pixels.
    *
-   * Simplified vs upstream VICE:
-   *  - No 2-cycle gbuf pipeline delay (pipe0/pipe1 → reg). This matches
-   *    JaC64's existing fetch-and-emit-in-same-cycle model.
-   *  - $D011/$D016 mode bits sampled per-cycle, not at pixel 4/6 within
-   *    the cycle. (Adequate for per-line FLI; G3 may refine this.)
-   *  - Idle-state g-access reads $3FFF — port deferred to G4.
+   * State carried across cycles:
+   *   gbufReg / gbufMcFlop  — 8-bit shift register + multicolor toggle
+   *   vbufReg / cbufReg     — char/color RAM bytes for the active column
+   *   vmode11Pipe           — latched $D011 BMM/ECM bits (bits 3-4)
+   *   vmode16Pipe           — latched $D016 MCM bit  (bit 2)
+   *   vmode16Pipe2          — vmode16Pipe lagged 1 cycle, used for the
+   *                            MC pixel-pair determination (so a 0→1 MCM
+   *                            edge is observed one cycle late, matching
+   *                            VICE's "vmode16_pipe2" semantics)
+   *
+   * Simplified vs upstream VICE (deferred):
+   *  - No 2-cycle gbuf pipeline delay (pipe0/pipe1 → reg). JaC64 fetches
+   *    and emits in the same cycle.
+   *  - Idle-state g-access still uses bitmap address (FLI scenes always
+   *    force badline+display state so this is a non-issue in practice;
+   *    JaC64's existing !gfxVisible early-return paints border/bg color
+   *    which is the visual equivalent of VICE's idle-pixel emission).
    */
   private final void drawGraphicsVice(int mpos) {
     if (notVisible) {
@@ -2235,15 +2256,18 @@ public class C64Screen extends ExtChip implements Observer {
       gByte = memory[charMemoryIndex + (vByte << 3) + rc] & 0xff;
     }
 
-    // Video-mode bits packed for the 32-entry color table.
-    final int vmode = ((control1 & 0x60) >> 2) | ((control2 & 0x10) >> 2);
-    final boolean mcm  = (vmode & 0x04) != 0;
-    final boolean bmm  = (vmode & 0x08) != 0;
+    // VICE pipeline: vmode11Pipe / vmode16Pipe / vmode16Pipe2 carry over
+    // from the previous cycle. Mode bits are latched at pixels 4/6/7
+    // within this cycle, so mid-cycle $D011/$D016 writes affect only
+    // un-emitted pixels.
+    int v11 = vmode11Pipe;
+    int v16 = vmode16Pipe;
+    int v16_2 = vmode16Pipe2;
 
     int reg = gbufReg;
     int mcFlop = gbufMcFlop;
 
-    // 8-pixel emit loop with XSCROLL latch.
+    // 8-pixel emit loop with XSCROLL latch + per-pixel mode latching.
     for (int pix = 0; pix < 8; pix++) {
       // Latch new gbuf/vbuf/cbuf into shift register at i == xscroll.
       // Pixels 0..xscroll-1 keep emitting from the previous column's
@@ -2255,9 +2279,12 @@ public class C64Screen extends ExtChip implements Observer {
         mcFlop = 1;
       }
 
+      // MC pixel-pair determination uses vmode16Pipe2 (lagged MCM).
+      // Color lookup uses current vmode11Pipe | vmode16Pipe.
       int px;
-      if (mcm) {
-        // MC pixels when (BMM=1) or (text MCM with cbuf bit3 set).
+      final boolean mcMcEnabled = (v16_2 & 0x04) != 0;
+      final boolean bmm = (v11 & 0x08) != 0;
+      if (mcMcEnabled) {
         if (bmm || (cbufReg & 0x08) != 0) {
           if (mcFlop != 0) {
             gbufPixelReg = (reg >> 6) & 3;
@@ -2279,7 +2306,7 @@ public class C64Screen extends ExtChip implements Observer {
       mcFlop ^= 1;
 
       // Color resolution via VICE's 32-entry table.
-      final int code = VC_GFX_COLORS[vmode | px];
+      final int code = VC_GFX_COLORS[(v11 | v16) | px];
       int rgba;
       switch (code) {
         case VC_NONE:     rgba = 0xff000000; break;
@@ -2300,10 +2327,30 @@ public class C64Screen extends ExtChip implements Observer {
       if (cx >= 0 && cx < collissionMask.length) {
         collissionMask[cx] = (px & 2) != 0 ? 256 : 0;
       }
+
+      // VICE's mid-cycle mode latching (PAL 6569 color_latency=1):
+      //   - Before pixel 4: $D016 MCM bit overwrites vmode16Pipe;
+      //                     $D011 BMM/ECM bits OR'd into vmode11Pipe (rising edge).
+      //   - Before pixel 6: $D011 BMM/ECM bits AND'd into vmode11Pipe (falling edge).
+      //   - Before pixel 7: if MCM 0→1 transition, reset mcFlop; vmode16Pipe2 ← vmode16Pipe.
+      if (pix == 3) {
+        v16 = (control2 & 0x10) >> 2;
+        v11 |= (control1 & 0x60) >> 2;
+      } else if (pix == 5) {
+        v11 &= (control1 & 0x60) >> 2;
+      } else if (pix == 6) {
+        if (v16 != 0 && v16_2 == 0) {
+          mcFlop = 0;
+        }
+        v16_2 = v16;
+      }
     }
 
     gbufReg = reg;
     gbufMcFlop = mcFlop;
+    vmode11Pipe = v11;
+    vmode16Pipe = v16;
+    vmode16Pipe2 = v16_2;
 
     vc = (vc + 1) & 0x3ff;
     vmli++;
