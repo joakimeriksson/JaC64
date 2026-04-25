@@ -801,8 +801,18 @@ public class C64Screen extends ExtChip implements Observer {
     if (column >= badLineFetchStartColumn && badLineDummyColumns > 0) {
       int fetchColumn = column - badLineFetchStartColumn;
       if (fetchColumn < badLineDummyColumns) {
+        // FLI-bug prefetch columns: VIC takes the bus mid-cycle and reads
+        // whatever the CPU was about to fetch — the byte at the CPU's PC.
+        // VICE viciisc/vicii-fetch.c:vicii_fetch_matrix() with
+        // prefetch_cycles > 0:
+        //   vbuf = 0xff
+        //   cbuf = ram_base_phi2[reg_pc] & 0xf
+        // Krestage 3's "move the FLI bug to the right" trick relies on
+        // the CPU's PC giving specific colors here; hardcoding 0 made
+        // the moved FLI bug always render as black instead of the demo
+        // intended palette.
         vicCharCache[column] = 0xff;
-        vicColCache[column] = 0;
+        vicColCache[column] = memory[cpu.pc & 0xffff] & 0x0f;
         return;
       }
 
@@ -811,7 +821,7 @@ public class C64Screen extends ExtChip implements Observer {
 
     if (sourceColumn < 0 || sourceColumn >= 40) {
       vicCharCache[column] = 0xff;
-      vicColCache[column] = 0;
+      vicColCache[column] = memory[cpu.pc & 0xffff] & 0x0f;
       return;
     }
 
