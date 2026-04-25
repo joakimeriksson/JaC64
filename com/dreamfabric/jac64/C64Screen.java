@@ -306,6 +306,47 @@ public class C64Screen extends ExtChip implements Observer {
   private int[] vicCharCache = new int[40];
   private int[] vicColCache = new int[40];
 
+  // ----- VICE-style cycle-driven gfx pipeline (jac64.viceGfx) -----
+  // Mirrors src/viciisc/vicii-draw-cycle.c structure. When enabled, the
+  // per-cycle drawGraphicsVice() emits 8 pixels through an X-shift
+  // register, so mid-line $D016 XSCROLL / $D018 / $D011 mode writes take
+  // effect at the right horizontal pixel instead of jumping the whole
+  // 8-pixel column.
+  private final boolean useViceGfx = Boolean.getBoolean("jac64.viceGfx");
+  private int gbufReg = 0;
+  private int vbufReg = 0;
+  private int cbufReg = 0;
+  private int gbufMcFlop = 0;
+  private int gbufPixelReg = 0;
+
+  // VICE color codes used by the gfx colors[] table (subset).
+  private static final int VC_NONE     = 0x10;
+  private static final int VC_VBUF_L   = 0x11;
+  private static final int VC_VBUF_H   = 0x12;
+  private static final int VC_CBUF     = 0x13;
+  private static final int VC_CBUF_MC  = 0x14;
+  private static final int VC_D02X_EXT = 0x15;
+  private static final int VC_D021     = 0x21;
+  private static final int VC_D022     = 0x22;
+  private static final int VC_D023     = 0x23;
+
+  // 32-entry colors[] table copied verbatim from VICE
+  // (src/viciisc/vicii-draw-cycle.c). Indexed by (vmode | px) where:
+  //   vmode bit 2 = MCM ($D016 bit 4 >> 2)
+  //   vmode bit 3 = BMM ($D011 bit 5 >> 2)
+  //   vmode bit 4 = ECM ($D011 bit 6 >> 2)
+  //   px = 2-bit gfx pixel value (0..3)
+  private static final int[] VC_GFX_COLORS = {
+      VC_D021, VC_D021, VC_CBUF, VC_CBUF,         // ECM=0 BMM=0 MCM=0
+      VC_D021, VC_D022, VC_D023, VC_CBUF_MC,      // ECM=0 BMM=0 MCM=1
+      VC_VBUF_L, VC_VBUF_L, VC_VBUF_H, VC_VBUF_H, // ECM=0 BMM=1 MCM=0
+      VC_D021, VC_VBUF_H, VC_VBUF_L, VC_CBUF,     // ECM=0 BMM=1 MCM=1
+      VC_D02X_EXT, VC_D02X_EXT, VC_CBUF, VC_CBUF, // ECM=1 BMM=0 MCM=0
+      VC_NONE, VC_NONE, VC_NONE, VC_NONE,         // ECM=1 BMM=0 MCM=1 (illegal)
+      VC_NONE, VC_NONE, VC_NONE, VC_NONE,         // ECM=1 BMM=1 MCM=0 (illegal)
+      VC_NONE, VC_NONE, VC_NONE, VC_NONE          // ECM=1 BMM=1 MCM=1 (illegal)
+  };
+
   private AudioDriver audioDriver;
 
   // Double-buffered pixel arrays for tear-free rendering.
@@ -1832,6 +1873,12 @@ public class C64Screen extends ExtChip implements Observer {
       // Set vc, reset vmli...
       vc = vcBase;
       vmli = 0;
+      // Reset VICE-style gfx pipeline shift register at line start so the
+      // first column's pre-XSCROLL pixels emit from a clean state.
+      if (useViceGfx) {
+        gbufReg = 0;
+        gbufMcFlop = 0;
+      }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C13");
         if (BAD_LINE_DEBUG) System.out.println("#### RC = 0 (" + rc + ") at "
@@ -1883,7 +1930,8 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       // Draw one character here!
-      drawGraphics(mpos + horizScroll);
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
       if (borderState != 0)
         drawBackground();
@@ -1902,7 +1950,8 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C17");
         fetchBadLineData(vmli);
       }
-      drawGraphics(mpos + horizScroll);
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
       mpos += 8;
       break;
@@ -1912,7 +1961,8 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-FETCH");
         fetchBadLineData(vmli);
       }
-      drawGraphics(mpos + horizScroll);
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
 
       mpos += 8;
@@ -1950,7 +2000,8 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_SP0, "SPR0");
       }
 
-      drawGraphics(mpos + horizScroll);
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
 
       mpos += 8;
@@ -1967,7 +2018,8 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C55");
         fetchBadLineData(vmli);
       }
-      drawGraphics(mpos + horizScroll);
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
       if (borderState != 0)
           drawBackground();
@@ -2131,6 +2183,130 @@ public class C64Screen extends ExtChip implements Observer {
       fldOut.println("  drawBG overwrite at mpos=" + mpos +
           " vmli=" + vmli + " borderSt=" + borderState);
     }
+  }
+
+  /**
+   * VICE-style cycle-driven graphics renderer. Replaces drawGraphics()
+   * when jac64.viceGfx=true. Mirrors src/viciisc/vicii-draw-cycle.c:
+   * draw_graphics8(): per-pixel emit through an 8-pixel X-shift register
+   * with $D016 XSCROLL latched at i==xscroll, so mid-cycle XSCROLL/mode
+   * changes affect only un-emitted pixels (the C64's actual hardware
+   * behaviour, important for FLI scroll-in scenes).
+   *
+   * Simplified vs upstream VICE:
+   *  - No 2-cycle gbuf pipeline delay (pipe0/pipe1 → reg). This matches
+   *    JaC64's existing fetch-and-emit-in-same-cycle model.
+   *  - $D011/$D016 mode bits sampled per-cycle, not at pixel 4/6 within
+   *    the cycle. (Adequate for per-line FLI; G3 may refine this.)
+   *  - Idle-state g-access reads $3FFF — port deferred to G4.
+   */
+  private final void drawGraphicsVice(int mpos) {
+    if (notVisible) {
+      if (gfxVisible && !paintBorder && !vBorderOnly()) {
+        vc++;
+      }
+      vmli++;
+      return;
+    }
+
+    if (!gfxVisible || paintBorder || vBorderOnly()) {
+      int color = (paintBorder || borderClosed()) ? borderColor : bgColor;
+      for (int i = 0; i < 8; i++) {
+        mem[mpos + i] = color;
+      }
+      vmli++;
+      return;
+    }
+
+    final int xscroll = horizScroll;
+    final int collX = (vmli << 3) + xscroll + SC_XOFFS;
+
+    // g-access: fetch this cycle's gfx byte. Address calc mirrors
+    // existing drawGraphics (uses precomputed vicBase/charMemoryIndex
+    // which already encode $D018+$DD00 and chargen ROM mapping).
+    int gByte;
+    int vByte = vicCharCache[vmli];
+    int cByte = vicColCache[vmli] & 0x0f;
+    if ((control1 & 0x20) != 0) {              // BMM (bitmap)
+      gByte = memory[vicBase + (vc & 0x3ff) * 8 + rc] & 0xff;
+    } else if ((control1 & 0x40) != 0) {       // ECM text
+      gByte = memory[charMemoryIndex + ((vByte & 0x3f) << 3) + rc] & 0xff;
+    } else {                                    // standard / MC text
+      gByte = memory[charMemoryIndex + (vByte << 3) + rc] & 0xff;
+    }
+
+    // Video-mode bits packed for the 32-entry color table.
+    final int vmode = ((control1 & 0x60) >> 2) | ((control2 & 0x10) >> 2);
+    final boolean mcm  = (vmode & 0x04) != 0;
+    final boolean bmm  = (vmode & 0x08) != 0;
+
+    int reg = gbufReg;
+    int mcFlop = gbufMcFlop;
+
+    // 8-pixel emit loop with XSCROLL latch.
+    for (int pix = 0; pix < 8; pix++) {
+      // Latch new gbuf/vbuf/cbuf into shift register at i == xscroll.
+      // Pixels 0..xscroll-1 keep emitting from the previous column's
+      // register tail (the X-shift behaviour).
+      if (pix == xscroll) {
+        reg = gByte;
+        vbufReg = vByte;
+        cbufReg = cByte;
+        mcFlop = 1;
+      }
+
+      int px;
+      if (mcm) {
+        // MC pixels when (BMM=1) or (text MCM with cbuf bit3 set).
+        if (bmm || (cbufReg & 0x08) != 0) {
+          if (mcFlop != 0) {
+            gbufPixelReg = (reg >> 6) & 3;
+          }
+          // else: hold previous pixel pair (MC stretch)
+        } else {
+          gbufPixelReg = ((reg & 0x80) != 0) ? 3 : 0;
+        }
+      } else {
+        if (bmm || (cbufReg & 0x08) != 0) {
+          gbufPixelReg = ((reg & 0x80) != 0) ? 2 : 0;
+        } else {
+          gbufPixelReg = ((reg & 0x80) != 0) ? 3 : 0;
+        }
+      }
+      px = gbufPixelReg;
+
+      reg = (reg << 1) & 0xff;
+      mcFlop ^= 1;
+
+      // Color resolution via VICE's 32-entry table.
+      final int code = VC_GFX_COLORS[vmode | px];
+      int rgba;
+      switch (code) {
+        case VC_NONE:     rgba = 0xff000000; break;
+        case VC_VBUF_L:   rgba = cbmcolor[vbufReg & 0x0f]; break;
+        case VC_VBUF_H:   rgba = cbmcolor[(vbufReg >> 4) & 0x0f]; break;
+        case VC_CBUF:     rgba = cbmcolor[cbufReg & 0x0f]; break;
+        case VC_CBUF_MC:  rgba = cbmcolor[cbufReg & 0x07]; break;
+        case VC_D02X_EXT: rgba = cbmcolor[bgCol[(vbufReg >> 6) & 3]]; break;
+        case VC_D021:     rgba = bgColor; break;
+        case VC_D022:     rgba = cbmcolor[bgCol[1]]; break;
+        case VC_D023:     rgba = cbmcolor[bgCol[2]]; break;
+        default:          rgba = 0xff000000;
+      }
+      mem[mpos + pix] = rgba;
+
+      // Sprite-collision foreground mask: px bit 1 = foreground.
+      final int cx = collX + pix;
+      if (cx >= 0 && cx < collissionMask.length) {
+        collissionMask[cx] = (px & 2) != 0 ? 256 : 0;
+      }
+    }
+
+    gbufReg = reg;
+    gbufMcFlop = mcFlop;
+
+    vc = (vc + 1) & 0x3ff;
+    vmli++;
   }
 
   /**
