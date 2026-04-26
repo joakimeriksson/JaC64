@@ -312,6 +312,12 @@ public class C64Screen extends ExtChip implements Observer {
   // register, so mid-line $D016 XSCROLL / $D018 / $D011 mode writes take
   // effect at the right horizontal pixel instead of jumping the whole
   // 8-pixel column.
+  // VICE-style per-pixel rendering pipeline (X-shift register +
+  // per-pixel mode latching). Default OFF until non-badline-row handling
+  // in drawGraphicsVice is fixed — currently it returns early on
+  // non-badline rows, causing the OPEN BORDER WITH bit-shift rows in
+  // vicii_reg_timing to lose 1 letter (3→2) versus the legacy path.
+  // Enable with -Djac64.viceGfx=true.
   private final boolean useViceGfx = Boolean.getBoolean("jac64.viceGfx");
   private int gbufReg = 0;
   private int vbufReg = 0;
@@ -350,7 +356,7 @@ public class C64Screen extends ExtChip implements Observer {
   // runs — closing the timing gap that made vicii_reg_timing's OPEN
   // BORDER WITH ASL/LSR/ROL/ROR rows show too many lit letters.
   private static final boolean VICE_BRDR_PHI2 =
-      Boolean.getBoolean("jac64.viceBrdrPhi2");
+      !"false".equalsIgnoreCase(System.getProperty("jac64.viceBrdrPhi2", "true"));
 
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
