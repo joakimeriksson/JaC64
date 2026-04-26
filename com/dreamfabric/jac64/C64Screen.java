@@ -177,12 +177,13 @@ public class C64Screen extends ExtChip implements Observer {
   // Enable with -Djac64.colorDelay=true. Default OFF until validated.
   private static final boolean COLOR_DELAY =
       Boolean.getBoolean("jac64.colorDelay");
-  // Pending color register writes — applied at start of NEXT clock()
-  // call (= 1 VIC cycle delay matching VICE).
-  private long pendingBorderColorClk = -1;
-  private int pendingBorderColor = 0;
-  private long pendingBgColorClk = -1;
-  private int pendingBgColor = 0;
+  // VICE-style single-pending-slot color register delay. Mirrors
+  // viciisc/vicii-draw-cycle.c:586-590 update_cregs() pattern: last
+  // register written this cycle is captured, applied at START of next
+  // cycle. Multiple writes in same cycle: only the last sticks.
+  private int lastColorReg = -1;       // 0x20..0x2e or -1
+  private int lastColorValue = 0;
+  private long lastColorClk = -1;
 
   private int vicBase = 0;
   private boolean badLine = false;
@@ -471,6 +472,40 @@ public class C64Screen extends ExtChip implements Observer {
 
   public void setScreenRefreshListener(ScreenRefreshListener listener) {
     this.screenRefreshListener = listener;
+  }
+
+  /**
+   * Apply a delayed color-register write to the rendering-side state.
+   * Called from clock() at start of cycle N+1 with the value written
+   * during cycle N. Mirrors VICE's `cregs[reg] = value` pattern.
+   */
+  private void applyDelayedColorReg(int reg, int value) {
+    int v = value & 0x0f;
+    switch (reg) {
+      case 0x20: borderColor = cbmcolor[v]; break;
+      case 0x21:
+        bgColor = cbmcolor[v];
+        for (int i = 0; i < 8; i++) sprites[i].color[0] = bgColor;
+        break;
+      case 0x22:
+      case 0x23:
+      case 0x24:
+        bgCol[reg - 0x21] = v;
+        break;
+      case 0x25:
+        sprMC0 = v;
+        for (int i = 0; i < 8; i++) sprites[i].color[1] = cbmcolor[v];
+        break;
+      case 0x26:
+        sprMC1 = v;
+        for (int i = 0; i < 8; i++) sprites[i].color[3] = cbmcolor[v];
+        break;
+      case 0x27: case 0x28: case 0x29: case 0x2a:
+      case 0x2b: case 0x2c: case 0x2d: case 0x2e:
+        sprites[reg - 0x27].color[2] = cbmcolor[v];
+        sprites[reg - 0x27].col = v;
+        break;
+    }
   }
 
   /**
@@ -1495,10 +1530,9 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd020:
       bCol = data & 15;
       if (COLOR_DELAY) {
-        // Defer rendering update by 1 VIC cycle (VICE viciisc/
-        // vicii-draw-cycle.c:635 update_cregs pattern).
-        pendingBorderColor = cbmcolor[bCol];
-        pendingBorderColorClk = cpu.cycles;
+        lastColorReg = 0x20;
+        lastColorValue = data & 15;
+        lastColorClk = cpu.cycles;
       } else {
         borderColor = cbmcolor[bCol];
       }
@@ -1512,8 +1546,9 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd021:
       bgCol[0] = data & 15;
       if (COLOR_DELAY) {
-        pendingBgColor = cbmcolor[bgCol[0]];
-        pendingBgColorClk = cpu.cycles;
+        lastColorReg = 0x21;
+        lastColorValue = data & 15;
+        lastColorClk = cpu.cycles;
       } else {
         bgColor = cbmcolor[bgCol[0]];
         for (int i = 0, n = 8; i < n; i++) {
@@ -1537,18 +1572,36 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd022:
     case 0xd023:
     case 0xd024:
-      bgCol[address - 0xd021] = data & 15;
+      if (COLOR_DELAY) {
+        lastColorReg = address - 0xd000;
+        lastColorValue = data & 15;
+        lastColorClk = cpu.cycles;
+      } else {
+        bgCol[address - 0xd021] = data & 15;
+      }
       break;
     case 0xd025:
-      sprMC0 = data & 15;
-      for (int i = 0, n = 8; i < n; i++) {
-        sprites[i].color[1] = cbmcolor[sprMC0];
+      if (COLOR_DELAY) {
+        lastColorReg = 0x25;
+        lastColorValue = data & 15;
+        lastColorClk = cpu.cycles;
+      } else {
+        sprMC0 = data & 15;
+        for (int i = 0, n = 8; i < n; i++) {
+          sprites[i].color[1] = cbmcolor[sprMC0];
+        }
       }
       break;
     case 0xd026:
-      sprMC1 = data & 15;
-      for (int i = 0, n = 8; i < n; i++) {
-        sprites[i].color[3] = cbmcolor[sprMC1];
+      if (COLOR_DELAY) {
+        lastColorReg = 0x26;
+        lastColorValue = data & 15;
+        lastColorClk = cpu.cycles;
+      } else {
+        sprMC1 = data & 15;
+        for (int i = 0, n = 8; i < n; i++) {
+          sprites[i].color[3] = cbmcolor[sprMC1];
+        }
       }
       break;
     case 0xd027:
@@ -1559,8 +1612,14 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd02c:
     case 0xd02d:
     case 0xd02e:
-      sprites[address - 0xd027].color[2] = cbmcolor[data & 15];
-      sprites[address - 0xd027].col = data & 15;
+      if (COLOR_DELAY) {
+        lastColorReg = address - 0xd000;
+        lastColorValue = data & 15;
+        lastColorClk = cpu.cycles;
+      } else {
+        sprites[address - 0xd027].color[2] = cbmcolor[data & 15];
+        sprites[address - 0xd027].col = data & 15;
+      }
       break;
     case 0xd02f:
       // Debug: trigger FLD trace
@@ -1748,24 +1807,14 @@ public class C64Screen extends ExtChip implements Observer {
       cia2BankPending = false;
     }
 
-    // VICE-style 1-cycle delayed apply for color register writes
-    // ($D020/$D021). Mirrors viciisc/vicii-draw-cycle.c:635-638 where
-    // the `last_color_reg` from the previous cycle is committed to
-    // cregs[] at the start of THIS cycle's draw_colors8() pass. Each
-    // pending write was timestamped at the cycle it was written; if
-    // that's strictly before the current cycle, apply now.
-    if (COLOR_DELAY) {
-      if (pendingBorderColorClk >= 0 && cycles > pendingBorderColorClk) {
-        borderColor = pendingBorderColor;
-        pendingBorderColorClk = -1;
-      }
-      if (pendingBgColorClk >= 0 && cycles > pendingBgColorClk) {
-        bgColor = pendingBgColor;
-        for (int i = 0, n = 8; i < n; i++) {
-          sprites[i].color[0] = bgColor;
-        }
-        pendingBgColorClk = -1;
-      }
+    // VICE-style 1-cycle delayed apply for color register writes.
+    // Mirrors viciisc/vicii-draw-cycle.c:586-590 update_cregs() where
+    // the last register written this cycle is committed to cregs[] at
+    // the start of NEXT cycle's draw_colors8(). Multiple writes in
+    // same cycle: only the last sticks (same as VICE).
+    if (COLOR_DELAY && lastColorReg >= 0 && cycles > lastColorClk) {
+      applyDelayedColorReg(lastColorReg, lastColorValue);
+      lastColorReg = -1;
     }
 
     if (DEBUG_CYCLES || true) {
