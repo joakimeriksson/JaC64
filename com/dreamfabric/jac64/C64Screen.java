@@ -565,6 +565,7 @@ public class C64Screen extends ExtChip implements Observer {
     if (!vBorder) {
       mainBorder = false;
     }
+    if (TRACE_VIC_CYCLE) traceAct("ChkBrdL");
   }
 
   /**
@@ -573,6 +574,7 @@ public class C64Screen extends ExtChip implements Observer {
    */
   private void checkHBorderRight() {
     mainBorder = true;
+    if (TRACE_VIC_CYCLE) traceAct("ChkBrdR");
   }
 
   /** Single gate for rendering: VICE's main_border. */
@@ -645,6 +647,7 @@ public class C64Screen extends ExtChip implements Observer {
     if (oldUntil != until) {
       ((CPU) cpu).traceBaEvent("BA-SET src=" + source + " old=" + oldUntil +
           " new=" + until);
+      if (TRACE_VIC_CYCLE) traceAct("BA-" + source);
     }
   }
 
@@ -719,6 +722,47 @@ public class C64Screen extends ExtChip implements Observer {
   private static final boolean TRACE_VIC_IRQ =
       Boolean.getBoolean("jac64.traceVicIrq");
 
+  // ----- Per-cycle VIC action trace (for VICE diff) -----------------
+  // Enable with -Djac64.traceVicCycle=true.
+  // Optional window: -Djac64.traceVicCycleStart=<absclk>
+  //                  -Djac64.traceVicCycleEnd=<absclk>
+  // Optional file:   -Djac64.traceVicCycleFile=<path> (default stderr)
+  //
+  // Output format (one line per VIC cycle):
+  //   TVIC clk=N rast=$RR cyc=Z bl=B baU=BL vmli=V vc=VC rc=RC act=[<actions>]
+  // where <actions> is a comma-list of high-level events the case
+  // dispatcher fired this cycle (BA-SP0..7, FetchC col=N, FetchG, ChkBrdL/R,
+  // SP0Read .. SP7Read, RasterIRQ, etc.). The trace is intended to be
+  // diffed against VICE's cycle_tab_pal expectations
+  // (vicii-chip-model.c:111). See docs/vic-ii/CYCLE_TRACE.md.
+  private static final boolean TRACE_VIC_CYCLE =
+      Boolean.getBoolean("jac64.traceVicCycle");
+  private static final long TRACE_VIC_CYCLE_START =
+      Long.getLong("jac64.traceVicCycleStart", 0L);
+  private static final long TRACE_VIC_CYCLE_END =
+      Long.getLong("jac64.traceVicCycleEnd", Long.MAX_VALUE);
+  private static java.io.PrintStream traceVicCycleOut = System.err;
+  static {
+    if (TRACE_VIC_CYCLE) {
+      String f = System.getProperty("jac64.traceVicCycleFile", "");
+      if (!f.isEmpty()) {
+        try {
+          traceVicCycleOut = new java.io.PrintStream(
+              new java.io.FileOutputStream(f, false));
+        } catch (Exception e) {
+          System.err.println("traceVicCycle: cannot open " + f + " — using stderr");
+        }
+      }
+    }
+  }
+  private final StringBuilder traceVicActions = new StringBuilder(64);
+
+  private void traceAct(String tag) {
+    if (!TRACE_VIC_CYCLE) return;
+    if (traceVicActions.length() > 0) traceVicActions.append(',');
+    traceVicActions.append(tag);
+  }
+
   private void triggerRasterIrq(long irqClock) {
     irqFlags |= 0x1;
     if ((irqMask & 1) != 0) {
@@ -726,6 +770,7 @@ public class C64Screen extends ExtChip implements Observer {
       irqTriggered = true;
       setIRQ(VIC_IRQ);
       lastIRQ = irqClock;
+      if (TRACE_VIC_CYCLE) traceAct("RasterIRQ-fire");
       if (TRACE_VIC_IRQ) {
         System.err.println("VIC-RASTER-IRQ raster=" + raster
             + " clk=" + irqClock + " vbeam=" + vbeam
@@ -816,6 +861,7 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   private void fetchBadLineData(int column) {
+    if (TRACE_VIC_CYCLE) traceAct("FetchC-c" + column);
     int sourceColumn = column;
 
     if (column >= badLineFetchStartColumn && badLineDummyColumns > 0) {
@@ -2254,6 +2300,29 @@ public class C64Screen extends ExtChip implements Observer {
       notVisible = false;
       break;
     }
+
+    // Per-cycle VIC trace — emit one line summarizing this cycle.
+    if (TRACE_VIC_CYCLE
+        && cycles >= TRACE_VIC_CYCLE_START
+        && cycles <= TRACE_VIC_CYCLE_END) {
+      StringBuilder sb = new StringBuilder(96);
+      sb.append("TVIC clk=").append(cycles)
+        .append(" rast=$").append(Integer.toHexString(vbeam))
+        .append(" cyc=").append(vicCycle)
+        .append(" bl=").append(badLine ? 1 : 0)
+        .append(" baU=").append(cpu.baLowUntil)
+        .append(" vmli=").append(vmli)
+        .append(" vc=").append(vc)
+        .append(" rc=").append(rc);
+      if (traceVicActions.length() > 0) {
+        sb.append(" act=[").append(traceVicActions).append(']');
+        traceVicActions.setLength(0);
+      }
+      traceVicCycleOut.println(sb.toString());
+    } else if (TRACE_VIC_CYCLE) {
+      // Outside trace window — discard buffered actions.
+      traceVicActions.setLength(0);
+    }
   }
 
   // Used to draw background where either border or background should be
@@ -3652,6 +3721,7 @@ public class C64Screen extends ExtChip implements Observer {
     }
 
     void readSpriteData() {
+      if (TRACE_VIC_CYCLE) traceAct("SPR" + spriteNo + "Read");
       pointer = vicBank + memory[spr0BlockSel + spriteNo] * 0x40;
       int b0 = memory[pointer + nextByte] & 0xff;
       int b1 = memory[pointer + nextByte + 1] & 0xff;
