@@ -182,6 +182,13 @@ public class C64Screen extends ExtChip implements Observer {
   // register written this cycle is captured, applied at START of next
   // cycle. Multiple writes in same cycle: only the last sticks.
   private int lastColorReg = -1;       // 0x20..0x2e or -1
+  // VICE viciisc/vicii-cycle.c:413-422 defers $D01E read's clear of
+  // sprite_sprite_collisions to start of NEXT vicii_cycle(). JaC64
+  // used to clear sprCol immediately on read, which let same-cycle
+  // sprite paint fire a fresh SSCol IRQ 1 cycle earlier than VICE —
+  // root cause of the irq-ack-vicii SS-COL row mismatch.
+  private boolean sprColClearPending = false;
+  private boolean sprBgColClearPending = false;
   private int lastColorValue = 0;
   private long lastColorClk = -1;
 
@@ -1165,15 +1172,16 @@ public class C64Screen extends ExtChip implements Observer {
       if (SPRITEDEBUG)
         monitor.info("Reading sprite collission: " +
             Integer.toString(address, 16) + " => " + val);
-      sprCol = 0;
+      // Defer clear to start of next clock() — matches VICE
+      // vicii-cycle.c:413-422 (clear_collisions = 0x1e).
+      sprColClearPending = true;
       return val;
     case 0xd01f:
       val = sprBgCol;
       if (SPRITEDEBUG)
         monitor.info("Reading sprite collission: " +
             Integer.toString(address, 16) + " => " + val);
-
-      sprBgCol = 0;
+      sprBgColClearPending = true;
       return val;
     case 0xd020:
       return bCol | 0xf0;
@@ -1815,6 +1823,20 @@ public class C64Screen extends ExtChip implements Observer {
     if (COLOR_DELAY && lastColorReg >= 0 && cycles > lastColorClk) {
       applyDelayedColorReg(lastColorReg, lastColorValue);
       lastColorReg = -1;
+    }
+
+    // Apply deferred $D01E/$D01F collision-register clear (VICE
+    // viciisc/vicii-cycle.c:413-422). The clear becomes visible at the
+    // start of the cycle AFTER the read — i.e. the wasZero check at
+    // first sprite paint of THIS cycle will see sprCol still set if
+    // the $D01E read happened just last cycle.
+    if (sprColClearPending) {
+      sprCol = 0;
+      sprColClearPending = false;
+    }
+    if (sprBgColClearPending) {
+      sprBgCol = 0;
+      sprBgColClearPending = false;
     }
 
     if (DEBUG_CYCLES || true) {
