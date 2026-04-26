@@ -1,5 +1,34 @@
 # VICE vs JaC64 VIC-II Implementation Gap Analysis
 
+## Status update (post-implementation of gaps #1 + #2)
+
+| Gap | Status | Impact on irq-ack-vicii |
+|-----|--------|------------------------|
+| #1 — $D01E read deferred clear | ✅ Implemented (`d2002b7`) | No visible change |
+| #2 — SSCol fire end-of-cycle (was per-pixel) | ✅ Implemented (`b428d68`) | No visible change |
+| #3 — Sprite painting cycle alignment | Pending | Likely needed |
+| #4 — $D019 write/read same-cycle timing | Pending | Likely needed |
+| #5 — IRQ delivery latency match | Pending | Likely the dominant issue |
+
+**Empirical finding:** The dominant gap appears to be #5. Cycle math:
+
+- SSCol fires at line $4A cycle 44 (sprite at X=$f8 = column 28 = cycle 44)
+- LDA $D019 across 6 test slots happens at cycles 42-47 of line $4A
+- For VICE pattern (slots 1-4 = $84, slots 5-6 = $0), the IRQ ack
+  must complete BETWEEN cycles 45 and 46 of line $4A — i.e. ack
+  happens within ~2 cycles of SSCol fire.
+- JaC64 IRQ delivery is 7-9 cycles (IRQ_DELAY=2 + ~3 cycle CPU
+  instruction wait + 7 cycle interrupt entry). Ack happens at
+  ~cycle 53+ of line $4A. By then, all 6 slot LDAs have already
+  read.
+- Result: JaC64 reads $84 at all 6 slots → DDDDDD vs reference
+  DDDD..
+
+To match VICE the IRQ delivery latency must drop to ~1-2 cycles.
+This requires deeper investigation of VICE's `interrupt_ack_irq`
++ `maincpu_set_irq_clk` machinery and the precise CLK-relative
+fire moment in `vicii_irq_sscoll_set`.
+
 **Test Status:** `irq-ack-vicii.prg` currently fails (red border) in JaC64; passes in VICE.
 
 **Failure Symptom:** Sprite-sprite collision IRQ ($D01E register) shows extra pending bits when read in slot 4 of the SS-COL test. JaC64 reports `$84,$84,$84,$84,$84,$84` (all positions flagged); VICE reports `$84,$84,$84,$84,$00,$00` (first 4 positions only).
