@@ -517,7 +517,20 @@ public class TestRaster {
             }
         }
 
-        System.out.println("=== Test complete ===");
+        // Test-ROM pass/fail signal: many VICE testprogs write a result
+        // code to $D020 (border) or $D7FF (color RAM last byte):
+        //   $D020 $05 = pass (green), $D02 = fail (red)
+        //   $D7FF $00 = pass, $D7FF $0F = fail (irq-ack-vicii)
+        int d020 = cpu.getMemory()[0xd020 + 0x10000] & 0x0f;
+        int d7ff = cpu.getMemory()[0xd7ff] & 0xff;
+        String passFail;
+        if (d020 == 5) passFail = "PASS (D020=5)";
+        else if (d020 == 2) passFail = "FAIL (D020=2)";
+        else if (d7ff == 0x00) passFail = "PASS (D7FF=0)";
+        else if (d7ff == 0xff) passFail = "FAIL (D7FF=ff)";
+        else passFail = "? (no signal)";
+        System.out.println("=== Test complete: $D020=$" + Integer.toHexString(d020)
+            + " $D7FF=$" + Integer.toHexString(d7ff) + " → " + passFail + " ===");
         System.out.println("Screenshots in /tmp/jac64_test_frame_*.png");
         System.out.println("FLD trace in /tmp/jac64_fld_trace.log");
         System.exit(0);

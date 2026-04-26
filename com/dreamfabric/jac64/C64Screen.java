@@ -2756,9 +2756,18 @@ public class C64Screen extends ExtChip implements Observer {
                 // produced wrong patterns on irq-ack-vicii.prg SS-COL.
                 boolean wasZero = (sprCol == 0);
                 sprCol |= tmp & 0xff;
-                if (wasZero && (irqMask & 4) != 0) {
+                if (wasZero) {
+                  // VICE vicii_irq_sscoll_set() always latches bit 2 in
+                  // irq_status regardless of mask; mask only gates the
+                  // pin assertion + bit 7. JaC64 previously gated the
+                  // flag itself on mask AND missed setting bit 7. Both
+                  // fixed here via updateVicIrqLine() which mirrors VICE's
+                  // vicii_irq_set_line() exactly (vicii-irq.c:36-45).
                   irqFlags |= 0x04;
-                  setIRQ(VIC_IRQ);
+                  updateVicIrqLine();
+                  if ((irqMask & 4) != 0) {
+                    setIRQ(VIC_IRQ);
+                  }
                 }
               }
             }
