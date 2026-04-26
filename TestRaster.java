@@ -512,7 +512,8 @@ public class TestRaster {
             screenshot("/tmp/jac64_test_frame_" + String.format("%03d", i) + ".png");
             System.out.println("  Frame " + i + " captured (t=" + i + "s)");
             if (dumpScreen) {
-                dumpScreenRows(0, 6);
+                int rows = Integer.getInteger("jac64.dumpRows", 6);
+                dumpScreenRows(0, rows);
             }
         }
 
