@@ -163,6 +163,27 @@ public class C64Screen extends ExtChip implements Observer {
   int bCol = 0;
   int bgCol[] = new int[4];
 
+  // VICE-style 1-cycle delay for color registers ($D020-$D024). VICE
+  // applies the new value to cregs[] at start of NEXT vicii_cycle (see
+  // viciisc/vicii-draw-cycle.c:635-638), so a register write at cycle N
+  // affects pixel rendering from cycle N+1 onwards. JaC64 historically
+  // applied immediately, causing BC0-BC3 stripes in vicii_reg_timing to
+  // be 1 cycle wider than VICE.
+  //
+  // Implementation: bCol/bgCol[] still update immediately (for reads).
+  // displayBCol/displayBgCol[] lag by 1 VIC cycle and are what rendering
+  // uses. Sync happens at start of each clock() call.
+  //
+  // Enable with -Djac64.colorDelay=true. Default OFF until validated.
+  private static final boolean COLOR_DELAY =
+      Boolean.getBoolean("jac64.colorDelay");
+  // Pending color register writes — applied at start of NEXT clock()
+  // call (= 1 VIC cycle delay matching VICE).
+  private long pendingBorderColorClk = -1;
+  private int pendingBorderColor = 0;
+  private long pendingBgColorClk = -1;
+  private int pendingBgColor = 0;
+
   private int vicBase = 0;
   private boolean badLine = false;
   private int spr0BlockSel;
@@ -1472,7 +1493,15 @@ public class C64Screen extends ExtChip implements Observer {
     }
 
     case 0xd020:
-      borderColor = cbmcolor[bCol = data & 15];
+      bCol = data & 15;
+      if (COLOR_DELAY) {
+        // Defer rendering update by 1 VIC cycle (VICE viciisc/
+        // vicii-draw-cycle.c:635 update_cregs pattern).
+        pendingBorderColor = cbmcolor[bCol];
+        pendingBorderColorClk = cpu.cycles;
+      } else {
+        borderColor = cbmcolor[bCol];
+      }
       if (Boolean.getBoolean("jac64.traceColorWrites")) {
         System.err.println("D020=$" + Integer.toHexString(data & 0xff)
             + " vbeam=" + vbeam
@@ -1481,9 +1510,15 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 0xd021:
-      bgColor = cbmcolor[bgCol[0] = data & 15];
-      for (int i = 0, n = 8; i < n; i++) {
-        sprites[i].color[0] = bgColor;
+      bgCol[0] = data & 15;
+      if (COLOR_DELAY) {
+        pendingBgColor = cbmcolor[bgCol[0]];
+        pendingBgColorClk = cpu.cycles;
+      } else {
+        bgColor = cbmcolor[bgCol[0]];
+        for (int i = 0, n = 8; i < n; i++) {
+          sprites[i].color[0] = bgColor;
+        }
       }
       if (Boolean.getBoolean("jac64.traceColorWrites")) {
         int inLine = (int) (cpu.cycles - lastLine);
@@ -1711,6 +1746,26 @@ public class C64Screen extends ExtChip implements Observer {
       cia2PRA_vicCommitted = cia2BankPendingValue;
       setVideoMem();
       cia2BankPending = false;
+    }
+
+    // VICE-style 1-cycle delayed apply for color register writes
+    // ($D020/$D021). Mirrors viciisc/vicii-draw-cycle.c:635-638 where
+    // the `last_color_reg` from the previous cycle is committed to
+    // cregs[] at the start of THIS cycle's draw_colors8() pass. Each
+    // pending write was timestamped at the cycle it was written; if
+    // that's strictly before the current cycle, apply now.
+    if (COLOR_DELAY) {
+      if (pendingBorderColorClk >= 0 && cycles > pendingBorderColorClk) {
+        borderColor = pendingBorderColor;
+        pendingBorderColorClk = -1;
+      }
+      if (pendingBgColorClk >= 0 && cycles > pendingBgColorClk) {
+        bgColor = pendingBgColor;
+        for (int i = 0, n = 8; i < n; i++) {
+          sprites[i].color[0] = bgColor;
+        }
+        pendingBgColorClk = -1;
+      }
     }
 
     if (DEBUG_CYCLES || true) {
