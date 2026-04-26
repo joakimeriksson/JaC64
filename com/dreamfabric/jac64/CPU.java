@@ -249,17 +249,17 @@ public class CPU extends MOS6510Core {
     if (VICE_MEM_MODEL && isIO) {
       // IO writes: schedule AFTER so VIC observes the new register state
       // (e.g. $D016 update for side-border-open BA check).
-      // Sample BEFORE schedule for the 1-cycle propagation delay
-      // between an IRQ source raised during VIC's processing of this
-      // cycle and the CPU's IRQ-line latch.
-      sampleIrqLine();
       schedule(cycles);
     } else if (VICE_MEM_MODEL && !VICE_MEM_BUS_SPLIT) {
-      sampleIrqLine();
       schedule(cycles);
-    } else {
-      sampleIrqLine();
     }
+    // For writes: sample AFTER schedule(). The CPU's write at this
+    // cycle (e.g. $D019 ACK during INC's cycle 5 dummy write) takes
+    // effect immediately, so its IRQ-line deassertion must be visible
+    // to the same-cycle sample. This differs from fetchByte() which
+    // samples BEFORE schedule() to model the 1-cycle propagation
+    // delay between VIC's IRQ assertion and the CPU's input latch.
+    sampleIrqLine();
   }
 
   // Sample the IRQ line at this CPU cycle and shift the rolling history.
