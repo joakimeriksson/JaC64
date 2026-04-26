@@ -322,6 +322,15 @@ public class C64Screen extends ExtChip implements Observer {
   private int vmode16Pipe = 0;   // MCM bit, latched at pixel 4
   private int vmode16Pipe2 = 0;  // vmode16Pipe lagged 1 cycle (used for MC pixel-pair logic)
 
+  // VIC bank-switch latch (1-cycle deferral on $DD00 → setVideoMem effect).
+  // Default OFF — first attempt regressed Krestage 3 (split column shifted
+  // wrong direction). Use fetchsplit.prg from VICE-testprogs/VICII/split-tests/
+  // to characterize the correct latch behaviour before re-enabling.
+  private final boolean cia2BankLatch = Boolean.getBoolean("jac64.dd00BankLatch");
+  private boolean cia2BankPending = false;
+  private int cia2BankPendingValue = 0;
+  private long cia2BankCommitClk = 0;
+
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
   private static final int VC_VBUF_L   = 0x11;
@@ -1495,9 +1504,36 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       cia[1].performWrite(address + IO_OFFSET, data, cpu.cycles);
-      cia2PRA = data;
-      updateCia2IecBus(false);
-      setVideoMem();
+      // VIC bank-switch latch (jac64.dd00BankLatch, default ON):
+      // Real 6569 has a 1-cycle delay on the bank-change taking effect
+      // for VIC fetches. The IEC/serial bus updates immediately, but the
+      // VIC's videoMatrix / vicBase / charMemoryIndex change only on the
+      // following cycle. Krestage 3 relies on this — its mid-line $DD00
+      // write at vbeam=66 cyc=41 splits the screen between two banks at
+      // exactly column 25; without the 1-cycle latch the split column
+      // shifts left by 1, producing wrong per-line FLI colors on the
+      // right half. See VirtualC64 issue #442 and the test ROM at
+      // ../VICE-testprogs/VICII/split-tests/fetchsplit/.
+      if (cia2BankLatch) {
+        if (cia2BankPending && cpu.cycles >= cia2BankCommitClk) {
+          // commit any prior still-pending bank change first
+          cia2PRA = cia2BankPendingValue;
+          updateCia2IecBus(false);
+          setVideoMem();
+        }
+        cia2BankPending = true;
+        cia2BankPendingValue = data;
+        cia2BankCommitClk = cpu.cycles + 1;
+        // IEC/non-bank fields update immediately so serial transfers and
+        // the existing IEC handshake stay in sync.
+        cia2PRA = data;
+        updateCia2IecBus(false);
+        // setVideoMem deferred until clock(cpu.cycles+1).
+      } else {
+        cia2PRA = data;
+        updateCia2IecBus(false);
+        setVideoMem();
+      }
       break;
 
     case 0xdd02:
@@ -1596,6 +1632,17 @@ public class C64Screen extends ExtChip implements Observer {
   private long lastCycle = 0;
 
   public final void clock(long cycles) {
+    // Commit any deferred $DD00 bank-switch (1-cycle latch). Runs before
+    // the cycle's case dispatcher so the new vicBank is visible to this
+    // cycle's c-access / g-access — matches real 6569 timing where the
+    // bank change written at cycle N takes effect from cycle N+1.
+    if (cia2BankPending && cycles >= cia2BankCommitClk) {
+      // cia2PRA was already updated at write time for IEC; just refresh
+      // the VIC-side derived registers now.
+      setVideoMem();
+      cia2BankPending = false;
+    }
+
     if (DEBUG_CYCLES || true) {
       if (lastCycle + 1 < cycles) {
         System.out.println("More than one cycle passed: " +
