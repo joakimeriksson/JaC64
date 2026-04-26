@@ -330,6 +330,11 @@ public class C64Screen extends ExtChip implements Observer {
   private boolean cia2BankPending = false;
   private int cia2BankPendingValue = 0;
   private long cia2BankCommitClk = 0;
+  // VIC-visible copy of cia2PRA — only updated when the deferred bank
+  // change commits. cia2PRA itself updates immediately for IEC purposes.
+  // Initialised to 0xff so vicBank starts at 0 (default state) until
+  // the kernal does its first $DD00 write.
+  private int cia2PRA_vicCommitted = 0xff;
 
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
@@ -1515,22 +1520,23 @@ public class C64Screen extends ExtChip implements Observer {
       // right half. See VirtualC64 issue #442 and the test ROM at
       // ../VICE-testprogs/VICII/split-tests/fetchsplit/.
       if (cia2BankLatch) {
+        // Commit any prior still-pending bank change first.
         if (cia2BankPending && cpu.cycles >= cia2BankCommitClk) {
-          // commit any prior still-pending bank change first
-          cia2PRA = cia2BankPendingValue;
-          updateCia2IecBus(false);
+          cia2PRA_vicCommitted = cia2BankPendingValue;
           setVideoMem();
         }
+        // Queue the new pending; cia2PRA_vicCommitted stays at the OLD
+        // value so $D018 / $DD02 paths that call setVideoMem() in the
+        // meantime continue to use the OLD bank.
         cia2BankPending = true;
         cia2BankPendingValue = data;
         cia2BankCommitClk = cpu.cycles + 1;
-        // IEC/non-bank fields update immediately so serial transfers and
-        // the existing IEC handshake stay in sync.
+        // IEC/non-bank fields update immediately.
         cia2PRA = data;
         updateCia2IecBus(false);
-        // setVideoMem deferred until clock(cpu.cycles+1).
       } else {
         cia2PRA = data;
+        cia2PRA_vicCommitted = data;
         updateCia2IecBus(false);
         setVideoMem();
       }
@@ -1593,8 +1599,14 @@ public class C64Screen extends ExtChip implements Observer {
           " cycles since IRQ: " + (cpu.cycles-lastIRQ) +
           " at " + vbeam);
     }
-    // Set-up vars for screen rendering
-    vicBank = (~(~cia2DDRA | cia2PRA) & 3) << 14;
+    // Set-up vars for screen rendering. When jac64.dd00BankLatch is on,
+    // use the VIC-side committed copy of cia2PRA so the bank change from
+    // a $DD00 write only takes effect 1 cycle later (matching real 6569
+    // timing). Other paths ($D018, $DD02 DDR write) still call this
+    // method but using cia2PRA_vicCommitted ensures the bank stays at
+    // its previously-latched value until the deferred commit fires.
+    final int praForVic = cia2BankLatch ? cia2PRA_vicCommitted : cia2PRA;
+    vicBank = (~(~cia2DDRA | praForVic) & 3) << 14;
     charSet = vicBank | (vicMem & 0x0e) << 10;
     videoMatrix = vicBank | (vicMem & 0xf0) << 6;
     vicBase = vicBank | (vicMem & 0x08) << 10;
@@ -1637,8 +1649,7 @@ public class C64Screen extends ExtChip implements Observer {
     // cycle's c-access / g-access — matches real 6569 timing where the
     // bank change written at cycle N takes effect from cycle N+1.
     if (cia2BankPending && cycles >= cia2BankCommitClk) {
-      // cia2PRA was already updated at write time for IEC; just refresh
-      // the VIC-side derived registers now.
+      cia2PRA_vicCommitted = cia2BankPendingValue;
       setVideoMem();
       cia2BankPending = false;
     }
