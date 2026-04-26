@@ -61,6 +61,20 @@ public class TestRaster {
         window.setBackground(Color.black);
         window.setLayout(new BorderLayout());
         window.getContentPane().add(canvas, BorderLayout.CENTER);
+
+        // Menu bar with Warp toggle.
+        javax.swing.JMenuBar menuBar = new javax.swing.JMenuBar();
+        javax.swing.JMenu speedMenu = new javax.swing.JMenu("Speed");
+        javax.swing.JCheckBoxMenuItem warpItem =
+            new javax.swing.JCheckBoxMenuItem("Warp (F12)", false);
+        warpItem.addActionListener(e -> {
+            scr.setFullSpeed(warpItem.isSelected());
+            canvas.requestFocusInWindow();
+        });
+        speedMenu.add(warpItem);
+        menuBar.add(speedMenu);
+        window.setJMenuBar(menuBar);
+
         window.pack();
         window.setSize(386 * 2 + 10, 284 * 2 + 70);
         window.setVisible(true);
@@ -70,6 +84,7 @@ public class TestRaster {
 
         if (Boolean.getBoolean("jac64.warp")) {
             scr.setFullSpeed(true);
+            warpItem.setSelected(true);
         }
 
         Thread cpuThread = new Thread(() -> cpu.start(), "C64-CPU");
@@ -429,10 +444,14 @@ public class TestRaster {
 
         // Capture screenshots every second for 30 seconds
         System.out.println("Capturing screenshots...");
+        boolean dumpScreen = Boolean.getBoolean("jac64.dumpScreen");
         for (int i = 0; i < CAPTURE_FRAMES; i++) {
             Thread.sleep(1000);
             screenshot("/tmp/jac64_test_frame_" + String.format("%03d", i) + ".png");
             System.out.println("  Frame " + i + " captured (t=" + i + "s)");
+            if (dumpScreen) {
+                dumpScreenRows(0, 6);
+            }
         }
 
         System.out.println("=== Test complete ===");
@@ -455,6 +474,9 @@ public class TestRaster {
     }
 
     private char petsciiToAscii(int sc) {
+        // Mask off inverse-video bit so we still decode characters in
+        // the high half of the screen-code range.
+        sc = sc & 0x7f;
         if (sc == 0x20) return ' ';
         if (sc >= 0x01 && sc <= 0x1a) return (char)('A' + sc - 1);
         if (sc >= 0x30 && sc <= 0x39) return (char)('0' + sc - 0x30);
@@ -462,7 +484,35 @@ public class TestRaster {
         if (sc == 0x2c) return ',';
         if (sc == 0x2a) return '*';
         if (sc == 0x22) return '"';
-        return ' ';
+        if (sc == 0x2d) return '-';
+        if (sc == 0x3f) return '?';
+        if (sc == 0x21) return '!';
+        if (sc == 0x28) return '(';
+        if (sc == 0x29) return ')';
+        if (sc == 0x2b) return '+';
+        if (sc == 0x2f) return '/';
+        if (sc == 0x3a) return ':';
+        if (sc == 0x3b) return ';';
+        if (sc == 0x3c) return '<';
+        if (sc == 0x3d) return '=';
+        if (sc == 0x3e) return '>';
+        if (sc == 0x40) return '@';
+        return '.';
+    }
+
+    private void dumpScreenRows(int firstRow, int lastRow) {
+        int screenBase = 0x0400;
+        System.out.println("--- screen rows " + firstRow + ".." + lastRow + " ---");
+        for (int row = firstRow; row <= lastRow; row++) {
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("%2d: |", row));
+            for (int col = 0; col < 40; col++) {
+                int ch = cpu.getMemory()[screenBase + row * 40 + col] & 0xff;
+                sb.append(petsciiToAscii(ch));
+            }
+            sb.append('|');
+            System.out.println(sb.toString());
+        }
     }
 
     public static void main(String[] args) throws Exception {

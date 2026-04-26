@@ -1354,29 +1354,20 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     }
 
-    case 0xd019 : {
-      if ((data & 0x80) != 0) data = 0xff;
+    case 0xd019: {
+      // VICE-style $D019 store (vicii-mem.c:227, 4 lines): clear the
+      // bits in irq_status that match (value & 0x0f) plus always clear
+      // bit 7, then re-evaluate the IRQ line. Per-cycle correctness of
+      // RMW dummy/final writes comes from the CPU emulation calling
+      // writeByte() twice with old/new values — no special-casing here.
       if (IRQDEBUG) {
         monitor.info("Latching VIC-II: " + Integer.toString(data, 16)
             + " on " + Integer.toString(irqFlags, 16));
       }
-
-      if (((CPU) cpu).isRmwDummyWrite()) {
-        irqFlags &= ~((data & 0x0f) | 0x80);
-        if ((data & 1) != 0) {
-          handleLateRasterIrqAcknowledge(true);
-        }
-        updateVicIrqLine();
-        break;
-      }
-
-      if ((data & 1) != 0) {
-        handleLateRasterIrqAcknowledge(false);
-      }
       irqFlags &= ~((data & 0x0f) | 0x80);
       updateVicIrqLine();
+      break;
     }
-    break;
     case 0xd01a:
       irqMask = data;
       updateVicIrqLine();
