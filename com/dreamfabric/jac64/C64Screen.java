@@ -336,6 +336,12 @@ public class C64Screen extends ExtChip implements Observer {
   // the kernal does its first $DD00 write.
   private int cia2PRA_vicCommitted = 0xff;
 
+  // c-access cycle alignment fix: shift c-access from cases 16-55 to
+  // cases 15-54 so col K c-access happens at JaC64 case (15+K) =
+  // VICE PAL cycle (16+K) Phi2 of cycle (15+K) — matching VICE's table.
+  // See docs/vic-ii/CYCLE_ALIGNMENT.md.
+  private final boolean cAccessShift = Boolean.getBoolean("jac64.cAccessShift");
+
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
   private static final int VC_VBUF_L   = 0x11;
@@ -1993,6 +1999,9 @@ public class C64Screen extends ExtChip implements Observer {
 
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C15");
+        // c-access for col 0 — fetched 1 cycle BEFORE col 0's pixel emit
+        // at case 16. Matches VICE Phi2(16) FetchC for col 0.
+        if (cAccessShift) fetchBadLineData(0);
       }
 
       // Turn off sprite DMA if finished reading!
@@ -2011,7 +2020,10 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C16");
-        fetchBadLineData(vmli);
+        // With cAccessShift: fetch col 1 (next cycle's pixel emit).
+        // Without: legacy — fetch col 0 (= vmli) at same cycle as emit.
+        if (cAccessShift) fetchBadLineData(1);
+        else fetchBadLineData(vmli);
       }
 
       // Draw one character here!
@@ -2033,7 +2045,8 @@ public class C64Screen extends ExtChip implements Observer {
 
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C17");
-        fetchBadLineData(vmli);
+        if (cAccessShift) fetchBadLineData(2);
+        else fetchBadLineData(vmli);
       }
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
@@ -2044,7 +2057,8 @@ public class C64Screen extends ExtChip implements Observer {
     default:
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-FETCH");
-        fetchBadLineData(vmli);
+        if (cAccessShift) fetchBadLineData(vicCycle - 15);
+        else fetchBadLineData(vmli);
       }
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
@@ -2055,7 +2069,8 @@ public class C64Screen extends ExtChip implements Observer {
     case 54:
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C54");
-        fetchBadLineData(vmli);
+        if (cAccessShift) fetchBadLineData(39);
+        else fetchBadLineData(vmli);
       }
       int mult = 1;
       int ypos = vPos + SC_SPYOFFS;
@@ -2101,7 +2116,8 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C55");
-        fetchBadLineData(vmli);
+        // With cAccessShift: col 39 already fetched at case 54; no fetch here.
+        if (!cAccessShift) fetchBadLineData(vmli);
       }
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
