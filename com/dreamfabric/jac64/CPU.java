@@ -149,14 +149,21 @@ public class CPU extends MOS6510Core {
       /* VICE order: check_ba (with prev cycle's BA flag) -> CLK_INC. */
       waitForBus(true);
       cycles++;
+      // Sample IRQ line BEFORE schedule() so we see the line state
+      // from END OF PREVIOUS cycle, not after this cycle's VIC work.
+      // This adds a 1-cycle propagation delay between an IRQ source
+      // (raised during a VIC cycle handler) and the CPU seeing it,
+      // matching real 6510 semantics where line transitions take one
+      // Phi cycle to propagate.
+      sampleIrqLine();
       schedule(cycles);
     } else {
       /* Legacy order: cycles++ -> schedule -> waitForBus. */
       cycles++;
+      sampleIrqLine();
       schedule(cycles);
       waitForBus(true);
     }
-    sampleIrqLine();
 
     if ((romFlag & adr) == romFlag) {
       return memory[rindex = adr | 0x10000];
@@ -242,12 +249,17 @@ public class CPU extends MOS6510Core {
     if (VICE_MEM_MODEL && isIO) {
       // IO writes: schedule AFTER so VIC observes the new register state
       // (e.g. $D016 update for side-border-open BA check).
+      // Sample BEFORE schedule for the 1-cycle propagation delay
+      // between an IRQ source raised during VIC's processing of this
+      // cycle and the CPU's IRQ-line latch.
+      sampleIrqLine();
       schedule(cycles);
     } else if (VICE_MEM_MODEL && !VICE_MEM_BUS_SPLIT) {
-      // Fallback: previous 4d05dc6 behaviour (write-then-schedule for all).
+      sampleIrqLine();
       schedule(cycles);
+    } else {
+      sampleIrqLine();
     }
-    sampleIrqLine();
   }
 
   // Sample the IRQ line at this CPU cycle and shift the rolling history.
