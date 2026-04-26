@@ -406,7 +406,47 @@ public class TestRaster {
         } else {
             // PRG file - load directly and run
             reader.readPGM(path, -1);
-            if (Boolean.getBoolean("jac64.sysJump")) {
+
+            // Deterministic injection (jac64.detSysJump=true, default ON
+            // for cycle-sensitive test ROMs): pause CPU at a fixed
+            // emulated cycle count, set CPU state for SYS jump
+            // synchronously, then resume. Eliminates the Thread.sleep
+            // polling races that caused cross-run output variance on
+            // tests like irq-ack-vicii.prg.
+            boolean detSysJump =
+                !"false".equalsIgnoreCase(System.getProperty("jac64.detSysJump", "true"));
+            if (detSysJump) {
+                int sysAddress = detectBasicSysAddress();
+                if (sysAddress >= 0) {
+                    long target = Long.getLong("jac64.injectAtCycle", 2_000_000L);
+                    System.out.println("Det. SYS jump: pause-at-cycle " + target);
+                    cpu.pauseAtCycle = target;
+                    // Wait for the deterministic pause to land (CPU
+                    // exits its loop at the first instruction boundary
+                    // past target — same cycle every run).
+                    for (int i = 0; i < 600; i++) {
+                        if (cpu.pause && cpu.cycles >= target) break;
+                        Thread.sleep(50);
+                    }
+                    long landed = cpu.cycles;
+                    System.out.println("Paused at cycle " + landed
+                        + " (target " + target + "), jumping to SYS $"
+                        + Integer.toHexString(sysAddress));
+                    cpu.jumpToSubroutine(sysAddress);
+                    cpu.setPause(false);
+                } else {
+                    // No SYS detected — fall back to typing RUN with
+                    // cycle-precise pause (stays deterministic).
+                    long target = Long.getLong("jac64.injectAtCycle", 2_000_000L);
+                    cpu.pauseAtCycle = target;
+                    for (int i = 0; i < 600; i++) {
+                        if (cpu.pause && cpu.cycles >= target) break;
+                        Thread.sleep(50);
+                    }
+                    cpu.enterText("RUN~");
+                    cpu.setPause(false);
+                }
+            } else if (Boolean.getBoolean("jac64.sysJump")) {
                 int sysAddress = detectBasicSysAddress();
                 if (sysAddress >= 0) {
                     waitForBasicIdle(10);

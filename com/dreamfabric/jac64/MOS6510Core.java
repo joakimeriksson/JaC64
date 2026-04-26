@@ -184,6 +184,14 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected int irqEnableDelayOps = 0;
   private boolean rmwDummyWrite = false;
 
+  // Deterministic-pause support: when set to a non-negative value, the
+  // CPU loop will exit at the FIRST instruction boundary where
+  // cycles >= pauseAtCycle. This produces a deterministic pause cycle
+  // (the first instruction boundary past the target) across runs,
+  // unlike Thread.sleep-based polling which races with JIT/OS timing.
+  // Used by the TestRaster autostart harness.
+  public volatile long pauseAtCycle = -1;
+
   // Used for actual address...
   protected int rindex = 0;
   protected int lastReadOP = 0;

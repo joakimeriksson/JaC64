@@ -639,6 +639,18 @@ public class CPU extends MOS6510Core {
         // Run one instruction!
         emulateOp();
 
+        // Deterministic pause-at-cycle: exit loop at the first
+        // instruction boundary past the requested cycle. Used by the
+        // TestRaster autostart harness to inject PRGs at a known
+        // emulated cycle count, producing reproducible test results
+        // across JVM runs.
+        if (pauseAtCycle >= 0 && cycles >= pauseAtCycle) {
+          pauseAtCycle = -1;
+          pause = true;
+          running = false;
+          break;
+        }
+
         // Also allow the 1541 to run an instruction!
         // 1541 drive runs on-demand only (synced on $DD00 read/write)
         // Matching VICE's DRIVE_IDLE_SKIP_CYCLES architecture
