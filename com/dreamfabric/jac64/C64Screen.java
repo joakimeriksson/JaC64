@@ -574,7 +574,7 @@ public class C64Screen extends ExtChip implements Observer {
    */
   private void checkHBorderRight() {
     mainBorder = true;
-    if (TRACE_VIC_CYCLE) traceAct("ChkBrdR");
+    if (TRACE_VIC_CYCLE) traceAct("ChkBrdR" + (hideColumn ? "0" : "1"));
   }
 
   /** Single gate for rendering: VICE's main_border. */
@@ -1356,6 +1356,9 @@ public class C64Screen extends ExtChip implements Observer {
       queueSpriteEnable(data);
       break;
     case 0xd016:
+      if (TRACE_VIC_CYCLE) {
+        traceAct("WrD016=$" + Integer.toHexString(data & 0xff));
+      }
       control2 = data;
       horizScroll = data & 0x7;
       multiCol = (data & 0x10) != 0;
