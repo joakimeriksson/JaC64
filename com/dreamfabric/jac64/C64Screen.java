@@ -2221,15 +2221,19 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[0].readSpriteData();
       }
 
-      if (sprites[2].dma) {
-        setBaLowUntil(lastLine + VICConstants.BA_SP2, "SPR2");
-      }
-
       break;
     case 58:
       drawBackground();
       drawSprites();
       mpos += 8;
+
+      // Sprite 2 BA-low: VICE BaSpr3(0,1,2) starts at Phi1(59),
+      // mapping to JaC64 case 58 under the case-N = VICE-cycle-(N+1)
+      // convention. Earlier this was incorrectly at case 57 (= cycle
+      // 58), one cycle too early. See docs/vic-ii/CYCLE_TRACE_FINDINGS.md.
+      if (sprites[2].dma) {
+        setBaLowUntil(lastLine + VICConstants.BA_SP2, "SPR2");
+      }
 
       break;
     case 59:
@@ -2243,6 +2247,13 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     case 60:
       drawSprites();
+      // Sprite 3 BA-low: VICE BaSpr3(1,2,3) starts at Phi1(61),
+      // mapping to JaC64 case 60. Earlier this was at case 61
+      // (= VICE cycle 62), one cycle too late. See
+      // docs/vic-ii/CYCLE_TRACE_FINDINGS.md.
+      if (sprites[3].dma) {
+        setBaLowUntil(lastLine + VICConstants.BA_SP3, "SPR3");
+      }
       break;
     case 61:
       if (sprites[2].painting) {
@@ -2250,9 +2261,6 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (useNewSprites) {
         drawSpritesV2Tail();
-      }
-      if (sprites[3].dma) {
-        setBaLowUntil(lastLine + VICConstants.BA_SP3, "SPR3");
       }
       break;
     case 62:
