@@ -112,10 +112,38 @@ several frames and checking variance.
 
 ## Next session tasks
 
-1. **Wire up cycle-trace** at IRQ entry in JaC64 + capture 5 frames; verify
-   if entry cycle is stable or variable across frames
-2. **If stable**: implement Option 1 above; gate behind
-   `-Djac64.cAccessShift=true` flag for safe rollout, validate against
-   fetchsplit.prg + lets_scroll_it + Krestage 3
-3. **If variable**: find the source of variance (likely $D012 read or BA
-   stall on IRQ vector fetch) and fix that first
+The `irq-ack-vicii.prg` test ROM at
+`/Users/joakimeriksson/work/VICE-testprogs/interrupts/irq-ackn-bug/`
+exposes the underlying bug **isolated from VIC bank switching**:
+JaC64 fails this test (red border) while VICE passes (blue/green).
+
+Comparison of `$D019` handlers:
+
+VICE (vicii-mem.c:227, 4 lines):
+```c
+vicii.irq_status &= ~((value & 0xf) | 0x80);
+vicii_irq_set_line();
+```
+
+JaC64 (C64Screen.java:1357, ~30 lines):
+- Special-cases `cpu.isRmwDummyWrite()` to handle RMW INC $D019 etc.
+- Calls `handleLateRasterIrqAcknowledge(boolean fromDummy)` for the
+  raster IRQ ACK quirk.
+- Multiple paths through the handler.
+
+**Hypothesis**: JaC64 papered over the IRQ-ack RMW timing in the
+register handler instead of in the CPU cycle simulation. That works
+for some patterns but fails the focused IRQ-ACK test. VICE's CPU
+cycle simulation makes the correct ACK timing emerge naturally.
+
+**Recommended approach**:
+1. Run `irq-ack-vicii.prg` continuously in JaC64 + VICE side-by-side
+   while iterating. Test pass/fail is instant (border green vs red).
+2. Simplify JaC64's `$D019` handler to match VICE's 4 lines.
+3. Move the RMW dummy-write quirk into the CPU core
+   (MOS6510Core.java) where each instruction's exact write timing is
+   known per-cycle.
+4. Verify `irq-ack-vicii.prg` turns green.
+5. Re-test fetchsplit.prg and Krestage 3 — if the IRQ-ack timing was
+   the root cause, fetchsplit should now show BBBB and Krestage 3
+   scroll-in colors should match VICE.
