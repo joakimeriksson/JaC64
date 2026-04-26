@@ -342,6 +342,16 @@ public class C64Screen extends ExtChip implements Observer {
   // See docs/vic-ii/CYCLE_ALIGNMENT.md.
   private final boolean cAccessShift = Boolean.getBoolean("jac64.cAccessShift");
 
+  // Phi2 split for right-border check (-Djac64.viceBrdrPhi2=true).
+  // VICE PAL fires ChkBrdR0 at Phi2(56) and ChkBrdR1 at Phi2(57). With the
+  // flag ON, JaC64 mirrors that: ChkBrdR0 fires at case 56 (was 55) and
+  // ChkBrdR1 at case 57 (was 56). Effectively delays the check by 1 case
+  // so any cycle-N CPU write commits BEFORE the same-cycle border check
+  // runs — closing the timing gap that made vicii_reg_timing's OPEN
+  // BORDER WITH ASL/LSR/ROL/ROR rows show too many lit letters.
+  private static final boolean VICE_BRDR_PHI2 =
+      Boolean.getBoolean("jac64.viceBrdrPhi2");
+
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
   private static final int VC_VBUF_L   = 0x11;
@@ -1356,9 +1366,6 @@ public class C64Screen extends ExtChip implements Observer {
       queueSpriteEnable(data);
       break;
     case 0xd016:
-      if (TRACE_VIC_CYCLE) {
-        traceAct("WrD016=$" + Integer.toHexString(data & 0xff));
-      }
       control2 = data;
       horizScroll = data & 0x7;
       multiCol = (data & 0x10) != 0;
@@ -2144,7 +2151,12 @@ public class C64Screen extends ExtChip implements Observer {
 
       break;
     case 55:
-      if (hideColumn) {
+      // ChkBrdR0 (CSEL=0 / hideColumn=true) was previously fired here.
+      // Phi2 split (-Djac64.viceBrdrPhi2=true): defer to case 56 so the
+      // check fires AFTER any CPU write at cycle 55 has committed AND
+      // its case-55 dispatcher actions have run. Matches VICE Phi2(56)
+      // timing where ChkBrdR0 happens at end-of-cycle.
+      if (!VICE_BRDR_PHI2 && hideColumn) {
         borderState |= 2;
         if (true /* viceBorderLatch default on */) {
           checkHBorderRight();
@@ -2164,7 +2176,15 @@ public class C64Screen extends ExtChip implements Observer {
 
       break;
     case 56:
-      if (!hideColumn) {
+      // ChkBrdR0 deferred from case 55 (Phi2 split).
+      if (VICE_BRDR_PHI2 && hideColumn) {
+        borderState |= 2;
+        if (true /* viceBorderLatch default on */) {
+          checkHBorderRight();
+        }
+      }
+      // ChkBrdR1 was previously fired here.
+      if (!VICE_BRDR_PHI2 && !hideColumn) {
         borderState |= 2;
         if (true /* viceBorderLatch default on */) {
           checkHBorderRight();
@@ -2192,6 +2212,13 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 57:
+      // ChkBrdR1 deferred from case 56 (Phi2 split).
+      if (VICE_BRDR_PHI2 && !hideColumn) {
+        borderState |= 2;
+        if (true /* viceBorderLatch default on */) {
+          checkHBorderRight();
+        }
+      }
       for (int i = 0, n = 8; i < n; i++) {
         Sprite sprite = sprites[i];
         if (sprite.dma)
