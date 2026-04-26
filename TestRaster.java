@@ -510,7 +510,11 @@ public class TestRaster {
         for (int i = 0; i < CAPTURE_FRAMES; i++) {
             Thread.sleep(1000);
             screenshot("/tmp/jac64_test_frame_" + String.format("%03d", i) + ".png");
-            System.out.println("  Frame " + i + " captured (t=" + i + "s)");
+            int d020 = readIo(0xd020) & 0x0f;
+            int d7ff = cpu.getMemory()[0xd7ff] & 0xff;
+            System.out.println("  Frame " + i + " captured (t=" + i + "s)"
+                + " $D020=$" + Integer.toHexString(d020)
+                + " $D7FF=$" + Integer.toHexString(d7ff));
             if (dumpScreen) {
                 int rows = Integer.getInteger("jac64.dumpRows", 6);
                 dumpScreenRows(0, rows);
@@ -519,16 +523,24 @@ public class TestRaster {
 
         // Test-ROM pass/fail signal: many VICE testprogs write a result
         // code to $D020 (border) or $D7FF (color RAM last byte):
-        //   $D020 $05 = pass (green), $D02 = fail (red)
-        //   $D7FF $00 = pass, $D7FF $0F = fail (irq-ack-vicii)
-        int d020 = cpu.getMemory()[0xd020 + 0x10000] & 0x0f;
+        //   $D020 $05 = pass (green), $D020 $02 = fail (red)
+        //   $D7FF $00 = pass, $D7FF $FF = fail (irq-ack-vicii)
+        // $D020 is a VIC-II I/O register — must be read via the chip API,
+        // not direct memory[0xd020] which addresses ROM space.
+        int d020 = readIo(0xd020) & 0x0f;
         int d7ff = cpu.getMemory()[0xd7ff] & 0xff;
         String passFail;
-        if (d020 == 5) passFail = "PASS (D020=5)";
-        else if (d020 == 2) passFail = "FAIL (D020=2)";
-        else if (d7ff == 0x00) passFail = "PASS (D7FF=0)";
-        else if (d7ff == 0xff) passFail = "FAIL (D7FF=ff)";
-        else passFail = "? (no signal)";
+        // Border-color pixel sample is the truth. $D7FF agrees with it
+        // when both reach end_of_tests, but $D020-via-pixel handles
+        // tests that hang in IRQ loops without ever reaching the final
+        // stx $d7ff.
+        if (d020 == 5) passFail = "PASS (border=green)";
+        else if (d020 == 2) passFail = "FAIL (border=red)";
+        else if (d7ff == 0x00) passFail = "PASS? (D7FF=0, border=$"
+            + Integer.toHexString(d020) + ")";
+        else if (d7ff == 0xff) passFail = "FAIL? (D7FF=ff, border=$"
+            + Integer.toHexString(d020) + ")";
+        else passFail = "? (no signal, border=$" + Integer.toHexString(d020) + ")";
         System.out.println("=== Test complete: $D020=$" + Integer.toHexString(d020)
             + " $D7FF=$" + Integer.toHexString(d7ff) + " → " + passFail + " ===");
         System.out.println("Screenshots in /tmp/jac64_test_frame_*.png");
@@ -574,6 +586,54 @@ public class TestRaster {
         if (sc == 0x3e) return '>';
         if (sc == 0x40) return '@';
         return '.';
+    }
+
+    private int readIo(int address) {
+        // Sample the top-left border pixel from the rendered framebuffer
+        // and reverse-look up its CBM color index. The actual rendered
+        // border is the truth — register-field reflection sometimes
+        // shows stale state vs the screenshot.
+        try {
+            Object chips = cpu.getChips();
+            java.lang.reflect.Method m =
+                chips.getClass().getMethod("getPixelBuffer");
+            int[] buf = (int[]) m.invoke(chips);
+            // Top-left pixel is in the border area.
+            int rgb = buf[0] & 0xFFFFFF;
+            int idx = cbmRgbToIndex(rgb);
+            // For debugging: stash raw color separately if needed.
+            if (Boolean.getBoolean("jac64.tracePixel")) {
+                System.out.println("  border pixel rgb=$"
+                    + Integer.toHexString(rgb) + " idx=$" + Integer.toHexString(idx));
+            }
+            return idx;
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
+    /**
+     * Reverse mapping from rendered ARGB to the 16-color JaC64 palette.
+     * Matches VICConstants.COLOR_SETS[0] exactly.
+     */
+    private int cbmRgbToIndex(int rgb) {
+        int[] pal = {
+            0x000000, 0xffffff, 0xe04040, 0x60ffff,
+            0xe060e0, 0x40e040, 0x4040e0, 0xffff40,
+            0xe0a040, 0x9c7448, 0xffa0a0, 0x545454,
+            0x888888, 0xa0ffa0, 0xa0a0ff, 0xc0c0c0,
+        };
+        int best = -1;
+        int bestD = Integer.MAX_VALUE;
+        int r = (rgb >> 16) & 0xff, g = (rgb >> 8) & 0xff, b = rgb & 0xff;
+        for (int i = 0; i < 16; i++) {
+            int pr = (pal[i] >> 16) & 0xff;
+            int pg = (pal[i] >> 8) & 0xff;
+            int pb = pal[i] & 0xff;
+            int d = (pr - r) * (pr - r) + (pg - g) * (pg - g) + (pb - b) * (pb - b);
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
     }
 
     private void dumpScreenRows(int firstRow, int lastRow) {

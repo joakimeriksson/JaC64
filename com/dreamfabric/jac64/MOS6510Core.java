@@ -38,6 +38,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected PatchListener list;
   protected ExtChip chips = null;
 
+  /** Return the chips (VIC/CIA/SID composite) for diagnostic access. */
+  public ExtChip getChips() { return chips; }
+
   protected IMonitor monitor;
   public String codebase;
 
