@@ -1759,15 +1759,18 @@ public class C64Screen extends ExtChip implements Observer {
         initUpdate();
       }
 
-      // Sprite collission interrupts - checked once per line
+      // Sprite collision IRQ sources — match VICE viciisc. Source bits
+      // are bit 1 (sprite-bg collision) and bit 2 (sprite-sprite
+      // collision). Master bit 7 is set by updateVicIrqLine() based on
+      // (mask & flags & 0x0f).
       if (((irqMask & 2) != 0) && (sprBgCol != 0) &&
           (irqFlags & 2) == 0) {
-        irqFlags |= 82;
+        irqFlags |= 0x02;
         setIRQ(VIC_IRQ);
       }
       if (((irqMask & 4) != 0) && (sprCol != 0) &&
           (irqFlags & 4) == 0) {
-        irqFlags |= 84;
+        irqFlags |= 0x04;
         setIRQ(VIC_IRQ);
       }
       notVisible = false;
