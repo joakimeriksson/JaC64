@@ -2491,6 +2491,7 @@ public class C64Screen extends ExtChip implements Observer {
       if ((irqMask & 4) != 0) {
         setIRQ(VIC_IRQ);
       }
+      if (TRACE_VIC_CYCLE) traceAct("SSCol-fire-eoc");
     }
     if (sprBgColCanFire && sprBgCol != 0) {
       irqFlags |= 0x02;
