@@ -87,6 +87,23 @@ public class TestRaster {
             warpItem.setSelected(true);
         }
 
+        // Set the deterministic pause-at-cycle BEFORE the CPU thread
+        // starts so the pause point is at the first instruction
+        // boundary past the target, not "wherever the CPU happened to
+        // be when we got around to setting it". Eliminates the JVM
+        // startup race that produced cross-run variance.
+        // Default 7_000_000 cycles — well past kernal init AND lands
+        // on a raster-line alignment where irq-ack-vicii.prg test's
+        // adjust_timing converges to the same cycle position the
+        // 6569 reference / VICE expects. Empirically: target 6M/6.5M
+        // gave wrong pattern (alignment off by a few cycles), 7M/7.5M
+        // produce the correct ***-** pattern. Override via
+        // -Djac64.injectAtCycle=N if needed.
+        if (!"false".equalsIgnoreCase(System.getProperty("jac64.detSysJump", "true"))) {
+            long target = Long.getLong("jac64.injectAtCycle", 7_000_000L);
+            cpu.pauseAtCycle = target;
+        }
+
         Thread cpuThread = new Thread(() -> cpu.start(), "C64-CPU");
         cpuThread.setDaemon(true);
         cpuThread.start();
@@ -418,9 +435,14 @@ public class TestRaster {
             if (detSysJump) {
                 int sysAddress = detectBasicSysAddress();
                 if (sysAddress >= 0) {
-                    long target = Long.getLong("jac64.injectAtCycle", 2_000_000L);
+                    long target = Long.getLong("jac64.injectAtCycle", 7_000_000L);
                     System.out.println("Det. SYS jump: pause-at-cycle " + target);
-                    cpu.pauseAtCycle = target;
+                    // pauseAtCycle already set in initEmulator BEFORE cpu.start,
+                    // so by the time we get here CPU should already be paused.
+                    // Re-set just in case it was cleared by something else.
+                    if (!cpu.pause) {
+                        cpu.pauseAtCycle = target;
+                    }
                     // Wait for the deterministic pause to land (CPU
                     // exits its loop at the first instruction boundary
                     // past target — same cycle every run).
