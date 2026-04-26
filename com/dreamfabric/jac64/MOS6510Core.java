@@ -192,18 +192,22 @@ public abstract class MOS6510Core extends MOS6510Ops {
   // Used by the TestRaster autostart harness.
   public volatile long pauseAtCycle = -1;
 
-  // Phase A: real-6510 IRQ-line latching
-  // Rolling 2-cycle history of the IRQ line, sampled at every memory
-  // access (fetchByte/writeByte = once per CPU cycle). After the last
-  // memory access of an instruction, irqLineAtPrevCall holds the value
-  // sampled at the SECOND-TO-LAST cycle — which is exactly where real
-  // 6510 latches the IRQ line for the boundary check. See
-  // docs/vic-ii/PHASE_A_IRQ_LATCHING.md.
-  // Enable via -Djac64.phaseAIrqLatch=true (default ON).
+  // Phase A: real-6510 IRQ-line latching (kept as opt-in flag; see
+  // docs/vic-ii/PHASE_A_IRQ_LATCHING.md). Empirical comparison with
+  // VICE source (maincpu.c:484, interrupt.h:39) showed VICE uses the
+  // SAME irq_clk + IRQ_DELAY=2 model JaC64 already had. The rolling
+  // latch was the wrong direction. Default OFF.
   protected boolean irqLineAtCurrCall = false;
   protected boolean irqLineAtPrevCall = false;
   protected static final boolean PHASE_A_IRQ_LATCH =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.phaseAIrqLatch", "true"));
+      Boolean.getBoolean("jac64.phaseAIrqLatch");
+
+  // VICE's "branch-taken-no-page-cross" IRQ delay quirk
+  // (6510core.c:991, OPCODE_DELAYS_INTERRUPT). Real 6502: when a branch
+  // is taken WITHOUT crossing a page boundary, IRQs/NMIs are delayed
+  // by 1 extra cycle. Tracked in branchDelaysIrq and consumed by the
+  // IRQ-pending check.
+  protected boolean branchDelaysIrq = false;
 
   // Used for actual address...
   protected int rindex = 0;
@@ -316,6 +320,12 @@ public abstract class MOS6510Core extends MOS6510Ops {
       /* correct branch */
       if (cycDiff == 1) {
         fetchByte(pc);
+        // Branch taken with NO page boundary cross → 1 extra cycle of
+        // IRQ delay (VICE 6510core.c:991, OPCODE_DELAYS_INTERRUPT).
+        // Real 6502 latches the IRQ line state from BEFORE the branch
+        // instruction's last cycle, so the IRQ for these branches is
+        // pushed to the instruction-after-next.
+        branchDelaysIrq = true;
       } else {
         if (pc < oldPC)
           fetchByte(pc + 0x100);
@@ -366,7 +376,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
         return;
       } else if ((PHASE_A_IRQ_LATCH
                     ? (irqLineAtPrevCall && irqEnableDelayOps == 0)
-                    : (IRQLow && cycles >= irqCycleStart
+                    : (IRQLow && cycles >= irqCycleStart + (branchDelaysIrq ? 1 : 0)
                         && irqEnableDelayOps == 0))
                 || brk) {
         if (!disableInterupt) {
@@ -399,6 +409,12 @@ public abstract class MOS6510Core extends MOS6510Ops {
         jumpTo = -1;
       }
     }
+
+    // Clear the per-instruction "branch-delays-IRQ" flag now that
+    // the IRQ-pending check (which read it above) has finished. The
+    // flag will be set again if the upcoming instruction is a branch
+    // taken with no page-boundary cross.
+    branchDelaysIrq = false;
 
     // Ok no interrupts, execute instruction
     // fetch instruction!
