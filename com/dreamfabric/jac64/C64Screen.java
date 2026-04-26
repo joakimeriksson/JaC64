@@ -1759,20 +1759,13 @@ public class C64Screen extends ExtChip implements Observer {
         initUpdate();
       }
 
-      // Sprite collision IRQ sources — match VICE viciisc. Source bits
-      // are bit 1 (sprite-bg collision) and bit 2 (sprite-sprite
-      // collision). Master bit 7 is set by updateVicIrqLine() based on
-      // (mask & flags & 0x0f).
-      if (((irqMask & 2) != 0) && (sprBgCol != 0) &&
-          (irqFlags & 2) == 0) {
-        irqFlags |= 0x02;
-        setIRQ(VIC_IRQ);
-      }
-      if (((irqMask & 4) != 0) && (sprCol != 0) &&
-          (irqFlags & 4) == 0) {
-        irqFlags |= 0x04;
-        setIRQ(VIC_IRQ);
-      }
+      // Sprite collision IRQs are now fired AT collision detection
+      // time (inside drawSprites paths), not once-per-line here. This
+      // matches VICE viciisc/vicii-cycle.c:428 where the IRQ fires
+      // only on 0→non-zero transition of the collision register.
+      // The previous once-per-line check fired at every line where a
+      // collision existed, producing wrong patterns on
+      // irq-ack-vicii.prg's SS-COL test.
       notVisible = false;
       if (vPos < 0 || vPos >= 284) {
         notVisible = true;
@@ -2666,10 +2659,27 @@ public class C64Screen extends ExtChip implements Observer {
 
             if (tmp != smult) {
               if ((tmp & 0x100) != 0) {
+                // Sprite-background collision: fire IRQ on 0→non-zero
+                // transition (matches VICE viciisc/vicii-cycle.c:431).
+                boolean wasZero = (sprBgCol == 0);
                 sprBgCol |= smult;
+                if (wasZero && (irqMask & 2) != 0) {
+                  irqFlags |= 0x02;
+                  setIRQ(VIC_IRQ);
+                }
               }
               if ((tmp & 0xff) != smult) {
+                // Sprite-sprite collision: fire IRQ on 0→non-zero
+                // transition (matches VICE viciisc/vicii-cycle.c:428).
+                // Previously fired once-per-line in case 0 of the
+                // dispatcher — that ignored the transition rule and
+                // produced wrong patterns on irq-ack-vicii.prg SS-COL.
+                boolean wasZero = (sprCol == 0);
                 sprCol |= tmp & 0xff;
+                if (wasZero && (irqMask & 4) != 0) {
+                  irqFlags |= 0x04;
+                  setIRQ(VIC_IRQ);
+                }
               }
             }
           }
