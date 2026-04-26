@@ -156,6 +156,7 @@ public class CPU extends MOS6510Core {
       schedule(cycles);
       waitForBus(true);
     }
+    sampleIrqLine();
 
     if ((romFlag & adr) == romFlag) {
       return memory[rindex = adr | 0x10000];
@@ -245,6 +246,18 @@ public class CPU extends MOS6510Core {
     } else if (VICE_MEM_MODEL && !VICE_MEM_BUS_SPLIT) {
       // Fallback: previous 4d05dc6 behaviour (write-then-schedule for all).
       schedule(cycles);
+    }
+    sampleIrqLine();
+  }
+
+  // Sample the IRQ line at this CPU cycle and shift the rolling history.
+  // After the last memory access of an instruction, irqLineAtPrevCall
+  // holds the value sampled at the SECOND-TO-LAST cycle — matching real
+  // 6510 IRQ-latching semantics. See docs/vic-ii/PHASE_A_IRQ_LATCHING.md.
+  private void sampleIrqLine() {
+    if (PHASE_A_IRQ_LATCH) {
+      irqLineAtPrevCall = irqLineAtCurrCall;
+      irqLineAtCurrCall = irqRequested;
     }
   }
 

@@ -49,7 +49,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public boolean NMILastLow = false;
   private boolean NMIPending = false;
   private boolean IRQLow = false;
-  private boolean irqRequested = false;
+  protected boolean irqRequested = false;
   public int lastInterrupt = 0;
   public boolean busAvailable = true;
   public long baLowUntil = 0;
@@ -191,6 +191,19 @@ public abstract class MOS6510Core extends MOS6510Ops {
   // unlike Thread.sleep-based polling which races with JIT/OS timing.
   // Used by the TestRaster autostart harness.
   public volatile long pauseAtCycle = -1;
+
+  // Phase A: real-6510 IRQ-line latching
+  // Rolling 2-cycle history of the IRQ line, sampled at every memory
+  // access (fetchByte/writeByte = once per CPU cycle). After the last
+  // memory access of an instruction, irqLineAtPrevCall holds the value
+  // sampled at the SECOND-TO-LAST cycle — which is exactly where real
+  // 6510 latches the IRQ line for the boundary check. See
+  // docs/vic-ii/PHASE_A_IRQ_LATCHING.md.
+  // Enable via -Djac64.phaseAIrqLatch=true (default ON).
+  protected boolean irqLineAtCurrCall = false;
+  protected boolean irqLineAtPrevCall = false;
+  protected static final boolean PHASE_A_IRQ_LATCH =
+      !"false".equalsIgnoreCase(System.getProperty("jac64.phaseAIrqLatch", "true"));
 
   // Used for actual address...
   protected int rindex = 0;
@@ -351,8 +364,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
         NMILastLow = NMILow;
         // Just the interrupt handling... do nothing more...
         return;
-      } else if ((IRQLow && cycles >= irqCycleStart
-          && irqEnableDelayOps == 0) || brk) {
+      } else if ((PHASE_A_IRQ_LATCH
+                    ? (irqLineAtPrevCall && irqEnableDelayOps == 0)
+                    : (IRQLow && cycles >= irqCycleStart
+                        && irqEnableDelayOps == 0))
+                || brk) {
         if (!disableInterupt) {
           log("IRQ interrupt > " + IRQLow + " BRK: " +  brk);
           lastInterrupt = IRQ_INT;
