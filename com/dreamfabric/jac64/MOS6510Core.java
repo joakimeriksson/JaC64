@@ -225,16 +225,21 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public int getStatus() { return getStatusByte(); }
 
   private final void doInterrupt(int adr, int status) {
-//  System.out.println("Doing Interrupt disableInterrupt before: " +
-//  disableInterupt);
+    // VICE 6510dtvcore.c:314-348 (DO_IRQBRK + DO_INTERRUPT) cycle order:
+    //   1-2. dummy fetches at PC, PC+1
+    //   3. PUSH PCH
+    //   4. PUSH PCL
+    //   5. PUSH P
+    //   6. LOAD vector_lo at $FFFE/$FFFA  (lo BEFORE hi)
+    //   7. LOAD vector_hi at $FFFF/$FFFB
     fetchByte(pc);
     fetchByte(pc + 1);
-    push((pc & 0xff00) >> 8); // HI ??
-    push(pc & 0x00ff); // LOW ??
+    push((pc & 0xff00) >> 8);
+    push(pc & 0x00ff);
     push(status);
     interruptInExec++;
-    pc = (fetchByte(adr + 1) << 8);
-    pc += fetchByte(adr);
+    pc = fetchByte(adr);
+    pc |= fetchByte(adr + 1) << 8;
   }
 
   protected final int getStatusByte() {
@@ -657,11 +662,17 @@ public abstract class MOS6510Core extends MOS6510Ops {
       break;
       // Jumps
     case JSR:
-      pc++;
-      adr = (fetchByte(pc) << 8) + p1;
-      fetchByte(s | 0x100);
-      push((pc & 0xff00) >> 8); // HI
-      push(pc & 0x00ff); // LOW
+      // VICE 6510dtvcore.c:1201-1220 cycle order:
+      //   3. STACK_PEEK + CLK_INC  (dummy read at $0100|S)
+      //   4. PUSH PCH + CLK_INC
+      //   5. PUSH PCL + CLK_INC
+      //   6. LOAD reg_pc + CLK_INC (fetch ADH — last cycle)
+      // The hi-byte fetch happens AFTER the pushes, not before.
+      pc++;                              // pc -> address of hi byte (= N+2)
+      fetchByte(s | 0x100);              // cycle 3: stack peek
+      push((pc & 0xff00) >> 8);          // cycle 4: push PCH (of N+2)
+      push(pc & 0x00ff);                 // cycle 5: push PCL
+      adr = (fetchByte(pc) << 8) + p1;   // cycle 6: fetch ADH + JUMP
       pc = adr;
       break;
     case JMP:

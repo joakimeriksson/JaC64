@@ -1,123 +1,151 @@
-# Cycle-stepped CPU/VIC refactor — full plan
+# Cycle-stepped CPU/VIC refactor — REVISED plan
 
-After today's careful comparison work, here's the concrete path to
-make JaC64 cycle-exact like VICE viciisc. Multi-day work; this doc
-captures everything we've learned so the next session can land it
-cleanly.
+After re-reading VICE c64cpusc.c carefully (and on user
+challenge: *"are you really sure that VICE do that?"*), the
+earlier plan was based on a wrong reading of VICE.
 
-## What we know works
+## What VICE actually does
 
-1. **Bus-level cycle accuracy** — JaC64's `fetchByte`/`writeByte` each
-   do `cycles++` + `schedule(cycles)`, so VIC sees individual cycles.
-2. **CIA1+CIA2 timer accuracy** — `cia-timer-oldcias.prg` passes 8/8.
-3. **IRQ-line latching** with branch-no-page-cross delay matches
-   VICE's `interrupt_check_irq_delay` (`maincpu.c:484`).
-4. **Sprite collision IRQ on 0→non-zero transition** matches
-   `vicii-cycle.c:428`.
+VICE's c64cpusc is **instruction-stepped, not cycle-stepped
+inside an instruction**.
 
-## What's wrong (root cause)
+- `CLK_INC()` (defined ONLY in c64cpusc.c:47) is the only thing
+  that calls `vicii_cycle()`. It bumps `maincpu_clk++` and runs
+  one VIC cycle.
+- `CLK_ADD(clock, amount)` (6510core.c:114 fallback) is just
+  `clock += amount`. It does **not** call `vicii_cycle`.
+- `CLK_INC()` appears **only inside `FETCH_OPCODE`**
+  (c64cpusc.c:131-176). Every other macro (STORE_ABS,
+  STORE_ABS_X, LOAD_IND_Y, DCP_IND_Y, DEC, INC, etc.) uses
+  `CLK_ADD`.
 
-**JaC64 has TWO concurrent off-by-N misalignments:**
-
-### (a) Write order
-
-VICE's `STORE_ABS` (`6510core.c:651`):
+Example — `DCP_IND_Y(addr)`:
 ```c
-CLK_INC()                  // vicii_cycle with OLD reg
-STORE(addr, value)         // write happens
+CLK_ADD(CLK, 2);          // clock += 2, VIC unchanged
+LOAD_DUMMY(...);
+CLK_ADD_DUMMY(CLK, 1);    // clock += 1, VIC unchanged
+LOAD(tmp_addr);
+CLK_ADD(CLK, 1);          // clock += 1, VIC unchanged
+CLK_ADD_DUMMY(CLK, 1);    // clock += 1, VIC unchanged
+DUMMY_STORE_ABS_RMW(...);
+STORE_ABS(tmp_addr, tmp, 1);   // CLK_ADD(1) + STORE
 ```
 
-JaC64's `writeByte` (current):
-```java
-cycles++
-chips.performWrite(...)    // write happens
-schedule(cycles)           // vicii_cycle with NEW reg
-```
+So VIC is up to **6 cycles behind** clock during this
+instruction body. VIC catches up at the NEXT instruction's
+`FETCH_OPCODE` (which calls `CLK_INC` 2-3 times back-to-back).
 
-VICE: 1-cycle delay between write and VIC seeing it.
-JaC64: 0-cycle delay (write same-cycle visible).
+## Implications for write order
 
-### (b) Case dispatcher cycle numbering
+For `STA $D016`:
+1. FETCH_OPCODE: 3× CLK_INC → clock=3, vicii.raster_cycle=3
+2. STORE_ABS: CLK_ADD(1); STORE → clock=4, raster=3 (lagging),
+   register $D016 written at clock=4
+3. Next FETCH_OPCODE: LOAD opcode (clock=4); CLK_INC → clock=5,
+   raster=4 → vicii_cycle for raster=4 runs with $D016 already
+   committed.
 
-JaC64 case 0 vbeam++ + SprDma0(3) ≈ VICE cycle 1's actions.
-But JaC64 case 16 c-access for col 0 ≠ VICE Phi2(15) c-access for col 0.
+**Net result**: VIC's cycle-4 actions see the new register value
+— exactly what JaC64 does today (`cycles++; performWrite;
+schedule(cycles)`).
 
-Anchor by sprite events: case N = cycle N+1.
-Anchor by c-access: case 16 maps to VICE cycle 17 (= col 2 c-access in VICE).
+So **no write-order bug exists in JaC64**. The earlier theory
+was wrong, and the schedule-before-store experiment correctly
+broke Krestage 3 banner stripes (commit `fa9cafc` reverted).
 
-**2-cycle offset in c-access vs sprite anchor.**
+## What's actually wrong then?
 
-These two misalignments **cancel out** for the Krestage 3 banner DEC trick:
-- (a) JaC64's write at cycle N visible to VIC at cycle N (vs VICE: cycle N+1)
-- (b) JaC64's check_R fires at case-X (= "VICE cycle X+1") which is
-  shifted from where VICE actually fires it
-- Net: behavioural equivalence by coincidence
+The remaining test ROM failures (`vicii_reg_timing` OPEN BORDER
+WITH STA: 5 wrong positions, `irq-ack-vicii` SS-COL last 2 chars
+`DDDDDD` vs ref `DDDD..`) point at **cycle dispatch
+numbering**, not write order:
 
-When we fix (a) only (schedule-before-store), the cancellation breaks
-and banner regresses. Both must be fixed together.
+- JaC64 `case 0` does vbeam++ + SprDma0(3), VICE
+  `vicii_cycle()` at raster_cycle=1 does
+  `vicii_cycle_end_of_line` + `vicii_cycle_start_of_line` +
+  raster_line++.
+- JaC64 c-access at `case 16` for column 0; VICE c-access at
+  `raster_cycle=15` Phi2 for column 0.
+- 1-2 cycle drift in WHICH register reads/writes match WHICH
+  VIC fetch.
 
-## The refactor plan
+Plus: **VIC register reads during instruction body** — in VICE,
+a `LDA $D012` inside e.g. `LDA ($zp),Y` reads at clock=N when
+vicii.raster_cycle=N-K (lagging by K). The returned $D012
+reflects the OLDER VIC state. JaC64 schedules vicii_cycle on
+every memory access, so JaC64 returns the CURRENT VIC state.
+This is a real divergence but only matters for code reading
+$D011/$D012/etc. mid-instruction, not for the demos in our
+test set.
 
-### Phase 1: Cycle table redefinition (~1 day)
+## Revised plan
 
-Replace JaC64's case-0 to case-62 dispatcher with VICE's `cycle_tab_pal`
-(`vicii-chip-model.c:111`). Each cycle has explicit Phi1 and Phi2
-actions. Cases 0-62 become cycles 1-63 inclusive.
+### Phase 1: Cycle-table alignment (~1-2 days)
 
-For each VICE cycle action, port the corresponding JaC64 logic:
-- SprPtr(N) / SprDma0(N) / SprDma1(N) / SprDma2(N) → existing sprite
-  fetch code
-- FetchC → existing fetchBadLineData
-- FetchG → existing g-access (currently inside drawGraphics)
-- ChkBrdL/R, ChkSprDma, etc. → existing border/sprite checks
-- UpdateVc, UpdateRc, UpdateMcBase → existing counter updates
-- Vis(N) → pixel emit positions
+Match JaC64's `case N` to VICE's `raster_cycle = N+1` (or
+N, TBD by careful comparison). For each VICE cycle, port the
+exact action set from `vicii-chip-model.c:111` (`cycle_tab_pal`).
 
-### Phase 2: Two-phase cycle (~2 days)
+Tools:
+- VICE trace: `x64sc -tracecpu -tracevicii` to capture
+  per-cycle Phi1/Phi2 actions on a known input.
+- JaC64 instrumented dispatcher: log `case N` actions and
+  compare side-by-side.
 
-VICE has Phi1 and Phi2 within each cycle. JaC64's case is one phase.
-Split each case into Phi1 and Phi2 sub-handlers. CPU activity
-(reads/writes) interleaves with VIC's Phi1 fetches and Phi2 fetches
-at the right phase.
+Targets:
+- `vicii_reg_timing` OPEN BORDER WITH STA: align cycle numbers
+  so STA $D011 lands at the cycle where VIC commits the value.
+- Krestage 3 banner: must NOT regress.
 
-### Phase 3: STORE/LOAD timing (~1 day)
+### Phase 2: Phi1/Phi2 split (~optional, only if needed)
 
-With cycles properly numbered AND CPU operations placed at correct
-Phi within cycle, swap `writeByte` to schedule-before-store. With both
-fixes in place, VIC sees OLD reg at cycle N (during cycle-N's
-actions), CPU writes at end of cycle, VIC sees NEW at cycle N+1.
+If Phase 1 doesn't fix all remaining failures, split each cycle
+into Phi1 (VIC fetch) and Phi2 (CPU memory access). This is the
+only way to make $D018 mid-cycle write timing match VICE's
+single-cycle resolution.
 
-This matches VICE STORE_ABS exactly.
+This is heavy work and may break demos. Only proceed if
+Phase 1 alone leaves test failures.
 
-### Phase 4: Validation pass (~1 day)
+### Phase 3: VIC register read freshness (~half day)
 
-Re-run all test ROMs:
-- ✅ cia-timer-oldcias.prg (8/8 should still pass)
-- 🎯 irq-ack-vicii.prg RASTER + SS-COL (target 8/8, no entry-cycle dep)
-- 🎯 vicii_reg_timing.prg (target all OPEN BORDER positions match ref)
-- 🎯 fetchsplit.prg (target BBBB on first row)
-- ✅ Krestage 3 banner stripes (must not regress)
-- ✅ Krestage 3 FLI beast scene
-- ✅ lets_scroll_it bitmap+text (must not regress)
+For maximum VICE compatibility on demos that read $D011/$D012
+mid-instruction, **delay** the schedule() call on VIC register
+reads to match VICE's lagging behavior. This is contrary to
+intuition (we want fresh reads) but matches VICE.
 
-### Phase 5: Cleanup (~1 day)
+Skip unless we hit a demo that needs it.
 
-- Remove flags introduced as bandaids (jac64.viceMemBus,
-  jac64.cAccessShift, jac64.dd00BankLatch)
-- Remove rolling IRQ latch infrastructure (PHASE_A_IRQ_LATCH) since
-  cycle-stepped CPU produces the right behaviour naturally
-- Update CYCLE_ALIGNMENT.md / VICE_PORT_PLAN.md to reflect ship state
+### Phase 4: Validation (~1 day)
 
-## Total: ~5 days focused work
+- ✅ cia-timer-oldcias.prg (8/8)
+- 🎯 irq-ack-vicii.prg RASTER (currently 4/4) + SS-COL (target 4/4)
+- 🎯 vicii_reg_timing.prg (target all OPEN BORDER positions match)
+- 🎯 fetchsplit.prg
+- ✅ Krestage 3 banner stripes
+- ✅ Krestage 3 FLI beast
+- ✅ lets_scroll_it bitmap+text
 
-Worth doing because afterwards JaC64 has a strong claim to "VICE
-cycle-accurate" — every test ROM passes deterministically, demos
-that work in VICE work identically in JaC64.
+### Phase 5: Cleanup (~half day)
 
-## Why we can't ship a partial fix
+Same as before — remove flag-gated experiments, document
+decisions taken.
 
-Tested today (commit fa9cafc): swapping `writeByte` to schedule-before-store ALONE
-gets `vicii_reg_timing` STA right but breaks Krestage 3 banner. The
-two misalignments cancel, so individually fixing one breaks demos.
-Both Phase 1 (cycle numbering) AND Phase 3 (write order) must be
-applied together.
+## Total: ~3 days (down from 5)
+
+The write-order rework was unnecessary — that saves 1-2 days.
+What remains is cycle-table alignment, which is the legitimate
+divergence between JaC64 and VICE.
+
+## Why the user's question mattered
+
+Pushing back on *"is that what VICE do?"* prevented us from
+applying a write-order rewrite that would've broken Krestage 3
+to "fix" a non-issue. The DCP_IND_Y example (which the user
+shared) is the clearest evidence: VICE bumps clock by 5 via
+CLK_ADD without ever calling vicii_cycle, then does STORE_ABS
+which adds one more CLK_ADD + STORE. VIC catches up later.
+
+Lesson for next time: read the macros from leaf (CLK_ADD) up,
+not from the top down. The single-line `CLK_ADD` definition
+contradicts what STORE_ABS appears to do.
