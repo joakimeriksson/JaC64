@@ -228,9 +228,15 @@ public class CPU extends MOS6510Core {
     final boolean isIO = ioON && ((adr & 0xf000) == 0xd000);
 
     if (VICE_MEM_BUS_SPLIT && !isIO) {
-      // Phi1/Phi2 split: VIC's Phi1 fetch at cycle N runs BEFORE CPU's Phi2
-      // write applies, so catch up the VIC first. The actual memory[] update
-      // happens after — visible to VIC's case-(N+1) fetch onwards.
+      // Phi1/Phi2 split (opt-in): VIC's Phi1 fetch at cycle N runs
+      // BEFORE CPU's Phi2 write applies. Catch up the VIC first; the
+      // memory[] update happens after — visible to VIC's case-(N+1)
+      // fetch onwards. Default off because the VICE STORE_ABS-style
+      // schedule-before-store ALSO breaks the Krestage 3 banner trick
+      // (RMW DEC $D016 timing). The conflict suggests JaC64's case
+      // dispatcher numbering is off by 1 vs VICE's PAL cycle table —
+      // fixing that root cause would let schedule-before-store work
+      // for both VIC tests AND the banner. Multi-day refactor.
       schedule(cycles);
     }
 
@@ -247,18 +253,10 @@ public class CPU extends MOS6510Core {
       }
     }
     if (VICE_MEM_MODEL && isIO) {
-      // IO writes: schedule AFTER so VIC observes the new register state
-      // (e.g. $D016 update for side-border-open BA check).
       schedule(cycles);
     } else if (VICE_MEM_MODEL && !VICE_MEM_BUS_SPLIT) {
       schedule(cycles);
     }
-    // For writes: sample AFTER schedule(). The CPU's write at this
-    // cycle (e.g. $D019 ACK during INC's cycle 5 dummy write) takes
-    // effect immediately, so its IRQ-line deassertion must be visible
-    // to the same-cycle sample. This differs from fetchByte() which
-    // samples BEFORE schedule() to model the 1-cycle propagation
-    // delay between VIC's IRQ assertion and the CPU's input latch.
     sampleIrqLine();
   }
 
