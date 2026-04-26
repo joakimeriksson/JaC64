@@ -1485,6 +1485,14 @@ public class C64Screen extends ExtChip implements Observer {
 
       if (VIC_MEM_DEBUG)
         System.out.println("Set dd00 to " + Integer.toHexString(data));
+      if (Boolean.getBoolean("jac64.traceDD00")) {
+        int vicCycleNow = (int) (cpu.cycles - lastLine);
+        System.err.println("DD00=$" + Integer.toHexString(data & 0xff)
+            + " vbeam=" + vbeam + " cyc=" + vicCycleNow
+            + " bankBitsBefore=$" + Integer.toHexString(cia2PRA & 3)
+            + " bankBitsAfter=$" + Integer.toHexString(data & 3)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
 
       cia[1].performWrite(address + IO_OFFSET, data, cpu.cycles);
       cia2PRA = data;
