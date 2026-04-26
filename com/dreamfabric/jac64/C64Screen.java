@@ -189,6 +189,13 @@ public class C64Screen extends ExtChip implements Observer {
   // root cause of the irq-ack-vicii SS-COL row mismatch.
   private boolean sprColClearPending = false;
   private boolean sprBgColClearPending = false;
+  // VICE viciisc/vicii-cycle.c:407 captures `can_sprite_sprite =
+  // (sprite_sprite_collisions == 0)` BEFORE draw_cycle, then at the
+  // END of vicii_cycle fires SSCol IRQ if can_sprite_sprite && new
+  // collisions. Mirrors that pattern: capture at start of clock(),
+  // fire at end. Per-pixel sprite paint just accumulates sprCol.
+  private boolean sprColCanFire = true;
+  private boolean sprBgColCanFire = true;
   private int lastColorValue = 0;
   private long lastColorClk = -1;
 
@@ -1825,19 +1832,12 @@ public class C64Screen extends ExtChip implements Observer {
       lastColorReg = -1;
     }
 
-    // Apply deferred $D01E/$D01F collision-register clear (VICE
-    // viciisc/vicii-cycle.c:413-422). The clear becomes visible at the
-    // start of the cycle AFTER the read — i.e. the wasZero check at
-    // first sprite paint of THIS cycle will see sprCol still set if
-    // the $D01E read happened just last cycle.
-    if (sprColClearPending) {
-      sprCol = 0;
-      sprColClearPending = false;
-    }
-    if (sprBgColClearPending) {
-      sprBgCol = 0;
-      sprBgColClearPending = false;
-    }
+    // VICE viciisc/vicii-cycle.c:407 — capture `can_sprite_sprite =
+    // (collisions == 0)` BEFORE draw. Used at end-of-cycle to gate
+    // SSCol IRQ fire. Captured here, AFTER any deferred state but
+    // BEFORE the case dispatcher (= draw).
+    sprColCanFire = (sprCol == 0);
+    sprBgColCanFire = (sprBgCol == 0);
 
     if (DEBUG_CYCLES || true) {
       if (lastCycle + 1 < cycles) {
@@ -2471,6 +2471,35 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     }
 
+    // VICE viciisc/vicii-cycle.c:413-433 — POST-DRAW pending clear,
+    // then end-of-cycle SSCol/SBCol IRQ fire if (can && collisions).
+    // Clear runs AFTER the case dispatcher (= draw) so that any new
+    // collisions added by sprite painting THIS cycle get wiped, but
+    // the CAPTURE (sprColCanFire) was BEFORE both. Result: $D01E read
+    // → 1-cycle delay before sprite-paint-induced re-fire.
+    if (sprColClearPending) {
+      sprCol = 0;
+      sprColClearPending = false;
+    }
+    if (sprBgColClearPending) {
+      sprBgCol = 0;
+      sprBgColClearPending = false;
+    }
+    if (sprColCanFire && sprCol != 0) {
+      irqFlags |= 0x04;
+      updateVicIrqLine();
+      if ((irqMask & 4) != 0) {
+        setIRQ(VIC_IRQ);
+      }
+    }
+    if (sprBgColCanFire && sprBgCol != 0) {
+      irqFlags |= 0x02;
+      updateVicIrqLine();
+      if ((irqMask & 2) != 0) {
+        setIRQ(VIC_IRQ);
+      }
+    }
+
     // Per-cycle VIC trace — emit one line summarizing this cycle.
     if (TRACE_VIC_CYCLE
         && cycles >= TRACE_VIC_CYCLE_START
@@ -2898,36 +2927,16 @@ public class C64Screen extends ExtChip implements Observer {
 
             if (tmp != smult) {
               if ((tmp & 0x100) != 0) {
-                // Sprite-background collision: fire IRQ on 0→non-zero
-                // transition (matches VICE viciisc/vicii-cycle.c:431).
-                boolean wasZero = (sprBgCol == 0);
+                // Sprite-background collision: just accumulate. IRQ
+                // fires at end of clock() based on can_sprite_bg
+                // captured at cycle start (VICE vicii-cycle.c:431-433).
                 sprBgCol |= smult;
-                if (wasZero && (irqMask & 2) != 0) {
-                  irqFlags |= 0x02;
-                  setIRQ(VIC_IRQ);
-                }
               }
               if ((tmp & 0xff) != smult) {
-                // Sprite-sprite collision: fire IRQ on 0→non-zero
-                // transition (matches VICE viciisc/vicii-cycle.c:428).
-                // Previously fired once-per-line in case 0 of the
-                // dispatcher — that ignored the transition rule and
-                // produced wrong patterns on irq-ack-vicii.prg SS-COL.
-                boolean wasZero = (sprCol == 0);
+                // Sprite-sprite collision: just accumulate. IRQ fires
+                // at end of clock() based on can_sprite_sprite captured
+                // at cycle start (VICE vicii-cycle.c:428-430).
                 sprCol |= tmp & 0xff;
-                if (wasZero) {
-                  // VICE vicii_irq_sscoll_set() always latches bit 2 in
-                  // irq_status regardless of mask; mask only gates the
-                  // pin assertion + bit 7. JaC64 previously gated the
-                  // flag itself on mask AND missed setting bit 7. Both
-                  // fixed here via updateVicIrqLine() which mirrors VICE's
-                  // vicii_irq_set_line() exactly (vicii-irq.c:36-45).
-                  irqFlags |= 0x04;
-                  updateVicIrqLine();
-                  if ((irqMask & 4) != 0) {
-                    setIRQ(VIC_IRQ);
-                  }
-                }
               }
             }
           }
