@@ -99,23 +99,76 @@ the store twice with old/new values at the correct cycles.
 | 7 | No 2-cycle gbuf pipeline delay | drawGraphicsVice | Pipe0→Pipe1→Reg in draw_graphics8 |
 | 8 | $D012 read accuracy | C64Screen.java:1004 | Reads vbeam at exact CPU cycle |
 
-## Phased plan (bottom-up, ship each phase)
+## Phase A REVISED: JaC64 already cycle-steps at bus level
 
-### Phase A: Cycle-stepping CPU foundation (the BIG one)
-- Refactor `MOS6510Core.emulateOp()` from instruction-step to
-  cycle-step. Each `emulateOp()` call advances cpu.cycles by 1.
-- Each opcode becomes a state machine with N steps (one per
-  instruction cycle). State variable `instructionPhase` tracks which
-  cycle of the current opcode we're in.
-- Memory accesses (`fetchByte`/`writeByte`) inside the state machine
-  happen at the cycle they actually do on real hardware.
-- IRQ check still at instruction boundaries (after step N completes),
-  but the line-assertion happens cycle-precise via VIC's case
-  dispatcher.
+After investigation, JaC64 is NOT pure instruction-stepping. Each
+`fetchByte()` and `writeByte()` already does `cycles++` and
+`schedule(cycles)` (CPU.java:140,151,177). For an N-cycle instruction
+that does N memory accesses (most 6502 ops), VIC sees each cycle
+individually.
 
-This is a multi-day refactor touching ~150 opcode handlers in
-MOS6510Core.java. **Without this, no other phase delivers
-deterministic results.**
+**The actual non-determinism source identified empirically**:
+
+WITHIN a single JVM run, irq-ack-vicii.prg captures across 10 frames
+ALL show identical row 0:
+```
+0: | ***-**  ***-**  ******  AAAA..         |
+0: | ***-**  ***-**  ******  AAAA..         |
+... (all 10 identical)
+```
+
+BETWEEN JVM runs (separate process invocations), output varies:
+```
+Run 1 row 0: ******  ******  ******  AAAA..        (FAIL)
+Run 2 row 0: ***-**  ***-**  ******  AAAA..  RASTER (PASS)
+```
+
+Same input PRG, same flags, different output across processes.
+
+The variance traces to **Thread.sleep-based autostart timing** in
+JaC64.java:268,299,325 and TestRaster.java:379,395,425:
+
+```java
+while (!scr.ready()) { Thread.sleep(100); }     // race
+reader.readPGM(name, -1);                        // inject AT some cycle
+Thread.sleep(10);  ... Thread.sleep(3000);       // more races
+cpu.enterText("RUN~");                           // injects at non-det cycle
+```
+
+Each Thread.sleep(N) yields for ≥N ms, returning at OS scheduler's
+discretion. Different runs return after different real-time delays
+which translate to different EMULATED cycle counts when injection
+happens. The PRG starts running at varying cpu.cycles values across
+runs, and the test's IRQ-ack chain has just enough sensitivity to
+cycle-zero alignment that the result varies.
+
+### Phase A REVISED — Deterministic injection harness (small, doable)
+
+Replace Thread.sleep-based polling with a cycle-precise injection:
+
+1. Add `cpu.runUntilCycle(long target)` — busy-wait or pause until
+   `cpu.cycles == target`.
+2. In TestRaster, after `initEmulator()`:
+   - `runUntilCycle(2_000_000)` (~2 emulated seconds — kernal idle)
+   - `reader.readPGM(path, -1)`
+   - Detect SYS address from BASIC stub
+   - `cpu.jumpToSubroutine(sysAddr)` (deterministic, sets known CPU
+     state)
+3. Re-run irq-ack-vicii. Within-run determinism + across-run
+   determinism = test result is now stable.
+
+After this, all subsequent emulator-correctness work has a stable
+test loop. The deeper cycle-stepping refactor is only needed if some
+test case STILL produces non-deterministic results AFTER the
+injection harness is fixed.
+
+### Phase A FULL (deferred, only if needed)
+- Refactor `MOS6510Core.emulateOp()` to advance EXACTLY 1 cycle per
+  call. Each opcode becomes a state machine with `instructionPhase`
+  variable. Memory accesses placed at the correct cycle within
+  instruction.
+- Multi-day refactor touching ~150 opcode handlers. Defer until we
+  see test cases that prove it's needed beyond the injection fix.
 
 ### Phase B: Alarm-based event scheduling
 - Replace the ad-hoc `rasterIrqClock` field with an alarm queue
