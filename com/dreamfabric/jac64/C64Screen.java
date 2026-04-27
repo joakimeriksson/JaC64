@@ -196,6 +196,11 @@ public class C64Screen extends ExtChip implements Observer {
   // fire at end. Per-pixel sprite paint just accumulates sprCol.
   private boolean sprColCanFire = true;
   private boolean sprBgColCanFire = true;
+  // 1-cycle pipeline delay for collision IRQ fire — matches VICE
+  // empirical: VICE fires at sprite-paint-cycle + 1 due to its sprite
+  // pipeline. Set when transition detected this cycle, fired next.
+  private boolean sprColFirePending = false;
+  private boolean sprBgColFirePending = false;
   private int lastColorValue = 0;
   private long lastColorClk = -1;
 
@@ -1161,6 +1166,14 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd019:
       if (SPRITEDEBUG)
         monitor.info("Reading d019: " + memory[address + IO_OFFSET]);
+      if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+          && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+        traceVicCycleOut.println("EV-RdD019 clk=" + cpu.cycles
+            + " rast=$" + Integer.toHexString(vbeam)
+            + " cyc=" + (cpu.cycles - lastLine)
+            + " ret=$" + Integer.toHexString((irqFlags | 0x70) & 0xff)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
       return irqFlags;
     case 0xd01a:
       return irqMask;
