@@ -365,7 +365,31 @@ public abstract class MOS6510Core extends MOS6510Ops {
     carry = nxtcarry;
   }
 
+  // Per-instruction cycle trace: when -Djac64.tracePcCycles=true, log
+  // each instruction's PC and cycle count. Used for VICE-side cycle
+  // diff to find timing discrepancies. Output via stderr or file.
+  private static final boolean TRACE_PC_CYCLES =
+      Boolean.getBoolean("jac64.tracePcCycles");
+  private static final long TRACE_PC_START =
+      Long.getLong("jac64.tracePcStart", 0L);
+  private static final long TRACE_PC_END =
+      Long.getLong("jac64.tracePcEnd", Long.MAX_VALUE);
+  private static java.io.PrintStream tracePcOut = System.err;
+  static {
+    if (TRACE_PC_CYCLES) {
+      String f = System.getProperty("jac64.tracePcFile", "");
+      if (!f.isEmpty()) {
+        try {
+          tracePcOut = new java.io.PrintStream(
+              new java.io.FileOutputStream(f, false));
+        } catch (Exception e) {}
+      }
+    }
+  }
+
   public void emulateOp() {
+    long preCycles = cycles;
+    int prePC = pc;
     updatePendingIRQLineState();
     boolean hadIrqEnableDelay = irqEnableDelayOps > 0;
     // Before executing an operation - check for interrupts!!!
@@ -965,6 +989,14 @@ public abstract class MOS6510Core extends MOS6510Ops {
 
     if (hadIrqEnableDelay && irqEnableDelayOps > 0) {
       irqEnableDelayOps--;
+    }
+
+    if (TRACE_PC_CYCLES && cycles >= TRACE_PC_START
+        && cycles <= TRACE_PC_END) {
+      tracePcOut.println("PC=$" + Integer.toHexString(prePC & 0xffff)
+          + " op=$" + Integer.toHexString(memory[prePC & 0xffff] & 0xff)
+          + " cyc=" + (cycles - preCycles)
+          + " clk=" + cycles);
     }
   }
 
