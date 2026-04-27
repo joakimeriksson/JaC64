@@ -81,15 +81,62 @@ sequences. Use line-relative cyc.
 
 ### 4. Open VICE source at that event
 
-VICE has well-isolated cycle handlers. Useful entry points:
-- `viciisc/vicii-cycle.c` — the per-cycle dispatcher.
-- `viciisc/vicii-mem.c` — register reads/writes.
-- `viciisc/vicii-irq.c` — IRQ source set/clear.
-- `viciisc/vicii-fetch.c` — c-/g-/sprite-fetches.
-- `viciisc/vicii-draw-cycle.c` — pixel pipeline.
-- `c64/c64cpusc.c` — CLK_INC, FETCH_OPCODE.
-- `6510dtvcore.c` — opcode bodies.
-- `mainc64cpu.c` — check_ba, IRQ delay.
+#### CRITICAL — read the right files
+
+VICE ships **two** C64 emulators with different cycle accuracy. Always
+read `x64sc` sources, NOT `x64`. The WRONG file will mislead you.
+
+`x64sc` (cycle-accurate, our reference) build chain:
+
+```
+src/c64/Makefile.am libc64sc_a_SOURCES → c64cpusc.c, c64memsc.c
+src/c64/c64cpusc.c   #include "../mainc64cpu.c"
+src/mainc64cpu.c     #include "6510dtvcore.c"   ← opcode bodies live here
+src/Makefile.am      x64sc_libs += viciisc_lib  ← VIC-II from viciisc/
+```
+
+| Concern | Read x64sc file | Do NOT read |
+|--------|------------------|-------------|
+| Per-cycle VIC-II dispatcher | `viciisc/vicii-cycle.c` | `vicii/vicii.c` |
+| VIC-II reg R/W | `viciisc/vicii-mem.c` | `vicii/vicii-mem.c` |
+| VIC-II IRQ set/clear | `viciisc/vicii-irq.c` | `vicii/vicii-irq.c` |
+| Sprite/g-/c-fetch | `viciisc/vicii-fetch.c` | `vicii/vicii-fetch.c` |
+| Pixel pipeline | `viciisc/vicii-draw-cycle.c` | `vicii/vicii-draw.c` |
+| CPU memory map | `c64/c64memsc.c` | `c64/c64mem.c` |
+| CPU file-glue (CLK_INC) | `c64/c64cpusc.c` | `c64/c64cpu.c` |
+| CPU mem read/write tables, STORE/LOAD macros, dummy-write tables, BA, REU hooks | `mainc64cpu.c` (used by both) | — |
+| **Opcode bodies (LDA, STA, INC, ASL, RMW shape)** | **`6510dtvcore.c`** ← misleadingly named | **`6510core.c`** ← used by `x64`/`xvic` only |
+| RMW macros: `SET_ABS_RMW`, `SET_ABS_I_RMW`, `GET_ABS`, `GET_ABS_X_RMW` | `6510dtvcore.c` | `6510core.c` (different RMW pattern) |
+
+`6510dtvcore.c` is shared by `x64sc` (main CPU), `xvic` (vic20cpu via
+mainviccpu.c), and the C64 DTV core. The "dtv" in the filename is
+historical — it's a generic cycle-based core, NOT DTV-specific.
+
+The header comment in `6510dtvcore.c:36-38` lists the include chain:
+
+```
+/* This file is included by (some) CPU definition files */
+/*  vic20cpu.c->mainviccpu.c
+    c64sccpu.c->mainc64cpu.c   ← (our chain; comment names it c64sccpu.c
+                                  but the actual file is c64cpusc.c)  */
+```
+
+#### IRQ delivery / sample point — files in play
+
+| File | What it owns |
+|------|--------------|
+| `mainc64cpu.c` | `check_ba()`, IRQ delay machinery, mem read/write `*_dummy` table pointers |
+| `c64cpusc.c` | `CLK_INC()` definition (calls `interrupt_delay()` → `maincpu_clk++` → `vicii_cycle()`) |
+| `interrupt.c` | `interrupt_delay()`, IRQ pending logic |
+| `viciisc/vicii-irq.c` | `vicii_irq_*_set()`, `vicii_irq_set_line()` |
+| `6510dtvcore.c` | `OPCODE_DELAYS_INTERRUPT`, opcode-by-opcode IRQ check pattern |
+
+#### When in doubt, verify with the build
+
+```bash
+grep -rn "include.*core\.c" /Users/joakimeriksson/work/vice-emu/vice/src/mainc64cpu.c
+# → 6510dtvcore.c (NOT 6510core.c)
+```
 
 Read the ENTIRE function the event lives in. The JaC64 mistake
 mode is patching a single line based on a line-grep hit while

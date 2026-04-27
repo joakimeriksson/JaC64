@@ -545,7 +545,46 @@ public class TestRaster {
             + " $D7FF=$" + Integer.toHexString(d7ff) + " → " + passFail + " ===");
         System.out.println("Screenshots in /tmp/jac64_test_frame_*.png");
         System.out.println("FLD trace in /tmp/jac64_fld_trace.log");
+        if (Boolean.getBoolean("jac64.dumpScreen")) {
+            String dumpPath = System.getProperty("jac64.dumpScreenFile",
+                "/tmp/jac64_screen_dump.txt");
+            dumpScreenRam(dumpPath);
+            System.out.println("Screen RAM dump in " + dumpPath);
+        }
         System.exit(0);
+    }
+
+    /* Raw screen-RAM dump: hex + ASCII (preserving inverse-video bit so
+       irq-ack-vicii's $81/$84 result codes are distinguishable from
+       regular characters).  Used by the cycle-accuracy debugging loop
+       to compare cell-by-cell against a VICE screen dump. */
+    private void dumpScreenRam(String path) {
+        try (java.io.PrintWriter pw = new java.io.PrintWriter(path)) {
+            int[] mem = cpu.getMemory();
+            for (int row = 0; row < 25; row++) {
+                StringBuilder hex = new StringBuilder();
+                StringBuilder ascii = new StringBuilder();
+                for (int col = 0; col < 40; col++) {
+                    int b = mem[0x0400 + row * 40 + col] & 0xff;
+                    hex.append(String.format("%02x ", b));
+                    /* preserve inverse-video bit: '~' prefix on inverse,
+                       printable ASCII for normal codes, '.' for non-print. */
+                    int low = b & 0x7f;
+                    char c;
+                    if (low == 0x20) c = ' ';
+                    else if (low >= 0x01 && low <= 0x1a) c = (char)('A' + low - 1);
+                    else if (low >= 0x30 && low <= 0x39) c = (char)('0' + low - 0x30);
+                    else if (low == 0x2e) c = '.';
+                    else if (low == 0x2a) c = '*';
+                    else if (low == 0x2d) c = '-';
+                    else c = '.';
+                    ascii.append((b & 0x80) != 0 ? Character.toLowerCase(c) : c);
+                }
+                pw.printf("row %02d: %s | %s%n", row, hex.toString(), ascii.toString());
+            }
+        } catch (Exception e) {
+            System.err.println("Screen dump failed: " + e);
+        }
     }
 
     private String readScreen() {
