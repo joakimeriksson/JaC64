@@ -196,9 +196,18 @@ public class C64Screen extends ExtChip implements Observer {
   // fire at end. Per-pixel sprite paint just accumulates sprCol.
   private boolean sprColCanFire = true;
   private boolean sprBgColCanFire = true;
-  // 1-cycle pipeline delay for collision IRQ fire — matches VICE
-  // empirical: VICE fires at sprite-paint-cycle + 1 due to its sprite
-  // pipeline. Set when transition detected this cycle, fired next.
+  // 1-cycle pipeline delay for collision IRQ fire to match VICE.
+  // Port of VICE viciisc/vicii-cycle.c:407-455 end-of-cycle pattern:
+  //   can_sprite_sprite = (sprite_sprite_collisions == 0);  // capture pre-draw
+  //   vicii_draw_cycle();                                   // may set collisions
+  //   if (can_sprite_sprite && sprite_sprite_collisions)    // post-draw fire
+  //       vicii_irq_sscoll_set();
+  // JaC64's case dispatcher paints sprite-at-X=248 one CASE earlier
+  // than VICE's vicii_draw_cycle does at its xpos=248 phase. Without
+  // the 1-cycle defer, JaC64's IRQ fire appears 1 physical cycle
+  // earlier than VICE's, which makes early CPU reads of $D019 return
+  // $f4 where VICE returns $70. Deferring the fire by 1 case lines
+  // up with VICE's fire cycle in absolute clock terms.
   private boolean sprColFirePending = false;
   private boolean sprBgColFirePending = false;
   private int lastColorValue = 0;
@@ -1510,8 +1519,18 @@ public class C64Screen extends ExtChip implements Observer {
         monitor.info("Latching VIC-II: " + Integer.toString(data, 16)
             + " on " + Integer.toString(irqFlags, 16));
       }
+      int oldF = irqFlags;
       irqFlags &= ~((data & 0x0f) | 0x80);
       updateVicIrqLine();
+      if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+          && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+        traceVicCycleOut.println("EV-WrD019 clk=" + cpu.cycles
+            + " rast=$" + Integer.toHexString(vbeam)
+            + " cyc=" + (cpu.cycles - lastLine)
+            + " ackVal=$" + Integer.toHexString(data & 0xff)
+            + " oldFlags=$" + Integer.toHexString(oldF & 0xff)
+            + " newFlags=$" + Integer.toHexString(irqFlags & 0xff));
+      }
       break;
     }
     case 0xd01a:
@@ -2498,21 +2517,28 @@ public class C64Screen extends ExtChip implements Observer {
       sprBgCol = 0;
       sprBgColClearPending = false;
     }
-    if (sprColCanFire && sprCol != 0) {
+    // Deferred end-of-cycle SSCol/SBCol IRQ fire (1 cycle later than
+    // detection) so JaC64's fire absolute-cycle aligns with VICE's
+    // vicii_irq_sscoll_set call inside vicii_cycle for raster_cycle 45.
+    if (sprColFirePending) {
       irqFlags |= 0x04;
       updateVicIrqLine();
       if ((irqMask & 4) != 0) {
         setIRQ(VIC_IRQ);
       }
-      if (TRACE_VIC_CYCLE) traceAct("SSCol-fire-eoc");
+      if (TRACE_VIC_CYCLE) traceAct("SSCol-fire-deferred");
+      sprColFirePending = false;
     }
-    if (sprBgColCanFire && sprBgCol != 0) {
+    if (sprBgColFirePending) {
       irqFlags |= 0x02;
       updateVicIrqLine();
       if ((irqMask & 2) != 0) {
         setIRQ(VIC_IRQ);
       }
+      sprBgColFirePending = false;
     }
+    if (sprColCanFire && sprCol != 0) sprColFirePending = true;
+    if (sprBgColCanFire && sprBgCol != 0) sprBgColFirePending = true;
 
     // Per-cycle VIC trace — emit one line summarizing this cycle.
     if (TRACE_VIC_CYCLE

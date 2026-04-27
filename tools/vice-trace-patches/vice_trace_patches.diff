@@ -1,0 +1,207 @@
+diff --git a/vice/src/6510dtvcore.c b/vice/src/6510dtvcore.c
+index d00e6ba..e1a4546 100644
+--- a/vice/src/6510dtvcore.c
++++ b/vice/src/6510dtvcore.c
+@@ -1801,6 +1801,9 @@ static const uint8_t fetch_tab[] = {
+          */
+         {
+             static uint8_t lastop;
++            /* JaC64 PC cycle trace: capture pre-instruction state */
++            CLOCK jac64_pre_clk = CLK;
++            unsigned int jac64_pre_pc = reg_pc;
+             FETCH_OPCODE(opcode);
+             if (!CPU_IS_JAMMED) {
+                 /* remember current opcode */
+@@ -1809,6 +1812,25 @@ static const uint8_t fetch_tab[] = {
+                 /* set opcode that made the cpu jam */
+                 SET_OPCODE(lastop);
+             }
++            /* JaC64 trace: log PC + cycles consumed since instr fetch */
++            {
++                static FILE *jac64_pc_trace = NULL;
++                static int trace_init = 0;
++                if (!trace_init) {
++                    trace_init = 1;
++                    const char *path = getenv("JAC64_PC_TRACE_FILE");
++                    if (path) jac64_pc_trace = fopen(path, "w");
++                }
++                if (jac64_pc_trace) {
++                    fprintf(jac64_pc_trace,
++                        "PC=$%x op=$%x clk=%llu\n",
++                        jac64_pre_pc & 0xffff,
++                        lastop & 0xff,
++                        (unsigned long long)jac64_pre_clk);
++                    /* Note: we log entry; cycles consumed = next entry's clk - this clk */
++                    fflush(jac64_pc_trace);
++                }
++            }
+         }
+ 
+ #ifdef FEATURE_CPUMEMHISTORY
+diff --git a/vice/src/viciisc/vicii-cycle.c b/vice/src/viciisc/vicii-cycle.c
+index f20270d..048fb5d 100644
+--- a/vice/src/viciisc/vicii-cycle.c
++++ b/vice/src/viciisc/vicii-cycle.c
+@@ -427,6 +427,28 @@ int vicii_cycle(void)
+     /* Trigger collision IRQs */
+     if (can_sprite_sprite && vicii.sprite_sprite_collisions) {
+         vicii_irq_sscoll_set();
++        /* JaC64 trace patch */
++        {
++            static FILE *jac64_trace = NULL;
++            static int trace_init = 0;
++            if (!trace_init) {
++                trace_init = 1;
++                const char *path = getenv("JAC64_TRACE_FILE");
++                if (path) jac64_trace = fopen(path, "w");
++            }
++            if (jac64_trace) {
++                CLOCK lo = (unsigned long long)maincpu_clk
++                    - (unsigned long long)(vicii.raster_cycle);
++                fprintf(jac64_trace,
++                    "EV-SSCol clk=%llu rast=$%x cyc=%u sprCol=$%x irqStat=$%x\n",
++                    (unsigned long long)maincpu_clk,
++                    vicii.raster_line,
++                    vicii.raster_cycle,
++                    vicii.sprite_sprite_collisions,
++                    vicii.irq_status);
++                fflush(jac64_trace);
++            }
++        }
+     }
+     if (can_sprite_background && vicii.sprite_background_collisions) {
+         vicii_irq_sbcoll_set();
+@@ -577,6 +599,29 @@ int vicii_cycle(void)
+     /* Check BA for Sprite Phi2 fetch */
+     ba_low |= vicii_check_sprite_ba(vicii.cycle_flags);
+ 
++    /* JaC64 trace patch — log BA edges */
++    {
++        static int prev_ba = 0;
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE");
++            if (path) jac64_trace = fopen(path, "a");
++        }
++        if (jac64_trace && ba_low != prev_ba) {
++            fprintf(jac64_trace,
++                "EV-BA%s clk=%llu rast=$%x cyc=%u sprdma=$%x\n",
++                ba_low ? "low" : "high",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                vicii.sprite_dma);
++            fflush(jac64_trace);
++        }
++        prev_ba = ba_low;
++    }
++
+     /* if ba_low transitioning from non-active to active, always count
+        3 cycles before allowing any Phi2 accesses. */
+     if (ba_low) {
+diff --git a/vice/src/viciisc/vicii-mem.c b/vice/src/viciisc/vicii-mem.c
+index e513732..b8b9feb 100644
+--- a/vice/src/viciisc/vicii-mem.c
++++ b/vice/src/viciisc/vicii-mem.c
+@@ -43,6 +43,7 @@
+ #include "vicii-mem.h"
+ #include "vicii.h"
+ #include "viciitypes.h"
++#include "maincpu.h"
+ 
+ 
+ /* Unused bits in VIC-II registers: these are always 1 when read.  */
+@@ -226,10 +227,33 @@ inline static void d018_store(const uint8_t value)
+ 
+ inline static void d019_store(const uint8_t value)
+ {
++    uint8_t before = vicii.irq_status;
+     vicii.irq_status &= ~((value & 0xf) | 0x80);
+     vicii_irq_set_line();
+ 
+     VICII_DEBUG_REGISTER(("IRQ flag register: $%02X", vicii.irq_status));
++
++    /* JaC64 trace patch */
++    {
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE");
++            if (path) jac64_trace = fopen(path, "a");
++        }
++        if (jac64_trace) {
++            fprintf(jac64_trace,
++                "EV-WrD019 clk=%llu rast=$%x cyc=%u ackVal=$%x oldFlags=$%x newFlags=$%x\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                value & 0xff,
++                before & 0xff,
++                vicii.irq_status & 0xff);
++            fflush(jac64_trace);
++        }
++    }
+ }
+ 
+ inline static void d01a_store(const uint8_t value)
+@@ -514,7 +538,29 @@ inline static uint8_t d01112_read(uint16_t addr)
+ 
+ inline static uint8_t d019_read(void)
+ {
+-    return vicii.irq_status | 0x70;
++    uint8_t v = vicii.irq_status | 0x70;
++    /* JaC64 trace patch */
++    {
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE");
++            if (path) jac64_trace = fopen(path, "a");
++        }
++        if (jac64_trace) {
++            extern unsigned int reg_pc;
++            fprintf(jac64_trace,
++                "EV-RdD019 clk=%llu rast=$%x cyc=%u ret=$%x pc=$%x\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                v & 0xff,
++                reg_pc & 0xffff);
++            fflush(jac64_trace);
++        }
++    }
++    return v;
+ }
+ 
+ inline static uint8_t d01e_read(void)
+@@ -531,6 +577,26 @@ inline static uint8_t d01e_read(void)
+     VICII_DEBUG_REGISTER(("Sprite-sprite collision mask: $%02X",
+                           vicii.regs[0x1e]));
+ 
++    /* JaC64 trace patch */
++    {
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE");
++            if (path) jac64_trace = fopen(path, "a");
++        }
++        if (jac64_trace) {
++            fprintf(jac64_trace,
++                "EV-RdD01E clk=%llu rast=$%x cyc=%u ret=$%x\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                vicii.regs[0x1e] & 0xff);
++            fflush(jac64_trace);
++        }
++    }
++
+     return vicii.regs[0x1e];
+ }
+ 
