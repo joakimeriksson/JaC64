@@ -186,6 +186,13 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected boolean disableInterupt = false;
   protected int irqEnableDelayOps = 0;
   private boolean rmwDummyWrite = false;
+  // Set TRUE for the entire duration of an RMW instruction body (from
+  // before the dummy write through after the final write). Used by
+  // CPU.writeByte() to keep RMW timing on the legacy schedule order
+  // when the narrow $D019 Phi2 fix is on. Without this, INC/ASL final
+  // writes trigger the Phi2 fix and shift cycle accounting in INC
+  // RASTER slot 5.
+  protected boolean rmwInProgress = false;
 
   // Deterministic-pause support: when set to a non-negative value, the
   // CPU loop will exit at the FIRST instruction boundary where
@@ -589,6 +596,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
     // If RMW - it will write before proceeding
     boolean rmwWrite = read && write;
     if (rmwWrite) {
+      rmwInProgress = true;
       rmwDummyWrite = true;
       writeByte(adr, data);
       rmwDummyWrite = false;
@@ -986,6 +994,10 @@ public abstract class MOS6510Core extends MOS6510Ops {
     } else if (addrMode == ACCUMULATOR) {
       acc = data;
     }
+    // Reset rmwInProgress after the final RMW write (or after the body
+    // if write=false, e.g., for write=false ACCUMULATOR-mode RMW like
+    // ASL A which is handled here). Setting always — defensive.
+    rmwInProgress = false;
 
     if (hadIrqEnableDelay && irqEnableDelayOps > 0) {
       irqEnableDelayOps--;
