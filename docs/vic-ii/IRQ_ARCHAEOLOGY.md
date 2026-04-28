@@ -97,8 +97,53 @@ if ((cia_context->model == CIA_MODEL_6526)
 ```
 
 Result: irq-ack-vicii first-4M divergences cut from **54 → 18**.
-Slot 5 cell still fails — remaining 18 divergences are likely
-NMI / CIA2 / VIC raster IRQ alignment, not CIA1 timer A.
+Slot 5 cell still fails — remaining 18 divergences are all in
+the BASIC ROM ready/polling loop ($e5cd-$e5d4 area) caused by
+autostart timing differences (VICE injects RUN earlier than
+JaC64's deterministic SYS at cycle 7M). Once both reach the
+test body the CPU/VIC alignment drives slot 5.
+
+### 4. Slot 5 deep dive (NOT YET FIXED — root cause confirmed)
+
+Per-PC trace at test execution time (clk 7M+) reveals the exact
+NOP boundary at IRQ entry per slot:
+
+```
+slot LDA $D019 at clk N: RTI returned to $adX
+JaC64: all 6 slots → $ad3 (constant)
+VICE:  6,5,4 → $ad4   3,2 → $ad3   1 → $ad4
+```
+
+VICE wobbles between two NOP boundaries depending on slot's
+delay phase; JaC64 lands at the EARLIER boundary every slot.
+That's the slot-spacing drift: JaC64's IRQ entry is ~2 cycles
+EARLIER (= 1 NOP earlier) than VICE in 4-of-6 slots, exactly
+synchronized in 2-of-6 slots.
+
+JaC64 SSCol fire on slot 5 (line 74 cyc 45) at clk 7886764.
+JaC64 LDA $D019 read on slot 5 at clk 7886764 — SAME cycle.
+chips.clock(N) runs before CPU read on N, so JaC64 reads $84
+(flag set). VICE's fire is at cyc 45 too but its CPU LDA $D019
+reads 1 cycle BEFORE the fire — VICE reads $00.
+
+A 2-cycle defer of SSCol fire was tested empirically: it fixes
+slot 5 ($84 → $00) but BREAKS slot 4 ($84 → $00) and the IRQ
+pattern in row 03 col 3 (`*` → `-`). Net WORSE than 1-cycle.
+This re-confirms the prior-session conclusion: the 2-cycle defer
+is a hack masking a separate slot-spacing drift.
+
+### Conclusion
+
+47/48 stays the achievable limit without a deeper rewrite of
+JaC64's CPU/VIC cycle interleaving so that the IRQ entry NOP
+boundary matches VICE's wobble pattern. Likely candidates:
+- branch-taken-no-page-cross IRQ delay (`OPCODE_DELAYS_INTERRUPT`)
+- BA-low absorption rounding
+- RMW dummy-write cycle phase
+
+Each requires per-instruction cycle-trace diff against VICE
+6510dtvcore.c at the test entry, plus one source-line cite per
+fix per WORKPLAN.md.
 
 ## Remaining work
 
