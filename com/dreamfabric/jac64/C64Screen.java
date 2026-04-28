@@ -742,13 +742,32 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   private void setBaLowUntil(long until, String source) {
+    // BA-low end clk MUST NOT SHRINK once a longer-active source has set
+    // it. Real VIC-II ANDs together all the BA sources currently low; the
+    // CPU stays stalled while ANY are low. Modelling that as a single
+    // baLowUntil clk requires taking the MAX of all active sources.
+    //
+    // Concrete bug fixed (2026-04-28): in F2→F3 of irq-ack-vicii.prg
+    // SS-COL pass, sprite 0's BA-SPR0 at line $4b cyc=54 set baU to
+    // cyc=59. The "BADLINE-C55" setter at cyc=55 (line 2330) then
+    // unconditionally wrote baU = lastLine + BA_BADLINE (= cyc=54), 5
+    // cycles in the PAST, releasing CPU stall 7 cycles too early. CPU's
+    // sta $D019 ($b6f in irq_reset_frame) finished early, irq-handler
+    // chain timing slipped 1 cycle relative to VICE → LDA SS-COL slot 5
+    // ended up reading $f4 instead of $70.
+    //
+    // Fixing this with MAX matches VICE's "any-source-low" semantics
+    // (viciisc/vicii-cycle.c builds maincpu_ba_low_flags from multiple
+    // sources, only released when ALL clear).
     long oldUntil = cpu.baLowUntil;
-    cpu.baLowUntil = until;
-    if (oldUntil != until) {
-      ((CPU) cpu).traceBaEvent("BA-SET src=" + source + " old=" + oldUntil +
-          " new=" + until);
-      if (TRACE_VIC_CYCLE) traceAct("BA-" + source);
+    if (until <= oldUntil) {
+      // Keep the longer-active BA-low window; ignore the shorter setter.
+      return;
     }
+    cpu.baLowUntil = until;
+    ((CPU) cpu).traceBaEvent("BA-SET src=" + source + " old=" + oldUntil +
+        " new=" + until);
+    if (TRACE_VIC_CYCLE) traceAct("BA-" + source);
   }
 
   private void scheduleRasterIrq() {
