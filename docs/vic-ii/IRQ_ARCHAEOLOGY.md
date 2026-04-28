@@ -132,18 +132,99 @@ pattern in row 03 col 3 (`*` → `-`). Net WORSE than 1-cycle.
 This re-confirms the prior-session conclusion: the 2-cycle defer
 is a hack masking a separate slot-spacing drift.
 
+### Phase 9 deep dive (2026-04-28)
+
+Per-PC cycle-count diff for the entire slot-5 handler chain
+(102 instructions from $ada handler_2 entry to $b5b LDA $D019)
+shows **ZERO cycle-count divergences** between JaC64 and VICE.
+Every instruction takes the same cycles in both emulators. The
+bug is NOT a wrong-cycle CPU instruction.
+
+VICE source (`viciisc/vicii-irq.c:82-86`):
+```c
+void vicii_irq_sscoll_set(void)
+{
+    vicii.irq_status |= 0x4;
+    vicii_irq_set_line();    // calls maincpu_set_irq, NOT _clk variant
+}
+```
+
+`vicii_irq_set_line()` calls `maincpu_set_irq(int_num, 1)` which
+maps to `interrupt_set_irq(maincpu_int_status, int_num, 1, maincpu_clk)`.
+The `cpu_clk` parameter is the GLOBAL `maincpu_clk` AFTER it was
+incremented by `CLK_INC()`. So in VICE, `irq_clk = maincpu_clk`
+at the time the SSCol fire fires, which is INSIDE `vicii_cycle()`
+which runs AFTER `maincpu_clk++`. JaC64's `setIRQLow()` sets
+`irqCycleStart = cpu.cycles + IRQ_DELAY` where `cpu.cycles` is
+the just-incremented value at `chips.clock(cycles)`. Same model.
+
+**Empirical timing comparison at slot 5:**
+| event                        | JaC64 clk    | VICE-equiv (offset 3872234) | Δ |
+|------------------------------|--------------|------------------------------|---|
+| LDA $D019 read (= last cyc)  | 7886764      | 4014530                      | — |
+| SSCol fire (irq_clk set)     | 7886764      | 4014530 (vs VICE 4014531)    | 1 cycle EARLIER |
+
+JaC64 sets the SSCol IRQ bit 1 cycle EARLIER than VICE in
+absolute clock terms. The CPU read happens at the same clock as
+the fire in JaC64 (chips.clock runs before CPU read on cycle N),
+so $D019 returns $84. VICE's fire is 1 cycle AFTER LDA's read,
+so $D019 reads $00.
+
+VICE source (`viciisc/vicii.c:285-291`):
+```c
+void vicii_reset(void)
+{
+    raster_reset(&vicii.raster);
+    vicii.raster_line = 0;
+    vicii.raster_cycle = 6;        // <-- non-zero start
+    ...
+}
+```
+
+VICE's `raster_cycle` starts at **6** at reset. Each subsequent
+`vicii_cycle()` calls `next_vicii_cycle()` which increments
+`raster_cycle` BEFORE doing the cycle's work. So the first
+`vicii_cycle()` after reset processes `raster_cycle = 7`.
+
+JaC64's `lastLine = cpu.cycles` at reset (`vicCycle = 0`). The
+first `chips.clock(cpu.cycles+1)` after reset processes
+`vicCycle = 1`.
+
+The `case-N = VICE-cycle-(N+1)` convention noted in
+`C64Screen.java:2444` is therefore approximately correct after
+the boot sequence equilibrates, BUT the absolute-clock alignment
+of "JaC64 case N" and "VICE raster_cycle N+1" is offset by
+~1 cycle because of the different reset-state initialisation.
+
 ### Conclusion
 
-47/48 stays the achievable limit without a deeper rewrite of
-JaC64's CPU/VIC cycle interleaving so that the IRQ entry NOP
-boundary matches VICE's wobble pattern. Likely candidates:
-- branch-taken-no-page-cross IRQ delay (`OPCODE_DELAYS_INTERRUPT`)
-- BA-low absorption rounding
-- RMW dummy-write cycle phase
+47/48 stays the achievable limit without aligning JaC64's
+`vicCycle` numbering / `lastLine` initial offset with VICE's
+`raster_cycle = 6` reset state, AND adjusting all action
+positions in the JaC64 case dispatcher (sprite paint, BA-low,
+border checks, etc.) to land at the right absolute cycles.
 
-Each requires per-instruction cycle-trace diff against VICE
-6510dtvcore.c at the test entry, plus one source-line cite per
-fix per WORKPLAN.md.
+This is multi-day architectural work:
+1. **Phase 9.A**: Pick a reference event (e.g. raster IRQ fire at
+   line $30 cycle 1 = VICE's `vicii_irq_raster_set` at end of
+   `raster_cycle 1`). Empirically verify JaC64's matching event
+   fires at the same offset from cpu reset as VICE's. Identify
+   the exact 1-2 cycle phase delta.
+2. **Phase 9.B**: Adjust `C64Screen.reset()` so that the initial
+   `lastLine` and first `chips.clock` invocation produce
+   `vicCycle = 7` at the same absolute-clock as VICE's first
+   `vicii_cycle()` runs at `raster_cycle = 7`.
+3. **Phase 9.C**: Walk the case dispatcher (cases 0..62) and
+   verify each action's clock matches the corresponding
+   `viciisc/vicii-cycle.c` work for `raster_cycle = case + 1`.
+   Adjust where divergent.
+4. **Phase 9.D**: Regression test irq-ack-vicii (target 48/48)
+   AND Krestage 3 banner / FLI / cia-timer / RASTER tests.
+
+Risk: any phase change to the case dispatcher will potentially
+shift sprite paint, BA-low, border-state, raster-IRQ, and badline
+fetch timing. Demos depending on the exact JaC64 phase will
+break and need re-tuning.
 
 ## Remaining work
 
