@@ -1004,7 +1004,12 @@ public abstract class MOS6510Core extends MOS6510Ops {
     }
 
     if (TRACE_PC_CYCLES && cycles >= TRACE_PC_START
-        && cycles <= TRACE_PC_END) {
+        && cycles <= TRACE_PC_END
+        && "C64 CPU".equals(getName())) {
+      // Only trace MAIN CPU; the C1541 drive shares MOS6510Core but
+      // its cycle counter is independent and would interleave with
+      // main CPU's trace. Filter by getName() to keep traces
+      // comparable to VICE x64sc (single-CPU).
       tracePcOut.println("PC=$" + Integer.toHexString(prePC & 0xffff)
           + " op=$" + Integer.toHexString(memory[prePC & 0xffff] & 0xff)
           + " cyc=" + (cycles - preCycles)

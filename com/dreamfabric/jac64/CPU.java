@@ -151,14 +151,9 @@ public class CPU extends MOS6510Core {
       cycles++;
       // Sample IRQ line BEFORE schedule() so we see the line state
       // from END OF PREVIOUS cycle, not after this cycle's VIC work.
-      // This adds a 1-cycle propagation delay between an IRQ source
-      // (raised during a VIC cycle handler) and the CPU seeing it,
-      // matching real 6510 semantics where line transitions take one
-      // Phi cycle to propagate.
       sampleIrqLine();
       schedule(cycles);
     } else {
-      /* Legacy order: cycles++ -> schedule -> waitForBus. */
       cycles++;
       sampleIrqLine();
       schedule(cycles);
@@ -175,6 +170,26 @@ public class CPU extends MOS6510Core {
       } else {
         return memory[rindex = adr];
       }
+    } else if (adr == 0x0001) {
+      // CPU port read with pullup semantics (matches VICE
+      // c64/c64pla.c:55 + c64memsc.c:zero_read).
+      // Bit 4 (CASSETTE_SENSE) and bits 6-7 are INPUT pins on the
+      // standard C64; when DDR ($0000) bit is 0 they read external.
+      // Pullups on bits 4-7 force them HIGH when nothing is driving.
+      // Without this, KERNAL's IRQ handler at $EA61-$EA65 (LDA $01;
+      // AND #$10; BEQ ...) takes the wrong branch in JaC64 and the
+      // entire boot/autostart timing diverges from VICE.
+      // VICE's `pport.data_read = (data | ~dir) & (data_out | pullup)`
+      // — for our purposes (no cassette button pressed): for each bit
+      // where DDR=0 (input), the bit reads 1 unless explicitly cleared.
+      int ddr = memory[0] & 0xff;
+      int data = memory[1] & 0xff;
+      // For OUTPUT bits (DDR=1): return the data bit value as written.
+      // For INPUT bits (DDR=0): return 1 (pullup default). The cassette
+      // button is not pressed in the headless TestRaster harness.
+      int result = (data & ddr) | (~ddr & 0xff);
+      rindex = adr;
+      return result;
     } else {
       return memory[rindex = adr];
     }
