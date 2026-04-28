@@ -69,6 +69,37 @@ VICE byte-for-byte through the first ~12k instructions. After that,
 **54+ more divergences** remain in the first 4M cycles, all CIA
 timer / IRQ alignment related.
 
+### 3. CIA NEW (8521) immediate IRQ raise (this commit)
+
+JaC64's CIATimer fired `interruptNext` at the TOP of `update()`,
+giving a 1-cycle delay between underflow and CPU IRQ source set.
+That matches OLD CIA (6526) `CIA_IRQ_RAISE1` semantics. VICE x64sc
+default emulates NEW CIA (8521) where underflow → IRQ source set
+happens IN THE SAME CYCLE (`CIA_IRQ_RAISE0`).
+
+Fix: move the `if (interruptNext)` block to AFTER the state machine
++ delayedWrite at the end of `update()`. So when state-machine
+calls `triggerInterrupt(cycles)`, the IRQ source is set in that
+same cycle.
+
+VICE source: `core/ciacore.c:402-417`:
+```c
+if ((cia_context->model == CIA_MODEL_6526)
+        || (cia_context->model == CIA_MODEL_6526A)) {
+    cia_context->irq_enabled |= CIA_IRQ_RAISE1;   // OLD: delayed
+} else {
+    /* NEW CIA */
+    cia_context->irq_enabled |= CIA_IRQ_RAISE0;   // NEW: immediate
+    if (cia_context->irq_enabled & CIA_IRQ_RAISE0) {
+        my_set_int(cia_context, true, rclk);
+    }
+}
+```
+
+Result: irq-ack-vicii first-4M divergences cut from **54 → 18**.
+Slot 5 cell still fails — remaining 18 divergences are likely
+NMI / CIA2 / VIC raster IRQ alignment, not CIA1 timer A.
+
 ## Remaining work
 
 ### Pattern of remaining divergences

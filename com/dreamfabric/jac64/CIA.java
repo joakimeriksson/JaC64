@@ -508,15 +508,20 @@ public class CIA {
       // set a default
       underflow = false;
       nextUpdate = cycles + 1;
-      if (interruptNext) {
-        ciaicrRead |= iflag;
-        interruptNext = false;
-        // Trigg the stuff...
-        updateInterrupts();
-      }
       // Update timer...
       getTimer(cycles);
       // Timer state machine!
+      // NOTE: previously the `if (interruptNext)` block ran HERE (before
+      // the state machine), introducing a 1-cycle delay between timer
+      // underflow and CPU IRQ source set. That matched OLD CIA (6526)
+      // semantics. VICE x64sc by default emulates NEW CIA (8521) where
+      // underflow → IRQ source set happens IN THE SAME CYCLE
+      // (ciacore.c:402-417 CIA_IRQ_RAISE0 path). The 1-cycle delay
+      // caused JaC64's IRQ to land at the next CPU instruction
+      // boundary vs VICE's, accumulating to the irq-ack-vicii slot 5
+      // failure. Move firing to AFTER the state-machine so the same
+      // cycle's triggerInterrupt directly raises IRQ via the
+      // interruptNext check at end of update().
       switch (state) {
       case STOP:
         // Nothing...
@@ -574,6 +579,13 @@ public class CIA {
       if (writeCR != -1) {
         delayedWrite(cycles);
         writeCR = -1;
+      }
+      // NEW CIA: IRQ source set in SAME cycle as underflow.
+      // triggerInterrupt set interruptNext above; fire it now.
+      if (interruptNext) {
+        ciaicrRead |= iflag;
+        interruptNext = false;
+        updateInterrupts();
       }
     }
 
