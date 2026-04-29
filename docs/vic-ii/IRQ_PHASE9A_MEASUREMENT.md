@@ -102,3 +102,40 @@ VICE's, which means fixing the underlying cycle accuracy at a
 deeper level (the cumulative phase drift between IRQs).
 
 **Status:** Reverted. Baseline 47/48 restored.
+
+## Phase 9.3 fix attempt (also rejected — reverted)
+
+Tried `lastLine = cpu.cycles + 1` at reset (gated by
+`-Djac64.viceLastLineShift`) to shift JaC64's entire VIC line
+boundary by +1 cycle. Hypothesis: shift everything later by 1
+cycle so vbeam transition aligns with VICE's raster_line transition.
+
+**Result: NO observable change.** BEQ still 0/50 taken (vs VICE
+18/50). Test still 47/48. The lastLine shift uniformly shifts
+ALL VIC events together (line transition, sprite paint, raster
+IRQ, BA-low) by 1 cycle — relative timing of CPU instructions
+vs line transitions is preserved.
+
+**Conclusion:** The bug is not a uniform clock-phase offset.
+JaC64 and VICE process the SAME VIC events at the SAME relative
+positions per frame. The divergence comes from somewhere else —
+likely BA-low absorption alignment, or a per-cycle CPU/VIC
+interaction that's subtly different between the emulators.
+
+## Hypotheses still open for future investigation
+
+1. **BA-low absorption variation.** When sprite DMA enables (SS-COL
+   testset), CPU stalls during BA-low cycles. JaC64 and VICE may
+   handle the read/write timing of stalled cycles differently,
+   causing per-frame timing variance.
+2. **CIA timer interaction with raster IRQ.** Both emulators have
+   raster IRQ enabled. CIA1 timer A also fires periodically. The
+   relative phase of CIA timer ticks vs raster IRQ may shift
+   handler entry timing.
+3. **VIC IRQ acknowledge handling.** `lda $d019` (VICE) vs
+   immediate ack (JaC64) for $D019 reads may differ subtly.
+
+Each requires its own measurement-only investigation and a fix
+candidate that doesn't break the handler_2 BEQ idiom or other
+test cells. No clean win available without deeper architectural
+review.
