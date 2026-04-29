@@ -1971,7 +1971,15 @@ public class C64Screen extends ExtChip implements Observer {
         }
       }
 
+      int prevVbeam = vbeam;
       vbeam = (vbeam + 1) % 312;
+      if (TRACE_VIC_CYCLE && cycles >= TRACE_VIC_CYCLE_START
+          && cycles <= TRACE_VIC_CYCLE_END) {
+        traceVicCycleOut.println("EV-LineInc clk=" + cycles
+            + " from=" + prevVbeam
+            + " to=" + vbeam
+            + " lastLine=" + lastLine);
+      }
       if (vbeam == 0) {
         frame++;
         if (fldTrace && --fldTraceFrames <= 0) {

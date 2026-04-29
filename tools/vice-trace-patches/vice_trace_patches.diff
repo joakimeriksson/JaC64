@@ -1,5 +1,5 @@
 diff --git a/vice/src/viciisc/vicii-cycle.c b/vice/src/viciisc/vicii-cycle.c
-index f20270d..048fb5d 100644
+index f20270d..b0c4f7b 100644
 --- a/vice/src/viciisc/vicii-cycle.c
 +++ b/vice/src/viciisc/vicii-cycle.c
 @@ -427,6 +427,28 @@ int vicii_cycle(void)
@@ -31,7 +31,36 @@ index f20270d..048fb5d 100644
      }
      if (can_sprite_background && vicii.sprite_background_collisions) {
          vicii_irq_sbcoll_set();
-@@ -577,6 +599,29 @@ int vicii_cycle(void)
+@@ -456,7 +478,28 @@ int vicii_cycle(void)
+         }
+     } else {
+         if (vicii.raster_cycle == VICII_PAL_CYCLE(1)) {
++            unsigned int prev_line = vicii.raster_line;
+             vicii.raster_line++;
++            /* JaC64 trace patch */
++            {
++                extern char *getenv(const char *);
++                static FILE *jac64_trace_lineinc = NULL;
++                static int trace_init_lineinc = 0;
++                if (!trace_init_lineinc) {
++                    trace_init_lineinc = 1;
++                    const char *path = getenv("JAC64_TRACE_FILE");
++                    if (path) jac64_trace_lineinc = fopen(path, "a");
++                }
++                if (jac64_trace_lineinc) {
++                    fprintf(jac64_trace_lineinc,
++                        "EV-LineInc clk=%llu from=%u to=%u rastCyc=%u\n",
++                        (unsigned long long)maincpu_clk,
++                        prev_line,
++                        vicii.raster_line,
++                        vicii.raster_cycle);
++                    fflush(jac64_trace_lineinc);
++                }
++            }
+         }
+     }
+ 
+@@ -577,6 +620,29 @@ int vicii_cycle(void)
      /* Check BA for Sprite Phi2 fetch */
      ba_low |= vicii_check_sprite_ba(vicii.cycle_flags);
  
