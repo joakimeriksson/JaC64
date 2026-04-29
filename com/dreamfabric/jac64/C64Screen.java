@@ -883,6 +883,24 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   private void triggerRasterIrq(long irqClock) {
+    // VICE-style guard: don't re-fire if raster IRQ flag already
+    // pending (= bit 0 of irq_status set + already triggered).
+    // VICE source: viciisc/vicii-irq.c:116-121 — `if (!(vicii.irq_status & 0x1))`
+    // gating in vicii_irq_raster_trigger. JaC64 used to fire on every
+    // call regardless, producing extra raster IRQ events VICE doesn't
+    // produce (e.g. rast=74 in RASTER testset frames after irq_reset_frame
+    // sets $D012=69 but rasterIrqClock was scheduled for line 74).
+    // Gated by -Djac64.viceRasterGuard=true (default ON when set).
+    boolean rasterGuard =
+        !"false".equalsIgnoreCase(System.getProperty("jac64.viceRasterGuard", "true"));
+    if (rasterGuard && (irqFlags & 0x1) != 0 && irqTriggered) {
+      // Already pending and not acked — don't re-fire.
+      // Still advance rasterIrqClock so we don't busy-loop.
+      if (rasterIrqClock != RASTER_IRQ_DISABLED && rasterIrqClock <= irqClock) {
+        advanceRasterIrqClock();
+      }
+      return;
+    }
     irqFlags |= 0x1;
     if ((irqMask & 1) != 0) {
       irqFlags |= 0x80;
