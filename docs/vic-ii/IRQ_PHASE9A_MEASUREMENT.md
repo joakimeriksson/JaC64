@@ -63,3 +63,42 @@ cumulative drift from earlier INC/ASL/LDA tests pushes the LDA
 slot 5 LDA $D019 read into a cycle where JaC64's SSCol fire and
 the LDA read collide on the same cycle.
 
+## Phase 9.2 fix attempt (rejected — reverted)
+
+Tried a `vbeamForCpuRead` 1-cycle lag for $D012/$D011 reads (gated
+by `-Djac64.viceD012Lag`). Hypothesis: VICE increments raster_line
+at raster_cycle 0 (= JaC64 vicCycle (-1) per the case-N=VICE-(N+1)
+convention), so JaC64's vbeam transition appears 1 cycle EARLIER
+to CPU reads than VICE's; lag the read by 1 cycle.
+
+**Result: BROKE more cells than it fixed.** Specifically:
+- Row 00 (RASTER reference): col 5 changed from `*` → `-`
+- Row 01 (RASTER actual STA slot 5): `aaaa..` → `aaaaa.`
+  (handler_3 fired in slot 5 with the fix, but didn't without)
+- Row 03 (LDA SS-COL row): still 5 D's instead of 4
+
+**Root cause of the regression:** handler_2's `lda $d012; cmp $d012;
+beq` idiom at $0ae6/$0ae9/$0aec is *specifically designed* to
+compensate for line-transition-during-handler timing. Changing the
+$D012 read timing changes the BEQ outcome, which adds/removes
+1 cycle in handler_2, which shifts the test instruction position,
+which changes whether handler_3 fires before or after the test
+read. Net: the regression is an indirect cascade.
+
+**Empirical: JaC64 BEQ NEVER taken (50/50 frames). VICE BEQ taken
+in 18/50 frames.** JaC64's `lda $d012; cmp $d012` always returns
+different values (line transitions in window). VICE sometimes
+returns equal.
+
+Per the asm intent, BEQ-taken adds 1 cyc to compensate for
+line-transition-during-handler. JaC64 never compensates — JaC64's
+handler_2 is consistently 1 cycle FASTER than VICE in frames where
+VICE compensates. This is the slot-spacing drift's mechanism.
+
+The right fix is not to change $D012 read timing alone — it has
+to make JaC64 ALSO take BEQ in the same frame pattern as VICE
+(18/50). This requires aligning JaC64's frame timing pattern to
+VICE's, which means fixing the underlying cycle accuracy at a
+deeper level (the cumulative phase drift between IRQs).
+
+**Status:** Reverted. Baseline 47/48 restored.
