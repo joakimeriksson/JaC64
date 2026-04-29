@@ -1177,6 +1177,14 @@ public class C64Screen extends ExtChip implements Observer {
       if (shouldTraceRasterReads()) {
         traceRasterRead("D012", val);
       }
+      if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+          && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+        traceVicCycleOut.println("EV-RdD012 clk=" + cpu.cycles
+            + " val=" + val
+            + " line=" + vbeam
+            + " cyc=" + (cpu.cycles - lastLine)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
       return val;
       // Sprite collission registers - zeroed after read!
     case 0xd013:

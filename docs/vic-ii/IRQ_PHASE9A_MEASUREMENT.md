@@ -122,6 +122,74 @@ positions per frame. The divergence comes from somewhere else —
 likely BA-low absorption alignment, or a per-cycle CPU/VIC
 interaction that's subtly different between the emulators.
 
+## Phase 9.4 EV-RdD012 trace diff (definitive measurement)
+
+Added `EV-RdD012 clk=N val=V line=L cyc=C pc=$X` event to both
+emulators (JaC64 in `C64Screen.java` $D012 read; VICE in
+`viciisc/vicii-mem.c` `d01112_read`). Ran `irq-ack-vicii.prg`
+on both, diffed first 5 events:
+
+```
+JaC64: clk=7021571 val=69 line=69 cyc=31 pc=$ac3   ← LDX in handler
+JaC64: clk=7021663 val=70 line=70 cyc=60 pc=$ae9   ← LDA in handler_2
+JaC64: clk=7021667 val=71 line=71 cyc=1  pc=$aec   ← CMP in handler_2
+
+VICE:  clk=3660394 val=69 line=69 cyc=31 pc=$ac0   ← LDX in handler
+VICE:  clk=3660484 val=70 line=70 cyc=58 pc=$ae6   ← LDA in handler_2
+VICE:  clk=3660488 val=70 line=70 cyc=62 pc=$ae9   ← CMP in handler_2
+```
+
+**Smoking gun:** Both emulators read `val=70` (line 70) for the
+LDA, but at different cycles within the line:
+- JaC64 LDA at line 70 cyc=60, CMP at line 71 cyc=1 (LDA-CMP
+  window straddles the line transition → BEQ NOT TAKEN)
+- VICE LDA at line 70 cyc=58, CMP at line 70 cyc=62 (window
+  entirely within line 70 → BEQ TAKEN, both read 70)
+
+**JaC64's CPU position within the line is 2 cycles "later" than
+VICE's at the same logical handler position.**
+
+## Phase 9.4 fix attempt: lineShift (also rejected — reverted)
+
+Tried shifting `lastLine` at reset by N cycles
+(`-Djac64.viceLastLineShift=2`). Hypothesis: shift JaC64's line
+boundaries forward by 2 cycles to align with VICE's.
+
+**Result: no observable change in cyc value.** With shift=2,
+the LDA STILL reads at cyc=60 (just at a different absolute clk).
+Reason: shifting `lastLine` shifts BA-low absorption events with
+it, so CPU stalls shift equally. Net relative position within
+line is preserved.
+
+**Diagnosis:** The CPU IS at cyc=60 within line in JaC64 vs
+cyc=58 in VICE for the same logical instruction position
+(same handler chain, same per-instruction cycles). The 2-cycle
+discrepancy must come from a VIC-side event between IRQ delivery
+and the LDA $D012 — likely:
+
+1. **Raster IRQ fire cycle within line**: JaC64 fires raster IRQ
+   2 cyc later within line than VICE. CPU enters handler 2 cyc
+   later. All subsequent code lands 2 cyc later within line.
+2. **IRQ delivery overhead**: JaC64's IRQ entry might consume
+   2 extra cycles vs VICE in some path.
+3. **BA-low absorption bias**: certain BA-low events may consume
+   different cycle counts between emulators.
+
+The next investigation should compare RASTER IRQ fire timing
+(via a new `EV-RasterIrq clk=N rast=$L cyc=C` event in both
+emulators) at the same logical frames, similar to the EV-RdD012
+diff that pinpointed this 2-cycle discrepancy.
+
+## Trace tooling (Phase 9.4 ships even though fix didn't)
+
+`EV-RdD012` is now permanently enabled in both emulators when
+`-Djac64.traceVicCycle=true` (JaC64) and the build of
+`tools/vice-trace-patches/vice_trace_patches.diff` (VICE). This
+gives byte-for-byte $D012 read comparison — invaluable for
+future cycle-accuracy work since handler_2's `lda $d012; cmp
+$d012; beq` idiom is the canary for VIC-line-vs-CPU-position
+alignment.
+
 ## Hypotheses still open for future investigation
 
 1. **BA-low absorption variation.** When sprite DMA enables (SS-COL
