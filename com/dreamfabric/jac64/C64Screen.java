@@ -890,6 +890,14 @@ public class C64Screen extends ExtChip implements Observer {
       setIRQ(VIC_IRQ);
       lastIRQ = irqClock;
       if (TRACE_VIC_CYCLE) traceAct("RasterIRQ-fire");
+      if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+          && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+        traceVicCycleOut.println("EV-RasterIrq clk=" + irqClock
+            + " rast=" + raster
+            + " vbeam=" + vbeam
+            + " cyc=" + (irqClock - lastLine)
+            + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
+      }
       if (TRACE_VIC_IRQ) {
         System.err.println("VIC-RASTER-IRQ raster=" + raster
             + " clk=" + irqClock + " vbeam=" + vbeam

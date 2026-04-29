@@ -190,6 +190,60 @@ future cycle-accuracy work since handler_2's `lda $d012; cmp
 $d012; beq` idiom is the canary for VIC-line-vs-CPU-position
 alignment.
 
+## Phase 9.5: EV-RasterIrq trace diff
+
+Added `EV-RasterIrq clk=N rast=L cyc=C pc=$X` event to both
+emulators (JaC64 in `triggerRasterIrq`; VICE in
+`vicii_irq_raster_trigger`). Diffed across irq-ack-vicii.prg
+runs. Both emulators fire raster IRQ at `cyc=0` of the line
+(= same line-relative timing).
+
+**Key divergence**: JaC64 fires raster IRQ at line 74 in 25
+RASTER-testset frames. VICE fires **0 times** at line 74.
+
+```
+                rast=69   rast=70   rast=74   rast=255
+JaC64:            50        50        25       102
+VICE:             24        24         0         1
+```
+
+In JaC64's RASTER frames, the test flow:
+1. handler runs at line 69, sets $D012=70.
+2. handler_2 runs at line 70, reads $D012 (val=71 line=71),
+   adc #$03, sets $D012=74.
+3. handler_2 runs delay/test code through line 74.
+4. JaC64's raster IRQ at line 74 cyc 0 fires (during JMP
+   $b14 in irq_ack_test1 — PC=$b4c at trace fire time).
+5. handler_3 runs (sets $fb='*'), acks bit 0.
+6. After handler_3 returns, irq_reset_frame runs:
+   sta $d012=69, sta $d019=#$05.
+
+In VICE's RASTER frames, no rast=74 fire. Possibilities:
+- VICE's irq_reset_frame's sta $d012=69 happens BEFORE raster
+  reaches line 74 → raster_irq_line was 69, not 74 → no match.
+- Or VICE's `vicii.raster_irq_triggered` flag stays set across
+  the line in some way.
+- Or VICE's `if (!(vicii.irq_status & 0x1))` guard suppresses
+  the trace because bit 0 was set from prior line's IRQ.
+
+JaC64's trigger has NO `raster_irq_triggered`-style guard. It
+fires whenever `rasterIrqClock <= cycles` in case 0 dispatcher.
+This may explain the over-firing (rast=255 = 102 vs VICE 1).
+
+## Status
+
+Phase 9.5 confirmed:
+1. Both fire raster IRQ at cyc=0 — line-relative timing OK.
+2. JaC64 fires EXTRA raster IRQs (rast=74 in RASTER frames,
+   rast=255 in idle loop) that VICE doesn't.
+3. The extra rast=74 IRQ in JaC64 fires DURING the test
+   instruction's JMP, possibly causing a cascading IRQ entry
+   that shifts cycle accounting.
+
+Open: whether the EXTRA fires are merely cosmetic (CPU services
+them post-test, no effect on test cells) or causal for the
+slot-5 LDA SS-COL failure. Further investigation needed.
+
 ## Hypotheses still open for future investigation
 
 1. **BA-low absorption variation.** When sprite DMA enables (SS-COL
