@@ -78,20 +78,68 @@ JaC64 and VICE**. JaC64's `detSysJump` pauses at exactly cycle
 - Difference: 1 cycle mod 3 → could explain the 1-cycle JMP
   boundary phase shift.
 
-## Hypothesized fix
+## Hypothesis tested: autostart phase shift (REJECTED)
 
-If `detSysJump` target is changed from `7000000` to `7000001` or
-`6999999` (= shift by 1 cycle), JaC64's clk mod 3 at $a00 would
-match VICE's. Then JMP boundaries align, IRQ services at same
-cycle, handler entry at line 69 cyc=10 (matching VICE), and slot
-5 LDA SS-COL fixes.
+Hypothesized that shifting `detSysJump` target by ±1 would align
+JaC64's clk mod 3 with VICE's. Tested empirically:
 
-This is a 1-LINE FIX with a specific testable hypothesis.
+```
+target=7000000 → cyc=60 (current default)
+target=7000001 → cyc=59  ← matches VICE!
+target=7000002 → cyc=59
+target=7000003 → cyc=59
+```
 
-Risk: detSysJump target shift would also change relative timing of
-$D011 / $D012 / $D019 register reads vs raster line timing. Would
-need to verify no regression on:
-- CIA timer test (no raster IRQ — should be unaffected).
-- Krestage 3 banner / FLI (raster IRQ + sprite collision sensitive).
+The cyc value at handler_2's `lda $d012` DID change to match VICE
+with target=7000001. **But the test still fails 1/48 cells** —
+just a different cell. With target=7000001:
+- Slot 5 LDA SS-COL: fixed (4 D's, matches VICE).
+  No wait — re-checked, still 5 D's.
+- Slot 5 STA RASTER: row 00 col 5 changed `*` → `-` (= regression).
 
-Test it next session.
+**Net: same number of failed cells, just shuffled.** The autostart
+phase shift is a NON-FIX — it's just papering over the underlying
+bug by lucky alignment for one cell at the cost of another.
+
+### Why this CAN'T be the right approach
+
+If shifting WHEN the test starts running fixes/breaks cells, the
+issue is fundamentally a CPU↔VIC cycle-accuracy delta, not a
+boot-time alignment quirk. The CPU's phase relative to VIC line
+transitions should be invariant of boot timing. If it's not, the
+underlying CPU/VIC tick model is wrong by 1 cycle somewhere.
+
+## Real root cause (still unsolved)
+
+JaC64 cyc varies 59/60 per frame. VICE varies 58/59. JaC64's range
+is **shifted +1** relative to VICE's. This +1 shift is the actual
+bug.
+
+Per-instruction cycles match (Phase 9.1).
+Frame periods match (Phase 9.A frames 0-5).
+Line transitions match (Phase 10.B).
+
+The remaining suspect: CPU↔VIC ordering. Possibilities:
+1. **IRQ sampling phase**: when CPU samples the IRQ line relative
+   to vicii_cycle within a CLK_INC may differ.
+2. **BA-low absorption order**: JaC64's `waitForBus` may stall the
+   CPU 1 cycle differently from VICE's BA-low handling.
+3. **6510 PHI1/PHI2 split**: VICE has explicit Phi1 fetch +
+   Phi2 access; JaC64 has a single chips.clock per cycle. The
+   relative ordering of "VIC reads from memory" vs "CPU reads
+   from memory" within a cycle may differ.
+
+## Phase 10.D plan (next)
+
+Add `EV-IrqService clk=N pc_pre_irq=$X pc_handler=$Y` event in
+both emulators, fired exactly when CPU enters `doInterrupt`
+(JaC64) / `do_interrupt` (VICE x64sc).
+
+Diff: at frame 0's first raster IRQ at line 69, find the EXACT
+clk where CPU services. If JaC64 services at clk K+4 (line 69
+cyc 4) and VICE at clk K+3 (line 69 cyc 3), that's the
+1-cycle bug — CPU's IRQ check timing differs.
+
+Fix would target `irqCycleStart` calculation in
+`MOS6510Core.setIRQLow()` or the `cycles >= irqCycleStart` check
+in `emulateOp()`.
