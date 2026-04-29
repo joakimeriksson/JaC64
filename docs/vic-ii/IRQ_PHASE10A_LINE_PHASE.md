@@ -68,23 +68,77 @@ Possibilities:
 - Cause: not yet pinpointed. Theory suggests 6-cycle delta but
   empirical is 1-2.
 
-## Phase 10.B next step (Phase 10.A continues into B)
+## Phase 10.B: Boot anchor measured + lineAlign fix applied
 
-The 4-5 cycle "missing" between theory and empirical points to
-something in the JaC64 boot/init sequence. Suggested:
+Captured first 5 line transitions at boot in both emulators:
 
-1. Add `EV-VicState clk=N vbeam=L vicCycle=C lastLine=K` to JaC64,
-   fired at the FIRST chips.clock after reset and at every vicCycle
-   0 transition. Compare to VICE's equivalent at same logical clks.
-2. Determine the EXACT physical clock where each emulator first
-   "starts" its line counting. This is the boot anchor.
-3. Once anchor is known, the constant phase delta has a definitive
-   source. Fix is then a matter of shifting JaC64's lastLine init or
-   VIC dispatcher by exactly that delta.
+```
+JaC64 (BEFORE fix):    clk=64, 127, 190, 253, 316
+VICE:                  clk=63, 126, 189, 252, 315
+                       ── 1 cycle delta — JaC64 transitions LATER
+```
 
-The fix CANNOT be a uniform `lastLine + N` shift (Phase 9.4 verified
-this fails — BA-low absorption shifts equally). Must be a
-*differential* fix: shift VIC line phase WITHOUT shifting BA-low
-event scheduling. Possibly: change `setBaLowUntil` constants in
-`VICConstants.java` rather than lastLine.
+Root cause: JaC64's `cpu.cycles` is **1 at reset** (not 0), so
+`lastLine = cpu.cycles` puts lastLine at 1. Subsequent
+`lastLine += 63` keeps the +1 offset. VICE's first line transition
+at clk 63 (after a 6-cycle reset state, raster_cycle=6 wrapping to 0
+at clk 1+56=57 in theory but actual first wrap empirically at 63).
 
+### Fix: `lastLine = cpu.cycles - 1` at reset (commit 49e41d0)
+
+Gated by `-Djac64.viceLineAlign=true` (default ON). Empirically:
+- JaC64 line transitions: clk=63, 126, 189, 252, 315 — **byte-for-byte
+  match VICE**.
+- CIA timer test: no regression (verified diff identical).
+- irq-ack-vicii.prg: still 47/48 (slot 5 LDA SS-COL still fails).
+
+### Why the fix doesn't fix slot 5
+
+LDA $D012 cyc-within-line in handler_2 unchanged. Reason: shifting
+`lastLine` also shifts BA-low events (`setBaLowUntil(lastLine + N)`),
+which shifts CPU stalls equally. CPU clk and line both shift -1 →
+cyc-within-line preserved.
+
+This is the "uniform shift" trap from Phase 9.4. lineAlign is a
+correctness improvement (lines now align with VICE) but slot 5
+needs a *differential* fix.
+
+### Hypotheses for slot 5 root cause (unsolved)
+
+Per-instruction CPU cycles match (Phase 9.1). Frame periods match
+(Phase 9.A frames 0-5). Line transitions now match (Phase 10.B).
+Yet LDA $D012 reads cyc=60 in JaC64 vs cyc=59 in VICE.
+
+This contradicts cycle-accurate equivalence. The 1-cycle delta
+must come from one of:
+
+1. **Different testset trace coverage**: JaC64 trace covers RASTER
+   testset (no sprites); VICE trace covers SS-COL testset (sprites
+   enabled). BA-low for sprite DMA may shift CPU position differently
+   between RASTER (none) and SS-COL (lots). Need direct same-frame
+   comparison.
+
+2. **Subtle instruction-cycle quirk**: per-instruction cycles match
+   for SLOT-5 chain, but earlier frames may have a 1-cycle drift
+   in INC/ASL RMW or LDA $D019 read that accumulates.
+
+3. **IRQ entry ordering**: handler entry takes 7 cycles in both,
+   but JaC64's IRQ delivery may sample at a different cycle phase
+   (per Phase 5/Phase 6 docs).
+
+### Next phase: Phase 10.C — same-frame comparison
+
+The data confusion in this Phase 10.B (RASTER vs SS-COL frames in
+different traces) means we need to capture the SAME LOGICAL FRAME
+in both emulators. Suggested approach:
+
+1. Add `EV-FrameMark clk=N test_set=R/S slot=N` event in both that
+   fires at handler entry, indexed by test phase. Diff frame N's
+   complete event stream between emulators.
+2. Run irq-ack-vicii.prg on both. Find the EXACT first frame where
+   LDA $D012 cyc differs.
+3. Look for divergent BA-low events or instruction-level cycle counts
+   in just that one frame.
+
+This narrows the search from "the whole test" to "exactly one
+frame's divergence" — much more tractable.

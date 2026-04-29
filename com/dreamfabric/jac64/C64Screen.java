@@ -3926,7 +3926,18 @@ public class C64Screen extends ExtChip implements Observer {
     // Clear a lot of stuff...???
     initUpdate();
     sidChip.reset();
-    lastLine = cpu.cycles;
+    // VICE alignment (Phase 10.B): empirical EV-LineInc trace diff
+    // shows VICE's first line transition at maincpu_clk=63, JaC64's
+    // at cpu.cycles=64 — a 1-cycle delta because cpu.cycles=1 at
+    // reset (instead of 0) when lastLine is initialized. Subtract
+    // 1 so JaC64's line transitions align with VICE's
+    // physical clock (vicii_reset sets raster_cycle=6, first
+    // wrap at maincpu_clk 1+56=57 in theory but viciisc reset
+    // timing puts it at clk 63 empirically).
+    // Gated by -Djac64.viceLineAlign (default ON when set).
+    boolean lineAlign =
+        !"false".equalsIgnoreCase(System.getProperty("jac64.viceLineAlign", "true"));
+    lastLine = cpu.cycles - (lineAlign ? 1 : 0);
     nextIOUpdate = cpu.cycles + 47;
 
     for (int i = 0; i < mem.length; i++) mem[i] = 0;
