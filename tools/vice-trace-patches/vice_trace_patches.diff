@@ -1,3 +1,136 @@
+diff --git a/vice/src/6510dtvcore.c b/vice/src/6510dtvcore.c
+index d00e6ba..e40dd63 100644
+--- a/vice/src/6510dtvcore.c
++++ b/vice/src/6510dtvcore.c
+@@ -389,6 +389,25 @@
+                      && (!LOCAL_INTERRUPT()                                    \
+                          || OPINFO_DISABLES_IRQ(LAST_OPCODE_INFO))             \
+                      && interrupt_check_irq_delay(CPU_INT_STATUS, CLK)) {      \
++                /* JaC64 trace patch */                                        \
++                {                                                              \
++                    extern char *getenv(const char *);                         \
++                    static FILE *jac64_trace_irqsvc = NULL;                    \
++                    static int trace_init_irqsvc = 0;                          \
++                    if (!trace_init_irqsvc) {                                  \
++                        trace_init_irqsvc = 1;                                 \
++                        const char *path = getenv("JAC64_TRACE_FILE");         \
++                        if (path) jac64_trace_irqsvc = fopen(path, "a");       \
++                    }                                                          \
++                    if (jac64_trace_irqsvc) {                                  \
++                        fprintf(jac64_trace_irqsvc,                            \
++                            "EV-IrqService clk=%llu pc_pre=$%x irq_clk=%llu\n", \
++                            (unsigned long long)CLK,                           \
++                            (unsigned int)(reg_pc & 0xffff),                   \
++                            (unsigned long long)CPU_INT_STATUS->irq_clk);      \
++                        fflush(jac64_trace_irqsvc);                            \
++                    }                                                          \
++                }                                                              \
+                 TRACE_IRQ();                                                   \
+                 if (monitor_mask[CALLER] & (MI_STEP)) {                        \
+                     monitor_check_icount_interrupt();                          \
+@@ -1801,6 +1820,9 @@ static const uint8_t fetch_tab[] = {
+          */
+         {
+             static uint8_t lastop;
++            /* JaC64 PC cycle trace: capture pre-instruction state */
++            CLOCK jac64_pre_clk = CLK;
++            unsigned int jac64_pre_pc = reg_pc;
+             FETCH_OPCODE(opcode);
+             if (!CPU_IS_JAMMED) {
+                 /* remember current opcode */
+@@ -1809,6 +1831,25 @@ static const uint8_t fetch_tab[] = {
+                 /* set opcode that made the cpu jam */
+                 SET_OPCODE(lastop);
+             }
++            /* JaC64 trace: log PC + cycles consumed since instr fetch */
++            {
++                static FILE *jac64_pc_trace = NULL;
++                static int trace_init = 0;
++                if (!trace_init) {
++                    trace_init = 1;
++                    const char *path = getenv("JAC64_PC_TRACE_FILE");
++                    if (path) jac64_pc_trace = fopen(path, "w");
++                }
++                if (jac64_pc_trace) {
++                    fprintf(jac64_pc_trace,
++                        "PC=$%x op=$%x clk=%llu\n",
++                        jac64_pre_pc & 0xffff,
++                        lastop & 0xff,
++                        (unsigned long long)jac64_pre_clk);
++                    /* Note: we log entry; cycles consumed = next entry's clk - this clk */
++                    fflush(jac64_pc_trace);
++                }
++            }
+         }
+ 
+ #ifdef FEATURE_CPUMEMHISTORY
+diff --git a/vice/src/c64/c64memsc.c b/vice/src/c64/c64memsc.c
+index d08f990..91659fb 100644
+--- a/vice/src/c64/c64memsc.c
++++ b/vice/src/c64/c64memsc.c
+@@ -31,6 +31,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include <ctype.h>
+ 
+ #include "alarm.h"
+ #include "c64.h"
+@@ -599,6 +600,54 @@ void colorram_store(uint16_t addr, uint8_t value)
+     mem_color_ram[addr & 0x3ff] = value & 0xf;
+ }
+ 
++/* JaC64 trace patch: dump screen RAM ($0400-$07ff) to JAC64_SCREEN_FILE
++   on the FIRST $d020 write that contains $02 (fail) or $05 (pass). The
++   irq-ack-vicii test (and most VICE-testprogs interrupts/* tests) end
++   with `sty $d020` carrying the final pass/fail signal, then `jmp *`.
++   Hooked here in c64memsc.c so it works regardless of the VIC-II
++   implementation. The hook is called from d020_store() in
++   viciisc/vicii-mem.c. */
++void jac64_dump_screen_ram_on_signal(uint8_t value)
++{
++    static int screen_dumped = 0;
++    int signal = value & 0x0f;
++    if (screen_dumped) return;
++    if (signal != 0x02 && signal != 0x05) return;
++    const char *path = getenv("JAC64_SCREEN_FILE");
++    if (!path) return;
++    FILE *fp = fopen(path, "w");
++    if (!fp) return;
++    int row, col;
++    for (row = 0; row < 25; row++) {
++        fprintf(fp, "row %02d: ", row);
++        for (col = 0; col < 40; col++) {
++            fprintf(fp, "%02x ", mem_ram[0x0400 + row * 40 + col] & 0xff);
++        }
++        fprintf(fp, "| ");
++        for (col = 0; col < 40; col++) {
++            int b = mem_ram[0x0400 + row * 40 + col] & 0xff;
++            int low = b & 0x7f;
++            char c;
++            if (low == 0x20) c = ' ';
++            else if (low >= 0x01 && low <= 0x1a)
++                c = (char)('A' + low - 1);
++            else if (low >= 0x30 && low <= 0x39)
++                c = (char)('0' + low - 0x30);
++            else if (low == 0x2e) c = '.';
++            else if (low == 0x2a) c = '*';
++            else if (low == 0x2d) c = '-';
++            else c = '.';
++            if (b & 0x80) c = (char)tolower((unsigned char)c);
++            fputc(c, fp);
++        }
++        fputc('\n', fp);
++    }
++    fprintf(fp, "; final $d020 value = $%02x (signal: %s)\n",
++            value & 0xff, signal == 0x05 ? "PASS" : "FAIL");
++    fclose(fp);
++    screen_dumped = 1;
++}
++
+ uint8_t colorram_read(uint16_t addr)
+ {
+     return mem_color_ram[addr & 0x3ff] | (vicii_read_phi1() & 0xf0);
 diff --git a/vice/src/viciisc/vicii-cycle.c b/vice/src/viciisc/vicii-cycle.c
 index f20270d..b0c4f7b 100644
 --- a/vice/src/viciisc/vicii-cycle.c

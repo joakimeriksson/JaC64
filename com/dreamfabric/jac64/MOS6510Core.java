@@ -242,6 +242,16 @@ public abstract class MOS6510Core extends MOS6510Ops {
     //   5. PUSH P
     //   6. LOAD vector_lo at $FFFE/$FFFA  (lo BEFORE hi)
     //   7. LOAD vector_hi at $FFFF/$FFFB
+    // JaC64 trace: EV-IrqService at the cycle CPU enters doInterrupt.
+    // For diffing IRQ delivery cycle precision against VICE.
+    if (TRACE_IRQ_SERVICE && cycles >= TRACE_IRQ_SERVICE_START
+        && cycles <= TRACE_IRQ_SERVICE_END) {
+      tracePcOut.println("EV-IrqService clk=" + cycles
+          + " adr=$" + Integer.toHexString(adr)
+          + " pc_pushed=$" + Integer.toHexString(pc & 0xffff)
+          + " irqClkStart=" + irqCycleStart);
+      tracePcOut.flush();
+    }
     fetchByte(pc);
     fetchByte(pc + 1);
     push((pc & 0xff00) >> 8);
@@ -251,6 +261,13 @@ public abstract class MOS6510Core extends MOS6510Ops {
     pc = fetchByte(adr);
     pc |= fetchByte(adr + 1) << 8;
   }
+
+  private static final boolean TRACE_IRQ_SERVICE =
+      Boolean.getBoolean("jac64.traceIrqService");
+  private static final long TRACE_IRQ_SERVICE_START =
+      Long.getLong("jac64.traceIrqServiceStart", 0L);
+  private static final long TRACE_IRQ_SERVICE_END =
+      Long.getLong("jac64.traceIrqServiceEnd", Long.MAX_VALUE);
 
   protected final int getStatusByte() {
     return
@@ -1061,7 +1078,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
 
     scheduler.empty();
     chips.reset();
-    
+
     pc = fetchByte(0xfffc) + (fetchByte(0xfffd) << 8);
 
     log("Reset to: " + pc);
