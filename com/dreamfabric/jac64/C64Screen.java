@@ -1915,11 +1915,22 @@ public class C64Screen extends ExtChip implements Observer {
       sprBgColFirePending = false;
     }
 
-    // Right border check (ChkBrdR0/R1) — VICE cycles 56/57 Phi2 = JaC64
-    // case 55/56 Phi2. Runs AFTER CPU's clk-N access so any mid-line
-    // $D016/$D011 write committed this cycle is observed.
+    // Border checks — VICE Phi2 of cycle N happens AFTER CPU's clk-N
+    // access. Mapping JaC64 case M = VICE cycle (M+1):
+    //   ChkBrdL1 (csel=1 / !hideColumn): VICE cyc 17 Phi2 = JaC64 vc=16
+    //   ChkBrdL0 (csel=0 / hideColumn):  VICE cyc 18 Phi2 = JaC64 vc=17
+    //   ChkBrdR0 (csel=0 / hideColumn):  VICE cyc 56 Phi2 = JaC64 vc=55
+    //   ChkBrdR1 (csel=1 / !hideColumn): VICE cyc 57 Phi2 = JaC64 vc=56
+    // Running here so any mid-line $D016/$D011 CPU write committed this
+    // cycle is observed by the border check.
     int vc = (int) (cycles - lastLine);
-    if (vc == 55 && hideColumn) {
+    if (vc == 16 && !hideColumn) {
+      checkHBorderLeft();
+      borderState &= 0xfd;
+    } else if (vc == 17 && hideColumn) {
+      checkHBorderLeft();
+      borderState &= 0xfd;
+    } else if (vc == 55 && hideColumn) {
       borderState |= 2;
       checkHBorderRight();
     } else if (vc == 56 && !hideColumn) {
@@ -2312,12 +2323,8 @@ public class C64Screen extends ExtChip implements Observer {
 
       break;
     case 16:
-      if (!hideColumn) {
-        if (true /* viceBorderLatch default on */) {
-          checkHBorderLeft();
-        }
-        borderState &= 0xfd;
-      }
+      // Left border end (40-col / csel=1) now runs in clockPhi2() at
+      // vicCycle 16 — VICE cycle 17 Phi2.
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C16");
         // With cAccessShift: fetch col 1 (next cycle's pixel emit).
@@ -2336,13 +2343,8 @@ public class C64Screen extends ExtChip implements Observer {
 
       break;
     case 17:
-      if (hideColumn) {
-        if (true /* viceBorderLatch default on */) {
-          checkHBorderLeft();
-        }
-        borderState &= 0xfd;
-      }
-
+      // Left border end (38-col / csel=0) now runs in clockPhi2() at
+      // vicCycle 17 — VICE cycle 18 Phi2.
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C17");
         if (cAccessShift) fetchBadLineData(2);
