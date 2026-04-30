@@ -231,25 +231,6 @@ public class CPU extends MOS6510Core {
   private static final boolean VICE_MEM_BUS_SPLIT =
       VICE_MEM_MODEL && Boolean.getBoolean("jac64.viceMemBus");
 
-  // Narrow $D019 Phi1/Phi2 ordering fix (jac64.viceD019Phi2, default ON):
-  //   For writes specifically to $D019 (VIC-II IRQ flag register), schedule
-  //   VIC catch-up to clk=N BEFORE the CPU write applies. Mirrors VICE
-  //   x64sc c64/c64cpusc.c:47-50 CLK_INC ordering — vicii_cycle(N) (incl.
-  //   SSCol fire detection) runs FIRST, then CPU's Phi2 write. Without this
-  //   fix, JaC64's STA $D019 at cycle N writes BEFORE the SSCol fire, so
-  //   bit 2 ends up SET (VIC fires after the CPU's clear).
-  //   Diagnosed in docs/vic-ii/IRQ_ACK_PHASE2_3.md — STA SS-COL slot 4 of
-  //   irq-ack-vicii.prg.
-  //   Narrow to $D019 only (not all VIC writes) because the broader
-  //   schedule-before-write flip (jac64.viceMemBus) breaks Krestage 3 due
-  //   to the case-dispatcher cycle numbering being off-by-one vs VICE.
-  //   $D019 is safer because there are no demos that rely on VIC seeing
-  //   $D019 at the OLD value mid-cycle (it's a write-only ack register).
-  //   Disable with -Djac64.viceD019Phi2=false to fall back to old order.
-  private static final boolean VICE_D019_PHI2 =
-      VICE_MEM_MODEL
-      && !"false".equalsIgnoreCase(System.getProperty("jac64.viceD019Phi2", "true"));
-
   protected final void writeByte(int adr, int data) {
     cycles++;
     if (!VICE_MEM_MODEL) {
@@ -278,31 +259,10 @@ public class CPU extends MOS6510Core {
     adr &= 0xffff;
     final boolean isIO = ioON && ((adr & 0xf000) == 0xd000);
 
-    // Apply Phi2 fix only for non-RMW writes. RMW dummy/final writes
-    // (INC/ASL $D019) already pass irq-ack-vicii in RASTER+SS-COL, and
-    // changing their schedule order shifts the line $48 raster IRQ
-    // landing within the RMW pair, regressing INC/ASL slots. The
-    // rmwInProgress flag is set in MOS6510Core.execute around BOTH
-    // the dummy and final writes of an RMW; this excludes both.
-    final boolean isD019Phi2 =
-        VICE_D019_PHI2 && isIO && (adr & 0xff) == 0x19 && !rmwInProgress;
-
     if (VICE_MEM_BUS_SPLIT && !isIO) {
       // Phi1/Phi2 split (opt-in): VIC's Phi1 fetch at cycle N runs
-      // BEFORE CPU's Phi2 write applies. Catch up the VIC first; the
-      // memory[] update happens after — visible to VIC's case-(N+1)
-      // fetch onwards. Default off because the VICE STORE_ABS-style
-      // schedule-before-store ALSO breaks the Krestage 3 banner trick
-      // (RMW DEC $D016 timing). The conflict suggests JaC64's case
-      // dispatcher numbering is off by 1 vs VICE's PAL cycle table —
-      // fixing that root cause would let schedule-before-store work
-      // for both VIC tests AND the banner. Multi-day refactor.
-      schedule(cycles);
-    } else if (isD019Phi2) {
-      // Narrow $D019-only Phi1/Phi2 split: VIC's case-N work (incl.
-      // SSCol fire detection) must run BEFORE the CPU's $D019 ack
-      // write, so the ack clears the bit VIC just set instead of
-      // VIC re-setting the bit after the ack.
+      // BEFORE CPU's Phi2 write applies. Default off — kept as opt-in
+      // experimentation lever, not enabled by default.
       schedule(cycles);
     }
 
@@ -318,12 +278,11 @@ public class CPU extends MOS6510Core {
             + " pc=$" + Integer.toHexString(pc & 0xffff));
       }
     }
-    // Skip the post-write VIC catch-up if we already did it pre-write
-    // (otherwise C64Screen.clock() runs the case dispatcher twice for
-    // the same cycles, advancing sprite state out of bounds).
-    if (VICE_MEM_MODEL && isIO && !isD019Phi2) {
-      schedule(cycles);
-    } else if (VICE_MEM_MODEL && !VICE_MEM_BUS_SPLIT && !isD019Phi2) {
+    // VICE pattern: write at clk N → CLK_INC (vicii_cycle for N+1) →
+    // next access. JaC64 maps to: write → schedule(cycles) (= chips.clock
+    // for new cycle Phi1 work) → schedulePhi2 (Phi2 end-of-cycle work
+    // including SSCol/SBCol IRQ fire and border check).
+    if (VICE_MEM_MODEL && (isIO || !VICE_MEM_BUS_SPLIT)) {
       schedule(cycles);
     }
     schedulePhi2(cycles);
