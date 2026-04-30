@@ -1896,6 +1896,36 @@ public class C64Screen extends ExtChip implements Observer {
   private int xPos = 0;
   private long lastCycle = 0;
 
+  /**
+   * Phi2 end-of-cycle hook. CPU calls this AFTER its memory access for
+   * the current clk, so VIC's end-of-cycle bookkeeping observes the
+   * write. Mirrors VICE's CLK_INC ordering where vicii_cycle (which
+   * includes SSCol/SBCol IRQ fire and raster IRQ trigger) runs AFTER
+   * the CPU's clk-N LOAD/STORE.
+   */
+  @Override
+  public void clockPhi2(long cycles) {
+    // SSCol/SBCol IRQ fire (detection captured in clock() end; fired here
+    // so CPU's read at this clk sees PRE-fire state — matches VICE).
+    if (sprColFirePending) {
+      irqFlags |= 0x04;
+      updateVicIrqLine();
+      if ((irqMask & 4) != 0) {
+        setIRQ(VIC_IRQ);
+      }
+      if (TRACE_VIC_CYCLE) traceAct("SSCol-fire-phi2");
+      sprColFirePending = false;
+    }
+    if (sprBgColFirePending) {
+      irqFlags |= 0x02;
+      updateVicIrqLine();
+      if ((irqMask & 2) != 0) {
+        setIRQ(VIC_IRQ);
+      }
+      sprBgColFirePending = false;
+    }
+  }
+
   public final void clock(long cycles) {
     // Commit any deferred $DD00 bank-switch (1-cycle latch). Runs before
     // the cycle's case dispatcher so the new vicBank is visible to this
@@ -2578,26 +2608,11 @@ public class C64Screen extends ExtChip implements Observer {
       sprBgCol = 0;
       sprBgColClearPending = false;
     }
-    // Deferred end-of-cycle SSCol/SBCol IRQ fire (1 cycle later than
-    // detection) so JaC64's fire absolute-cycle aligns with VICE's
-    // vicii_irq_sscoll_set call inside vicii_cycle for raster_cycle 45.
-    if (sprColFirePending) {
-      irqFlags |= 0x04;
-      updateVicIrqLine();
-      if ((irqMask & 4) != 0) {
-        setIRQ(VIC_IRQ);
-      }
-      if (TRACE_VIC_CYCLE) traceAct("SSCol-fire-deferred");
-      sprColFirePending = false;
-    }
-    if (sprBgColFirePending) {
-      irqFlags |= 0x02;
-      updateVicIrqLine();
-      if ((irqMask & 2) != 0) {
-        setIRQ(VIC_IRQ);
-      }
-      sprBgColFirePending = false;
-    }
+    // SSCol/SBCol IRQ fire detection — captured here at end of clock()
+    // (= end of Phi1 / end of cycle's VIC work). Actual IRQ fire is
+    // deferred to clockPhi2(), so the CPU's read at this cycle's clk
+    // sees PRE-fire $D019, matching VICE's CLK_INC ordering where
+    // vicii_cycle (incl. SSCol fire) runs AFTER the CPU's clk-N access.
     if (sprColCanFire && sprCol != 0) sprColFirePending = true;
     if (sprBgColCanFire && sprBgCol != 0) sprBgColFirePending = true;
 

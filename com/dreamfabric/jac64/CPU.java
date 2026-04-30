@@ -104,6 +104,15 @@ public class CPU extends MOS6510Core {
     }
   }
 
+  // Phi2 end-of-cycle hook. CPU calls this AFTER the memory access for
+  // the current cycle so VIC can observe the write before its end-of-cycle
+  // bookkeeping (border check, raster IRQ trigger, collision IRQ fire).
+  // Default chip impl is a no-op; behavior change happens only when
+  // C64Screen overrides clockPhi2.
+  private final void schedulePhi2(long cycles) {
+    chips.clockPhi2(cycles);
+  }
+
   // VICE-style CPU/VIC interleaving model.
   //
   // VICE's pattern per memory access:
@@ -160,11 +169,19 @@ public class CPU extends MOS6510Core {
       waitForBus(true);
     }
 
+    int val = readMemoryAt(adr, cycles);
+    schedulePhi2(cycles);
+    return val;
+  }
+
+  // Pure memory read at a given clock value, no side effects on cycles or
+  // VIC scheduling. Mirrors VICE's LOAD/access-at-clk pattern.
+  private int readMemoryAt(int adr, long forCycles) {
     if ((romFlag & adr) == romFlag) {
       return memory[rindex = adr | 0x10000];
     } else if ((adr & 0xf000) == 0xd000) {
       if (ioON) {
-        return chips.performRead(rindex = adr, cycles);
+        return chips.performRead(rindex = adr, forCycles);
       } else if (charROM) {
         return memory[rindex = adr | 0x10000];
       } else {
@@ -309,6 +326,7 @@ public class CPU extends MOS6510Core {
     } else if (VICE_MEM_MODEL && !VICE_MEM_BUS_SPLIT && !isD019Phi2) {
       schedule(cycles);
     }
+    schedulePhi2(cycles);
     sampleIrqLine();
   }
 
