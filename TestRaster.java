@@ -40,6 +40,22 @@ public class TestRaster {
     private C64Reader reader;
     private JFrame window;
 
+    private static final class SilentAudioDriver extends AudioDriver {
+        private boolean fullSpeed = true;
+
+        public void init(int sampleRate, int bufferSize) {}
+        public void write(byte[] buffer) {}
+        public long getMicros() { return System.nanoTime() / 1000L; }
+        public boolean hasSound() { return false; }
+        public int available() { return Integer.MAX_VALUE; }
+        public int getMasterVolume() { return 0; }
+        public void setMasterVolume(int v) {}
+        public void shutdown() {}
+        public void setSoundOn(boolean on) {}
+        public void setFullSpeed(boolean full) { fullSpeed = full; }
+        public boolean fullSpeed() { return fullSpeed; }
+    }
+
     private void initEmulator() {
         SIDMixer.DL_BUFFER_SIZE = 16384;
         Debugger monitor = new Debugger();
@@ -47,7 +63,14 @@ public class TestRaster {
         scr = new C64Screen(monitor, true);
         cpu.init(scr);
 
-        C64Canvas canvas = C64Canvas.setupDesktop(scr, cpu, true);
+        boolean headless = Boolean.getBoolean("jac64.headless")
+            || GraphicsEnvironment.isHeadless();
+        C64Canvas canvas = null;
+        if (headless) {
+            scr.init(cpu, new SilentAudioDriver());
+        } else {
+            canvas = C64Canvas.setupDesktop(scr, cpu, true);
+        }
         scr.setSoundOn(false);
 
         reader = new C64Reader();
@@ -56,35 +79,42 @@ public class TestRaster {
 
         scr.setKeyboardEmulation(false);
 
-        window = new JFrame("JaC64 Raster Test");
-        window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        window.setBackground(Color.black);
-        window.setLayout(new BorderLayout());
-        window.getContentPane().add(canvas, BorderLayout.CENTER);
+        javax.swing.JCheckBoxMenuItem warpItem = null;
+        if (!headless) {
+            window = new JFrame("JaC64 Raster Test");
+            window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+            window.setBackground(Color.black);
+            window.setLayout(new BorderLayout());
+            window.getContentPane().add(canvas, BorderLayout.CENTER);
 
-        // Menu bar with Warp toggle.
-        javax.swing.JMenuBar menuBar = new javax.swing.JMenuBar();
-        javax.swing.JMenu speedMenu = new javax.swing.JMenu("Speed");
-        javax.swing.JCheckBoxMenuItem warpItem =
-            new javax.swing.JCheckBoxMenuItem("Warp (F12)", false);
-        warpItem.addActionListener(e -> {
-            scr.setFullSpeed(warpItem.isSelected());
+            // Menu bar with Warp toggle.
+            javax.swing.JMenuBar menuBar = new javax.swing.JMenuBar();
+            javax.swing.JMenu speedMenu = new javax.swing.JMenu("Speed");
+            final javax.swing.JCheckBoxMenuItem warpMenuItem =
+                new javax.swing.JCheckBoxMenuItem("Warp (F12)", false);
+            warpItem = warpMenuItem;
+            C64Canvas canvasRef = canvas;
+            warpMenuItem.addActionListener(e -> {
+                scr.setFullSpeed(warpMenuItem.isSelected());
+                canvasRef.requestFocusInWindow();
+            });
+            speedMenu.add(warpMenuItem);
+            menuBar.add(speedMenu);
+            window.setJMenuBar(menuBar);
+
+            window.pack();
+            window.setSize(386 * 2 + 10, 284 * 2 + 70);
+            window.setVisible(true);
+
+            canvas.setFocusable(true);
             canvas.requestFocusInWindow();
-        });
-        speedMenu.add(warpItem);
-        menuBar.add(speedMenu);
-        window.setJMenuBar(menuBar);
-
-        window.pack();
-        window.setSize(386 * 2 + 10, 284 * 2 + 70);
-        window.setVisible(true);
-
-        canvas.setFocusable(true);
-        canvas.requestFocusInWindow();
+        }
 
         if (Boolean.getBoolean("jac64.warp")) {
             scr.setFullSpeed(true);
-            warpItem.setSelected(true);
+            if (warpItem != null) {
+                warpItem.setSelected(true);
+            }
         }
 
         // Set the deterministic pause-at-cycle BEFORE the CPU thread

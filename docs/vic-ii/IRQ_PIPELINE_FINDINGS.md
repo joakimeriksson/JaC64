@@ -117,14 +117,11 @@ JaC64 and VICE differ by 1 cycle somewhere in this LONG chain. The
 3-cycle JMPs and irq sources fire at fixed line-cycle boundaries).
 
 To fix: hunt down the 1-cycle accumulation source between system
-reset and the first irq-ack-vicii test slot. Could be:
-- KERNAL/BASIC startup cycle accounting
-- Autostart program load timing
-- Pre-CLI test setup instructions
-- Initial `sta $d019` ack at entrypoint
-
-This is a multi-day archaeology dig. Each step would need to compare
-absolute clk between emulators at specific PC events.
+reset and the first irq-ack-vicii test slot. This older note pre-dates the
+2026-05-02 PRG-vs-D64 check. The remaining failure is now known to reproduce
+identically after direct PRG execution and D64 `LOAD`/`RUN`, so do not turn
+this into startup, load, boot, autostart, or launch-alignment archaeology.
+Future comparisons must use running CPU/VIC/IRQ anchors inside the test.
 
 ## Strategic options
 
@@ -133,11 +130,9 @@ absolute clk between emulators at specific PC events.
    is from a system-wide 1-cycle phase shift that isn't connected to
    any specific emulation bug.
 
-2. **Hunt the phase shift** in the boot/autostart/startup chain.
-   Multi-day. Will likely find one specific cycle where JaC64 takes
-   1 more or fewer cycles than VICE in some KERNAL/BASIC routine.
-   Fix that, slot 5 will pass — but might break demos that work with
-   the current phase.
+2. **Hunt the phase shift** in the running CPU/VIC/IRQ pipeline.
+   Multi-day. The first useful divergence must be after the program is
+   already running, with a matching VICE source behavior.
 
 3. **Patch the test program's first slot to match phase.** Out of
    scope (don't modify VICE-testprogs).

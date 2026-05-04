@@ -191,18 +191,18 @@ first `chips.clock(cpu.cycles+1)` after reset processes
 `vicCycle = 1`.
 
 The `case-N = VICE-cycle-(N+1)` convention noted in
-`C64Screen.java:2444` is therefore approximately correct after
-the boot sequence equilibrates, BUT the absolute-clock alignment
-of "JaC64 case N" and "VICE raster_cycle N+1" is offset by
-~1 cycle because of the different reset-state initialisation.
+`C64Screen.java:2444` is therefore approximately correct. Older notes here
+talked about boot/reset absolute-clock alignment, but that is not an allowed
+`irq-ack-vicii` fix direction after the 2026-05-02 PRG-vs-D64 check. Use this
+only as historical background for cycle numbering, not as a load/autostart
+investigation.
 
 ### Conclusion
 
-47/48 stays the achievable limit without aligning JaC64's
-`vicCycle` numbering / `lastLine` initial offset with VICE's
-`raster_cycle = 6` reset state, AND adjusting all action
-positions in the JaC64 case dispatcher (sprite paint, BA-low,
-border checks, etc.) to land at the right absolute cycles.
+47/48 stays the current baseline until the running CPU/VIC access phase is
+ported. The remaining work is to make CPU reads/writes observe the same
+subcycle as VICE `LOAD/STORE` before `CLK_INC()`/`vicii_cycle()`, while keeping
+sprite paint, BA-low, border checks, and IRQ fire at the right phase.
 
 This is multi-day architectural work:
 1. **Phase 9.A**: Pick a reference event (e.g. raster IRQ fire at

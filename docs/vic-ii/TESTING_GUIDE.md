@@ -18,8 +18,11 @@ diff their behavior, and find the divergent instructions/cycles.
 ```sh
 cd /Users/joakimeriksson/work/JaC64
 
-# Basic run, dump screen RAM
-java -Djac64.warp=true -Djac64.dumpScreen=true \
+./gradlew jar
+
+# Basic run, dump screen RAM. Use the Gradle-built jar, not stale in-place
+# classes from `java -cp .`.
+java -Djac64.headless=true -Djac64.warp=true -Djac64.dumpScreen=true \
      -Djac64.dumpScreenFile=/tmp/jac64_result.txt \
      -cp build/libs/JaC64.jar TestRaster \
      /Users/joakimeriksson/work/VICE-testprogs/interrupts/irq-ackn-bug/irq-ack-vicii.prg
@@ -31,16 +34,38 @@ grep "row 0[0-5]" /tmp/jac64_result.txt
 Expected good result (slots 0-5 all match VICE):
 ```
 row 00: ... ***-**  ***-**  ******  aaaa..        (RASTER)
-row 03: ... ***-**  ******  ******  dddd..  SS-COL  ← TARGET (currently `ddddd.`)
+row 03: ... ***-**  ******  ******  dddd..  SS-COL
 ```
 
-The 1 failing cell: row 03 LDA SS-COL has 5 d's (`ddddd.`) where VICE has 4 (`dddd..`).
+The old 47/48 symptom was row 03 LDA SS-COL with 5 d's (`ddddd.`) where VICE
+has 4 (`dddd..`). If that returns, first verify the run is using
+`build/libs/JaC64.jar`; stale `java -cp .` classes can reproduce old results.
+
+## Closed path: load/autostart
+
+Do not investigate load, autostart, boot phase, synthetic `SYS`,
+`pauseAtCycle`, PRG-vs-D64 behavior, or disk timing for the
+`irq-ack-vicii` failure. This path is ruled out.
+
+Evidence from 2026-05-02:
+
+- JaC64 direct PRG/headless/warp run produces row 03 `DDDDD.` and `$D020=$2`.
+- JaC64 D64 `LOAD`/`RUN` path produces the same row 03 `DDDDD.` and `$D020=$2`.
+- The bad screen cell comes from the running IRQ test window:
+  `$0b5b: LDA $D019` reads `$f4`, then `$0b76` stores `$84` into row 03,
+  column 29.
+
+VICE `-autostart` remains useful as a way to launch the reference emulator.
+It is not evidence that JaC64's load path is involved, and it is not a fix
+direction for this bug.
 
 ## Run VICE with the test
 
 ```sh
 # IMPORTANT: -autostartprgmode 1 enables Inject mode (= write PRG into memory).
 # Without this, x64sc black-screens.
+# This is only a VICE reference-run mechanism; do not treat autostart/load as
+# a JaC64 root-cause candidate for this bug.
 JAC64_TRACE_FILE=/tmp/vice_events.log \
 JAC64_PC_TRACE_FILE=/tmp/vice_pc.log \
 timeout 90 /Users/joakimeriksson/work/vice-emu/vice/src/x64sc \
@@ -71,8 +96,8 @@ VICE produces:
 | `-Djac64.traceVicCycle=true` | Per-cycle VIC trace (TVIC, EV-Rd*, EV-Wr*, EV-LineInc) |
 | `-Djac64.traceVicCycleStart=N -Djac64.traceVicCycleEnd=N` | VIC trace window |
 | `-Djac64.traceVicCycleFile=PATH` | VIC trace destination |
-| `-Djac64.injectAtCycle=N` | Override pauseAtCycle (default 7000000) |
-| `-Djac64.detSysJump=false` | Disable deterministic autostart pause |
+| `-Djac64.injectAtCycle=N` | Legacy harness control; do not use as an irq-ack fix direction |
+| `-Djac64.detSysJump=false` | Legacy harness control; do not use as an irq-ack fix direction |
 | `-Djac64.baTrace=true -Djac64.baTraceFile=PATH` | BA-low events (very verbose, ~500MB) |
 
 ## VICE trace events
@@ -159,16 +184,18 @@ diff <(awk '{print $1, $3}' /tmp/jac64_iter2.log | sort | uniq -c) \
 awk '{... sum cyc by PC ...}' /tmp/jac64_iter2.log
 ```
 
-## Likely divergence candidates (per Phase 10.D - 10.L investigation)
+## Likely divergence candidates
 
-### 1. JMP loop boundary mod-3 alignment ← PRIMARY CULPRIT
+### 1. IRQ delivery / running pipeline drift
 
-JaC64 JMP boundaries land at `clk%3 = X`, VICE at `clk%3 = Y`. Different
-because cumulative cycles from boot differ between emulators (per
-pauseAtCycle vs natural autostart).
+The former 47/48 failure was in the already-running IRQ/VIC/CPU pipeline, not
+in load or launch. If it regresses, compare from stable runtime anchors such
+as `irq_handler`, `irq_handler_2`, and the `irq_ack_test4` `$0b5b: LDA $D019`
+probes.
 
-**Symptom:** Line-69 IRQ services at `irq_clk + 4` in JaC64 vs `+ 2` in
-VICE. 2-cycle difference propagates through handler chain.
+**Symptom:** Line-69 IRQ service timing and later handler return points drift
+relative to VICE. That drift changes whether `$0b5b: LDA $D019` sees the
+sprite-sprite collision IRQ bit on the final SS-COL slot.
 
 **To verify:**
 ```sh
@@ -177,6 +204,14 @@ grep "EV-IrqService" /tmp/jac64_pc.log | head -2
 grep "EV-IrqService" /tmp/vice_events.log | head -2
 # Compute service - irq_clk for each
 ```
+
+Relevant implementation areas:
+- VICE `irq_delay_cycles` dispatch rules.
+- BA-steal interaction in `maincpu_steal_cycles()`.
+- CLI/SEI opcode-enable and opcode-disable handling.
+- sprite DMA BA timing around line `$4a`.
+- per-iteration drift between `irq_handler_2` returns and the next
+  `irq_ack_test4` probe.
 
 ### 2. Sprite paint cycle (case 43 vs case 44 vs raster_cycle 45)
 
@@ -254,11 +289,11 @@ The key diff is in the handler tail NOPs ($ad2, $ad3) and JMP loop $aae.
 - `IRQ_ARCHAEOLOGY.md` — historical context, pre-Phi2
 - `IRQ_PHASE9A_MEASUREMENT.md` — frame period verification
 - `IRQ_PHASE10A_LINE_PHASE.md` — line transition alignment fix (lineAlign)
-- `IRQ_PHASE10C_PER_FRAME.md` — autostart shift attempt (rejected)
+- `IRQ_PHASE10C_PER_FRAME.md` — historical phase-shift attempt (rejected; do not repeat)
 - `IRQ_PHASE10D_IRQ_SERVICE.md` — first identification of 2 near-canceling bugs
 - `IRQ_PHASE10E_READ_TIMING.md` — read-old-clk attempt (failed)
 - `IRQ_PHASE10F_VICE_CPU_VIC.md` — viceCpuVic attempt (failed)
-- `IRQ_PHASE10G_PHI2_RESULT.md` — Phi2 architecture stabilizes test against autostart shift
+- `IRQ_PHASE10G_PHI2_RESULT.md` — Phi2 architecture stabilizes the historical phase-shift experiment
 - `IRQ_PHASE10H_VICE_DIRECT.md` — direct VICE comparison reveals per-iter cycle drift
 - `IRQ_PHASE10I_INSTRUCTION_DIFF.md` — per-instruction cycles match for iter 1
 - `IRQ_PHASE10J_SPRITE_PAINT_CYCLE.md` — sprite paint cycle alignment finding

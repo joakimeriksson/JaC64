@@ -72,19 +72,18 @@ handler chain → handler_2 → test4 LDA $D019. By the time the LDA executes,
 JaC64 is 1 cycle "later within line" relative to VICE. SSCol fire at line
 74 cyc 45 is visible to JaC64's LDA at cyc 45 but not VICE's LDA at cyc 44.
 
-## Why this isn't fixable without violating either user constraint
+## Obsolete boot-phase interpretation
 
-The mod-3 phase difference comes from **cumulative cycle count from
-boot**:
-- JaC64 `target=7000000` cycles to autostart ENDS at `clk%3 = 1` boundary phase.
-- VICE natural autostart ENDS at `clk%3 = 2` boundary phase (different boot
-  sequence: load+run from disk image).
+This note originally explained the mod-3 phase difference through cumulative
+boot/autostart timing. That interpretation is no longer an allowed fix path.
+The 2026-05-02 evidence shows direct PRG/headless/warp execution and D64
+`LOAD`/`RUN` execution fail the same single `irq_ack_test4` cell.
 
-Per Phase 9.1, per-instruction cycles match VICE. So the only way to align
-mod-3 is to change cumulative cycles from boot — which is autostart shift.
-
-User explicitly rejected autostart shift in Phase 10.C: *"autostart phase
-shift should not be a solution... that would be a real surprise."*
+Do not pursue boot, load, autostart, `pauseAtCycle`, D64, or launch alignment
+from this document. The remaining candidate is the running CPU/VIC access
+phase: VICE performs the CPU memory access before `CLK_INC()` runs
+`vicii_cycle()`, while JaC64 still has a hybrid schedule-before-read plus
+post-access `clockPhi2()` model.
 
 ## What stays in Phi2
 
@@ -92,22 +91,20 @@ Even though slot 5 isn't fixed, Phi2 delivered real architectural value:
 
 1. **Removed two compensation flags** (`viceBrdrPhi2`, `viceD019Phi2`).
 2. **Eliminated the manual SSCol fire defer** (now structural intra-cycle handoff).
-3. **Stabilized the test against autostart phase** — pre-Phi2 the +1
-   autostart shift fixed/broke cells; post-Phi2 it's a no-op.
+3. **Stabilized the test against the historical phase-shift experiment** —
+   pre-Phi2 the +1 shift fixed/broke cells; post-Phi2 it's a no-op.
 4. **Removed `rmwInProgress`** field (was only fed the `!rmwInProgress`
    carve-out in viceD019Phi2; both gone now).
 5. **60 lines of CPU.java + MOS6510Core.java deleted**.
 
 ## Suggested next investigations
 
-If slot 5 fix is still wanted without autostart shift:
+If slot 5 fix is still wanted:
 
-1. **Find a non-cycle-counted boot path that lands JaC64 mod-3 == VICE mod-3
-   naturally.** E.g., emulate disk LOAD+RUN authentically rather than
-   pause-and-jump. Bigger refactor.
+1. **Port the running CPU/VIC access phase** so reads/writes happen before
+   the corresponding `vicii_cycle()` work, with end-of-cycle events still
+   after the CPU access.
 2. **Run more test programs** to verify the slot-5 issue is the ONLY
    remaining cycle-accuracy delta, not a representative of broader drift.
-3. **Live with 47/48 and document.** The test doesn't pass on real C64
-   either with arbitrary boot timing — VICE happens to align by luck of
-   its boot sequence. JaC64's boot is just as valid; demos that don't
-   depend on the specific mod-3 phase will work fine.
+3. **Live with 47/48 and document.** This remains acceptable only if broader
+   regression tests show the same timing limitation is isolated.

@@ -79,8 +79,9 @@ The fixes need to be targeted:
 - **Bug 1**: line-69 IRQ delivery is 2 cycles late. Investigate why JaC64's
   JMP-loop boundary lands 2 cycles later than VICE's at the same `irq_clk`.
   Per-instruction cycles match (Phase 9.1), so the boundary mod-3 alignment
-  must come from earlier divergence — boot/autostart, KERNAL ROM flow,
-  or a specific instruction's timing inside the test program's setup.
+  must come from a running CPU/VIC/IRQ pipeline divergence. The boot,
+  autostart, KERNAL LOAD/RUN, D64, and launch-alignment path is explicitly
+  forbidden for `irq-ack-vicii` after the 2026-05-02 PRG-vs-D64 evidence.
 - **Bug 2**: handler chain is 2 cycles short. Suspect: `irqEnableDelayOps`
   after CLI (JaC64 sets to 1; VICE may effectively delay 2 cycles longer
   via `OPINFO_ENABLES_IRQ` interaction with the next instruction's IRQ

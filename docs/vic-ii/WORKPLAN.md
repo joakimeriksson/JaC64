@@ -15,6 +15,23 @@ hack. The 2-stage SSCol fire defer (rejected 2026-04-26) is the
 canonical cautionary example: it passed a test by shifting the
 IRQ pipeline state, not by porting a real VICE behavior.
 
+## Closed path for `irq-ack-vicii`: load/autostart
+
+Do not investigate PRG-vs-D64 loading, autostart, RUN/SYS entry,
+`pauseAtCycle`, disk-load timing, synthetic `SYS`, boot phase, or launch
+alignment for the former `irq-ack-vicii` 47/48 failure. The fixed result is
+now 48/48; this prohibition remains permanent.
+
+2026-05-02 evidence:
+- JaC64 direct PRG/headless/warp run: row 03 `DDDDD.`, `$D020=$2`.
+- JaC64 D64 `LOAD`/`RUN` run: row 03 `DDDDD.`, `$D020=$2`.
+- The bad cell is created in the running IRQ test window when opcode PC
+  `$0b5b` reads `$D019` and `$0b76` stores the result cell.
+
+This bug lived after the program was running. Any future regression
+investigation must stay inside the IRQ/VIC/CPU pipeline and cite VICE behavior
+there.
+
 ## The loop
 
 ```
@@ -76,8 +93,10 @@ Diff procedure (manual today, scripted later — see Tooling backlog):
    is the divergence point.
 
 Common pitfall: comparing absolute clk values. Don't — VICE and
-JaC64 boot at different clk because of different autostart
-sequences. Use line-relative cyc.
+JaC64 do not share a reset-to-test absolute clock. For `irq-ack-vicii`,
+do not turn that into a load/autostart investigation; PRG and D64 runs
+already reproduce the identical JaC64 failure. Use line-relative and
+handler-relative cycles.
 
 ### 4. Open VICE source at that event
 
@@ -270,6 +289,8 @@ PATH="/opt/homebrew/opt/bison/bin:$PATH" \
   make -j4 -C /Users/joakimeriksson/work/vice-emu/vice/
 
 # Run VICE with trace
+# VICE autostart here is only a reference-run launcher. It is not a
+# JaC64 load/autostart fix direction for irq-ack-vicii.
 JAC64_TRACE_FILE=/tmp/vice.trace \
   /Users/joakimeriksson/work/vice-emu/vice/src/x64sc \
     -warp -limitcycles 8000000 -autostartprgmode 1 \

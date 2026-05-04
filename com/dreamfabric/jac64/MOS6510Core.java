@@ -74,6 +74,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
 
   protected long nmiCycleStart = 0;
   protected long irqCycleStart = 0;
+  protected int irqDelayCycles = 0;
   protected long irqReleaseCycle = IRQ_RELEASE_DISABLED;
 
   protected EventQueue scheduler = new EventQueue();
@@ -120,6 +121,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
         " baLowUntil=" + baLowUntil +
         " pc=$" + Integer.toHexString(pc & 0xffff) +
         " irqStart=" + irqCycleStart +
+        " irqDelayCycles=" + irqDelayCycles +
         " irqLow=" + IRQLow +
         " req=" + irqRequested);
   }
@@ -144,7 +146,10 @@ public abstract class MOS6510Core extends MOS6510Ops {
         // The first active IRQ source makes the CPU-visible IRQ line go low.
         irqRequested = true;
         IRQLow = true;
-        irqCycleStart = cycles + IRQ_DELAY;
+        irqDelayCycles = 0;
+        irqCycleStart = VICE_IRQ_DELAY_COUNTER
+            ? cycles
+            : cycles + IRQ_DELAY - (IRQ_ASSERT_PRE_INCREMENT ? 1 : 0);
         traceIrqLine("IRQ-ASSERT");
       }
     } else if (irqRequested) {
@@ -185,7 +190,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected int interruptInExec = 0;
   protected boolean disableInterupt = false;
   protected int irqEnableDelayOps = 0;
+  protected boolean lastOpcodeDisablesIrq = false;
   private boolean rmwDummyWrite = false;
+  protected int instructionStartPC = 0;
 
   // Deterministic-pause support: when set to a non-negative value, the
   // CPU loop will exit at the FIRST instruction boundary where
@@ -212,6 +219,45 @@ public abstract class MOS6510Core extends MOS6510Ops {
   // IRQ-pending check.
   protected boolean branchDelaysIrq = false;
 
+  // VICE 6510dtvcore.c RTI(): "RTI does must not use
+  // OPCODE_ENABLES_IRQ()" when it restores I from 1 to 0, because status
+  // is restored before the final RTI cycles complete.
+  protected static final boolean VICE_RTI_NO_IRQ_ENABLE_DELAY =
+      Boolean.getBoolean("jac64.viceRtiNoIrqDelay");
+
+  // Diagnostic only: JaC64 labels/schedules read cycles after cycles++,
+  // whereas VICE captures IRQ clk in the CLK_INC() path after the CPU access.
+  // This tests whether IRQ assertion should be based on the pre-increment
+  // physical cycle for the remaining irq-ack drift.
+  protected static final boolean IRQ_ASSERT_PRE_INCREMENT =
+      Boolean.getBoolean("jac64.irqAssertPreIncrement");
+
+  // VICE 6510dtvcore.c:1593-1600 marks SEI with
+  // OPCODE_DISABLES_IRQ() when I was clear. main IRQ dispatch then allows
+  // service for one boundary with `|| OPINFO_DISABLES_IRQ(...)`.
+  protected static final boolean VICE_SEI_IRQ_WINDOW =
+      Boolean.getBoolean("jac64.viceSeiIrqWindow");
+
+  protected static final boolean VICE_IRQ_DELAY_COUNTER =
+      Boolean.getBoolean("jac64.viceIrqDelayCounter");
+
+  protected final void viceInterruptDelayBeforeClockInc() {
+    if (VICE_IRQ_DELAY_COUNTER && IRQLow && irqCycleStart <= cycles) {
+      irqDelayCycles++;
+    }
+  }
+
+  protected final void viceInterruptDelayAfterSteal() {
+    if (!VICE_IRQ_DELAY_COUNTER || !IRQLow || irqDelayCycles != 0
+        || irqCycleStart >= cycles) {
+      return;
+    }
+    int opcode = memory[instructionStartPC & 0xffff] & 0xff;
+    if (opcode != 0x78) {
+      irqDelayCycles++;
+    }
+  }
+
   // Used for actual address...
   protected int rindex = 0;
   protected int lastReadOP = 0;
@@ -219,6 +265,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public int getSP() { return s; }
   public void setSP(int sp) { s = sp & 0xFF; }
   public int getPC() { return pc; }
+  public int getInstructionStartPC() { return instructionStartPC; }
   public int getAcc() { return acc; }
   public void setAcc(int a) { acc = a & 0xFF; }
   public int getX() { return x; }
@@ -239,10 +286,19 @@ public abstract class MOS6510Core extends MOS6510Ops {
     // For diffing IRQ delivery cycle precision against VICE.
     if (TRACE_IRQ_SERVICE && cycles >= TRACE_IRQ_SERVICE_START
         && cycles <= TRACE_IRQ_SERVICE_END) {
+      int rasterLine = -1;
+      long rasterCycle = -1;
+      if (chips instanceof C64Screen) {
+        C64Screen screen = (C64Screen) chips;
+        rasterLine = screen.vbeam;
+        rasterCycle = cycles - screen.lastLine;
+      }
       tracePcOut.println("EV-IrqService clk=" + cycles
           + " adr=$" + Integer.toHexString(adr)
           + " pc_pushed=$" + Integer.toHexString(pc & 0xffff)
-          + " irqClkStart=" + irqCycleStart);
+          + " irqClkStart=" + irqCycleStart
+          + " rast=$" + Integer.toHexString(rasterLine)
+          + " cyc=" + rasterCycle);
       tracePcOut.flush();
     }
     fetchByte(pc);
@@ -281,7 +337,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
 
   // Memory handling - both methods always add 1 to cycles!!!
   protected abstract int fetchByte(int adr);
+  protected int loadByte(int adr) { return fetchByte(adr); }
   protected abstract void writeByte(int adr, int data);
+  protected void storeByte(int adr, int data) { writeByte(adr, data); }
 
   private final void setZS(int data) {
     zero = data == 0;
@@ -393,7 +451,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
       Long.getLong("jac64.tracePcEnd", Long.MAX_VALUE);
   private static java.io.PrintStream tracePcOut = System.err;
   static {
-    if (TRACE_PC_CYCLES) {
+    if (TRACE_PC_CYCLES || TRACE_IRQ_SERVICE) {
       String f = System.getProperty("jac64.tracePcFile", "");
       if (!f.isEmpty()) {
         try {
@@ -407,8 +465,16 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public void emulateOp() {
     long preCycles = cycles;
     int prePC = pc;
+    instructionStartPC = prePC & 0xffff;
     updatePendingIRQLineState();
     boolean hadIrqEnableDelay = irqEnableDelayOps > 0;
+    boolean irqAllowedByStatus = !disableInterupt
+        || (VICE_SEI_IRQ_WINDOW && lastOpcodeDisablesIrq);
+    boolean irqDelayReady = VICE_IRQ_DELAY_COUNTER
+        ? (IRQLow && irqDelayCycles >= IRQ_DELAY + (branchDelaysIrq ? 1 : 0)
+            && irqEnableDelayOps == 0)
+        : (IRQLow && cycles >= irqCycleStart + (branchDelaysIrq ? 1 : 0)
+            && irqEnableDelayOps == 0);
     // Before executing an operation - check for interrupts!!!
     if (checkInterrupt) {
       if (NMIPending && (cycles >= nmiCycleStart)) {
@@ -425,10 +491,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
         return;
       } else if ((PHASE_A_IRQ_LATCH
                     ? (irqLineAtPrevCall && irqEnableDelayOps == 0)
-                    : (IRQLow && cycles >= irqCycleStart + (branchDelaysIrq ? 1 : 0)
-                        && irqEnableDelayOps == 0))
+                    : irqDelayReady)
                 || brk) {
-        if (!disableInterupt) {
+        if (irqAllowedByStatus || brk) {
           log("IRQ interrupt > " + IRQLow + " BRK: " +  brk);
           lastInterrupt = IRQ_INT;
           //checkInterrupt = false; //does not make sense to leave more
@@ -440,6 +505,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
           else status &= 0xef;
           doInterrupt(0xfffe, status);
           disableInterupt=true;
+          lastOpcodeDisablesIrq = false;
           //prevent irq during irq, RTI will clear by poping status back
           brk = false;
 
@@ -464,6 +530,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
     // flag will be set again if the upcoming instruction is a branch
     // taken with no page-boundary cross.
     branchDelaysIrq = false;
+    lastOpcodeDisablesIrq = false;
 
     // Ok no interrupts, execute instruction
     // fetch instruction!
@@ -497,14 +564,14 @@ public abstract class MOS6510Core extends MOS6510Ops {
       pc++;
       adr = (fetchByte(pc++) << 8) + p1;
       if (read) {
-        data = fetchByte(adr);
+        data = loadByte(adr);
       }
       break;
     case ZERO:
       pc++;
       adr = p1;
       if (read) {
-        data = fetchByte(adr);
+        data = loadByte(adr);
       }
       break;
     case ZERO_X:
@@ -519,7 +586,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
         adr = (p1 + y) & 0xff;
 
       if (read) {
-        data = fetchByte(adr);
+        data = loadByte(adr);
       }
       break;
     case ABSOLUTE_X:
@@ -534,13 +601,20 @@ public abstract class MOS6510Core extends MOS6510Ops {
       else
         p1 += y;
 
-      data = fetchByte(adr + (p1 & 0xff));
+      tmp = adr + (p1 & 0xff);
       adr += p1;
 
       // If read - a fifth cycle patches the incorrect address...
       // Always done if RMW!
-      if (read && (p1 > 0xff || write)) {
-        data = fetchByte(adr);
+      if (read) {
+        if (p1 > 0xff || write) {
+          fetchByte(tmp);
+          data = loadByte(adr);
+        } else {
+          data = loadByte(tmp);
+        }
+      } else {
+        fetchByte(tmp);
       }
       break;
     case RELATIVE:
@@ -567,7 +641,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
       adr |= fetchByte(tmp);
 
       if (read) {
-        data = fetchByte(adr);
+        data = loadByte(adr);
       }
       break;
     case INDIRECT_Y:
@@ -577,13 +651,20 @@ public abstract class MOS6510Core extends MOS6510Ops {
       p1 = fetchByte(p1);
       p1 += y;
 
-      data = fetchByte(adr + (p1 & 0xff));
+      tmp = adr + (p1 & 0xff);
       adr += p1;
 
       // If read - a sixth cycle patches the incorrect address...
       // Always done if RMW!
-      if (read && (p1 > 0xff || write)) {
-        data = fetchByte(adr);
+      if (read) {
+        if (p1 > 0xff || write) {
+          fetchByte(tmp);
+          data = loadByte(adr);
+        } else {
+          data = loadByte(tmp);
+        }
+      } else {
+        fetchByte(tmp);
       }
       break;
     case INDIRECT:
@@ -607,7 +688,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
     boolean rmwWrite = read && write;
     if (rmwWrite) {
       rmwDummyWrite = true;
-      writeByte(adr, data);
+      storeByte(adr, data);
       rmwDummyWrite = false;
     }
 
@@ -733,7 +814,8 @@ public abstract class MOS6510Core extends MOS6510Ops {
       tmp = pop();
       boolean irqWasDisabledOnRti = disableInterupt;
       setStatusByte(tmp);
-      if (irqWasDisabledOnRti && !disableInterupt) {
+      if (!VICE_RTI_NO_IRQ_ENABLE_DELAY
+          && irqWasDisabledOnRti && !disableInterupt) {
         irqEnableDelayOps = 1;
       }
       pc = pop() + (pop() << 8);
@@ -838,6 +920,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
       overflow = false;
       break;
     case SEI:
+      if (VICE_SEI_IRQ_WINDOW && !disableInterupt) {
+        lastOpcodeDisablesIrq = true;
+      }
       disableInterupt = true;
       break;
     case CLI:
@@ -999,7 +1084,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
     }
 
     if (write) {
-      writeByte(adr, data);
+      storeByte(adr, data);
     } else if (addrMode == ACCUMULATOR) {
       acc = data;
     }

@@ -173,6 +173,18 @@ public class C64Canvas extends JPanel implements KeyListener, FocusListener,
 
   public void keyPressed(KeyEvent event) {
     int key = event.getKeyCode();
+    // Debug: log every key so we can see what reaches the canvas.
+    if (Boolean.getBoolean("jac64.debugKeys")) {
+      System.err.println("[key] keyCode=" + key + " char='" + event.getKeyChar()
+          + "' mods=" + event.getModifiersEx());
+    }
+    // Toggle warp speed: F12.
+    if (key == KeyEvent.VK_F12) {
+      boolean now = !scr.getAudioDriver().fullSpeed();
+      scr.setFullSpeed(now);
+      System.err.println("[warp] " + (now ? "ON" : "OFF"));
+      return;
+    }
     if (key == 0) {
       key = (int) Character.toLowerCase(event.getKeyChar());
     }

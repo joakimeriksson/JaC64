@@ -65,6 +65,7 @@ public class CPU extends MOS6510Core {
       Integer.getInteger("jac64.baTraceTo", -1);
   private java.io.PrintStream execTraceOut;
   private java.io.PrintStream baTraceOut;
+  private java.io.PrintStream screenWriteTraceOut;
 
   private int cheatMon[];
   private AutoStore[] autoStore;
@@ -127,14 +128,19 @@ public class CPU extends MOS6510Core {
   // border-open trick (DEC $D016 followed by ChkBrdR check) work — the DEC's
   // dummy/final writes complete BEFORE the BA check observes their effect.
   //
-  // JaC64 maps this as:
-  //   fetchByte: waitForBus  -> cycles++ -> schedule(cycles)   -> read
-  //   writeByte: cycles++    -> schedule(cycles)               -> write
-  //              (no waitForBus — VICE writes don't check BA)
+  // JaC64's default current-cycle access phase maps this as:
+  //   read:  waitForBus -> read at cycles -> cycles++ -> schedule/phi2
+  //   write:             write at cycles -> cycles++ -> schedule/phi2
+  // Legacy pre-increment access remains available for A/B testing.
   //
-  // Set -Djac64.viceMem=false to revert to legacy ordering for A/B testing.
+  // Set -Djac64.viceCycleAccessPhase=false to revert access phase for
+  // A/B testing. Set -Djac64.viceMem=false for the older BA/schedule order.
   private static final boolean VICE_MEM_MODEL =
       !"false".equalsIgnoreCase(System.getProperty("jac64.viceMem", "true"));
+
+  private static final boolean VICE_CYCLE_ACCESS_PHASE =
+      !"false".equalsIgnoreCase(
+          System.getProperty("jac64.viceCycleAccessPhase", "true"));
 
   private void waitForBus() {
     waitForBus(false);
@@ -145,24 +151,38 @@ public class CPU extends MOS6510Core {
       return;
     }
     traceBaEvent("BA-WAIT-START until=" + baLowUntil);
+    boolean stoleCycles = false;
     while (baLowUntil > cycles) {
       cycles++;
+      stoleCycles = true;
       schedule(cycles);
+    }
+    if (stoleCycles) {
+      viceInterruptDelayAfterSteal();
     }
     traceBaEvent("BA-WAIT-END");
   }
 
   // Reads the memory with all respect to all flags...
   protected final int fetchByte(int adr) {
+    if (VICE_CYCLE_ACCESS_PHASE) {
+      waitForBus(true);
+      int val = readMemoryAt(adr, cycles);
+      clockIncAfterCurrentCycleAccess();
+      return val;
+    }
+
     if (VICE_MEM_MODEL) {
       /* VICE order: check_ba (with prev cycle's BA flag) -> CLK_INC. */
       waitForBus(true);
+      viceInterruptDelayBeforeClockInc();
       cycles++;
       // Sample IRQ line BEFORE schedule() so we see the line state
       // from END OF PREVIOUS cycle, not after this cycle's VIC work.
       sampleIrqLine();
       schedule(cycles);
     } else {
+      viceInterruptDelayBeforeClockInc();
       cycles++;
       sampleIrqLine();
       schedule(cycles);
@@ -212,6 +232,75 @@ public class CPU extends MOS6510Core {
     }
   }
 
+  private static final boolean VICE_BODY_ACCESS_PHASE =
+      Boolean.getBoolean("jac64.viceBodyAccessPhase");
+
+  private void clockIncAfterCurrentCycleAccess() {
+    viceInterruptDelayBeforeClockInc();
+    cycles++;
+    sampleIrqLine();
+    schedule(cycles);
+    schedulePhi2(cycles);
+  }
+
+  @Override
+  protected final int loadByte(int adr) {
+    if (!VICE_BODY_ACCESS_PHASE || VICE_CYCLE_ACCESS_PHASE) {
+      return fetchByte(adr);
+    }
+    waitForBus(true);
+    int val = readMemoryAt(adr, cycles);
+    clockIncAfterCurrentCycleAccess();
+    return val;
+  }
+
+  private void writeMemoryAtCurrentCycle(int adr, int data) {
+    if (adr <= 1) {
+      memory[adr] = data;
+      int p = (memory[0] ^ 0xff) | memory[1];
+
+      kernalROM = ((p & 2) == 2); // Kernal on
+      basicROM = ((p & 3) == 3); // Basic on
+
+      charROM = ((p & 3) != 0) && ((p & 4) == 0);
+      ioON = ((p & 3) != 0) && ((p & 4) != 0);
+
+      if (basicROM)
+        romFlag = 0xa000;
+      else if (kernalROM)
+        romFlag = 0xe000;
+      else
+        romFlag = 0x10000; // No Rom at all (Basic / Kernal)
+    }
+
+    adr &= 0xffff;
+    final boolean isIO = ioON && ((adr & 0xf000) == 0xd000);
+
+    if (isIO) {
+      chips.performWrite(adr, data, cycles);
+    } else {
+      memory[windex = adr] = data;
+      traceScreenWrite(adr, data);
+      if (Boolean.getBoolean("jac64.traceSprPtrWrites")
+          && adr >= 0x07F8 && adr <= 0x07FF) {
+        System.err.println("SPRPTR-WR adr=$" + Integer.toHexString(adr)
+            + " val=$" + Integer.toHexString(data & 0xff)
+            + " clk=" + cycles
+            + " pc=$" + Integer.toHexString(pc & 0xffff));
+      }
+    }
+  }
+
+  @Override
+  protected final void storeByte(int adr, int data) {
+    if (!VICE_BODY_ACCESS_PHASE || VICE_CYCLE_ACCESS_PHASE) {
+      writeByte(adr, data);
+      return;
+    }
+    writeMemoryAtCurrentCycle(adr, data);
+    clockIncAfterCurrentCycleAccess();
+  }
+
   // A byte is written directly to memory or to ioChips.
   //
   // VICE memory-bus split (jac64.viceMemBus, default OFF — opt-in):
@@ -232,6 +321,13 @@ public class CPU extends MOS6510Core {
       VICE_MEM_MODEL && Boolean.getBoolean("jac64.viceMemBus");
 
   protected final void writeByte(int adr, int data) {
+    if (VICE_CYCLE_ACCESS_PHASE) {
+      writeMemoryAtCurrentCycle(adr, data);
+      clockIncAfterCurrentCycleAccess();
+      return;
+    }
+
+    viceInterruptDelayBeforeClockInc();
     cycles++;
     if (!VICE_MEM_MODEL) {
       // Legacy: schedule + waitForBus BEFORE write. Writes can stall on BA-low.
@@ -270,6 +366,7 @@ public class CPU extends MOS6510Core {
       chips.performWrite(adr, data, cycles);
     } else {
       memory[windex = adr] = data;
+      traceScreenWrite(adr, data);
       if (Boolean.getBoolean("jac64.traceSprPtrWrites")
           && adr >= 0x07F8 && adr <= 0x07FF) {
         System.err.println("SPRPTR-WR adr=$" + Integer.toHexString(adr)
@@ -287,6 +384,46 @@ public class CPU extends MOS6510Core {
     }
     schedulePhi2(cycles);
     sampleIrqLine();
+  }
+
+  private static final boolean TRACE_SCREEN_WRITES =
+      Boolean.getBoolean("jac64.traceScreenWrites");
+  private static final long TRACE_SCREEN_WRITES_START =
+      Long.getLong("jac64.traceScreenWritesStart", 0L);
+  private static final long TRACE_SCREEN_WRITES_END =
+      Long.getLong("jac64.traceScreenWritesEnd", Long.MAX_VALUE);
+
+  private void traceScreenWrite(int adr, int data) {
+    if (!TRACE_SCREEN_WRITES || adr < 0x0400 || adr > 0x07e7
+        || cycles < TRACE_SCREEN_WRITES_START
+        || cycles > TRACE_SCREEN_WRITES_END
+        || !"C64 CPU".equals(getName())) {
+      return;
+    }
+    if (screenWriteTraceOut == null) {
+      String path = System.getProperty("jac64.traceScreenWritesFile",
+          "/tmp/jac64_screen_writes.log");
+      try {
+        screenWriteTraceOut = new java.io.PrintStream(path);
+      } catch (Exception e) {
+        screenWriteTraceOut = System.err;
+      }
+    }
+    int offset = adr - 0x0400;
+    int row = offset / 40;
+    int col = offset % 40;
+    screenWriteTraceOut.println("EV-ScreenWrite clk=" + cycles
+        + " adr=$" + Integer.toHexString(adr & 0xffff)
+        + " row=" + row
+        + " col=" + col
+        + " val=$" + Integer.toHexString(data & 0xff)
+        + " opPC=$" + Integer.toHexString(getInstructionStartPC() & 0xffff)
+        + " pc=$" + Integer.toHexString(pc & 0xffff)
+        + " a=$" + Integer.toHexString(acc & 0xff)
+        + " x=$" + Integer.toHexString(x & 0xff)
+        + " y=$" + Integer.toHexString(y & 0xff)
+        + " zpfb=$" + Integer.toHexString(memory[0xfb] & 0xff)
+        + " zpfd=$" + Integer.toHexString(memory[0xfd] & 0xff));
   }
 
   // Sample the IRQ line at this CPU cycle and shift the rolling history.

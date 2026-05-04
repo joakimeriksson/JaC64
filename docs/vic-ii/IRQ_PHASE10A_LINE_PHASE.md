@@ -47,17 +47,11 @@ discrepancy between theory and measurement is unaccounted for.
 ## Where the discrepancy hides
 
 Possibilities:
-1. **JaC64's reset takes different cycles than expected.** `cpu.reset()`
-   may consume cycles before `lastLine = cpu.cycles` is set.
-2. **JaC64 detSysJump pauses differ from VICE autostart.** TestRaster's
-   `cpu.pauseAtCycle = 7000000` followed by `jumpToSubroutine` might
-   leave VIC in a state that differs from VICE's natural autostart
-   resumption.
-3. **VICE's `interrupt_delay()` in CLK_INC** (mainc64cpu.c:97-110)
+1. **VICE's `interrupt_delay()` in CLK_INC** (mainc64cpu.c:97-110)
    uses OLD maincpu_clk, then maincpu_clk++, then vicii_cycle. JaC64's
    sampleIrqLine does similar but the EXACT order may shift IRQ
    delivery 1 cycle.
-4. **Sprite Y-comparison + display flag** at cycle 55 may shift in
+2. **Sprite Y-comparison + display flag** at cycle 55 may shift in
    JaC64 vs VICE, causing BA-low events to fire 1 cycle differently
    when sprites get enabled in SS-COL testset.
 
