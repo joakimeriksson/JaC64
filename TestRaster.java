@@ -589,13 +589,15 @@ public class TestRaster {
        regular characters).  Used by the cycle-accuracy debugging loop
        to compare cell-by-cell against a VICE screen dump. */
     private void dumpScreenRam(String path) {
+        int base = Integer.getInteger("jac64.dumpScreenBase", 0x0400);
         try (java.io.PrintWriter pw = new java.io.PrintWriter(path)) {
             int[] mem = cpu.getMemory();
+            pw.printf("# screen base $%04x%n", base);
             for (int row = 0; row < 25; row++) {
                 StringBuilder hex = new StringBuilder();
                 StringBuilder ascii = new StringBuilder();
                 for (int col = 0; col < 40; col++) {
-                    int b = mem[0x0400 + row * 40 + col] & 0xff;
+                    int b = mem[base + row * 40 + col] & 0xff;
                     hex.append(String.format("%02x ", b));
                     /* preserve inverse-video bit: '~' prefix on inverse,
                        printable ASCII for normal codes, '.' for non-print. */
