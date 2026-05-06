@@ -3144,6 +3144,25 @@ public class C64Screen extends ExtChip implements Observer {
 
       data = memory[position];
 
+      // Unconditional g-access trace (every bitmap fetch). Pair with EV-FetchC
+      // to map JaC64's per-cycle fetch addresses against VICE's chip-model.c
+      // PAL fetch table (Phi1(16+K)).
+      if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+          && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+        traceVicCycleOut.println("EV-FetchG clk=" + cpu.cycles
+            + " rast=$" + Integer.toHexString(vbeam)
+            + " cyc=" + (cpu.cycles - lastLine)
+            + " col=" + drawVmli
+            + " addr=$" + Integer.toHexString(position)
+            + " data=$" + Integer.toHexString(data & 0xff)
+            + " vicBase=$" + Integer.toHexString(vicBase)
+            + " vicBaseD=$" + Integer.toHexString(fetchVicBase)
+            + " bank=$" + Integer.toHexString(vicBank)
+            + " d018=$" + Integer.toHexString(vicMem)
+            + " vc=" + vc
+            + " rc=" + rc);
+      }
+
       if (Boolean.getBoolean("jac64.traceBitmap") && vmli == 0
           && vbeam >= 80 && vbeam <= 82) {
         System.err.println("BITMAP vbeam=" + vbeam + " vmli=" + vmli
