@@ -435,6 +435,17 @@ public class C64Screen extends ExtChip implements Observer {
   private final boolean cAccessShift =
       !"false".equalsIgnoreCase(System.getProperty("jac64.cAccessShift", "true"));
 
+  // Move c-access (fetchBadLineData) from case-body to clockPhi2 hook so it
+  // runs at JaC64 vicCycle (14+K) Phi2 = VICE PAL cycle (15+K) Phi2 — exact
+  // match for VICE's vicii-chip-model.c PAL fetch table:
+  //   { Phi2(15), 0x010, None, FetchC, BaFetch, ChkSprCrunch }
+  // Without this, c-access happens 1 VICE cycle late (case body = JaC64 N =
+  // VICE N+1), and the current cia2BankDelayCycles=2 default compensates by
+  // deferring bank writes — two errors that cancel for $DD00 boundary but
+  // leave residual mismatches elsewhere. Flag default OFF until verified.
+  private final boolean cAccessPhi2 =
+      !"false".equalsIgnoreCase(System.getProperty("jac64.cAccessPhi2", "false"));
+
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
   private static final int VC_VBUF_L   = 0x11;
@@ -2404,6 +2415,8 @@ public class C64Screen extends ExtChip implements Observer {
       mpos += 8;
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C14");
+        // VICE Phi2(15) col 0 c-access — JaC64 case 14 = VICE cycle 15.
+        if (cAccessPhi2) fetchBadLineData(0);
       }
       break;
     case 15:
@@ -2416,7 +2429,8 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C15");
         // c-access for col 0 — fetched 1 cycle BEFORE col 0's pixel emit
         // at case 16. Matches VICE Phi2(16) FetchC for col 0.
-        if (cAccessShift) fetchBadLineData(0);
+        if (cAccessPhi2) fetchBadLineData(1);  // VICE Phi2(16) col 1
+        else if (cAccessShift) fetchBadLineData(0);
       }
 
       // Turn off sprite DMA if finished reading!
@@ -2434,9 +2448,11 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C16");
-        // With cAccessShift: fetch col 1 (next cycle's pixel emit).
-        // Without: legacy — fetch col 0 (= vmli) at same cycle as emit.
-        if (cAccessShift) fetchBadLineData(1);
+        // cAccessPhi2: fetch col 2 here (1 case earlier than cAccessShift).
+        // cAccessShift:  fetch col 1 (next cycle's pixel emit).
+        // legacy:       fetch col 0 (= vmli) at same cycle as emit.
+        if (cAccessPhi2) fetchBadLineData(2);  // VICE Phi2(17) col 2
+        else if (cAccessShift) fetchBadLineData(1);
         else fetchBadLineData(vmli);
       }
 
@@ -2457,7 +2473,8 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C17");
-        if (cAccessShift) fetchBadLineData(2);
+        if (cAccessPhi2) fetchBadLineData(3);  // VICE Phi2(18) col 3
+        else if (cAccessShift) fetchBadLineData(2);
         else fetchBadLineData(vmli);
       }
       if (useViceGfx) drawGraphicsVice(mpos);
@@ -2469,7 +2486,10 @@ public class C64Screen extends ExtChip implements Observer {
     default:
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-FETCH");
-        if (cAccessShift) fetchBadLineData(vicCycle - 15);
+        // cAccessPhi2: vicCycle 18..53 fetches col vicCycle-14 = col 4..39.
+        // cAccessShift: vicCycle 18..53 fetches col vicCycle-15 = col 3..38.
+        if (cAccessPhi2) fetchBadLineData(vicCycle - 14);
+        else if (cAccessShift) fetchBadLineData(vicCycle - 15);
         else fetchBadLineData(vmli);
       }
       if (useViceGfx) drawGraphicsVice(mpos);
@@ -2481,7 +2501,9 @@ public class C64Screen extends ExtChip implements Observer {
     case 54:
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C54");
-        if (cAccessShift) fetchBadLineData(39);
+        // cAccessPhi2: col 39 was already fetched at default case 53.
+        if (cAccessPhi2) { /* col 39 fetched at case 53 */ }
+        else if (cAccessShift) fetchBadLineData(39);
         else fetchBadLineData(vmli);
       }
       int mult = 1;
