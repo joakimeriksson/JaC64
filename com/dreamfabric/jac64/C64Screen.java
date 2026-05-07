@@ -446,6 +446,19 @@ public class C64Screen extends ExtChip implements Observer {
   private final boolean cAccessPhi2 =
       !"false".equalsIgnoreCase(System.getProperty("jac64.cAccessPhi2", "false"));
 
+  // Use the LAGGED vicBase (vicBaseFetchDelay, captured at end of previous
+  // VIC cycle) for bitmap-mode g-access. Without this, JaC64's drawGraphics
+  // resolved bitmap fetch via mixFetchAddressIfRomTransition which returns
+  // the IMMEDIATE (post-write) vicBase for non-ROM bitmap fetches —
+  // bypassing the delay machinery and making mid-line $DD00 bank-effect
+  // boundaries land 1 col EARLY versus VICE.
+  // Default ON: matches VICE's chip-model.c PAL fetch table where FetchG
+  // for col K runs at Phi1(16+K) — i.e., in vicii_cycle for cycle 16+K
+  // which sees writes from cycles <= 14+K. Verified on fetchsplit: row 1
+  // now has 4 chars of "0" matching VICE (was 3).
+  private final boolean gAccessShift =
+      !"false".equalsIgnoreCase(System.getProperty("jac64.gAccessShift", "true"));
+
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
   private static final int VC_VBUF_L   = 0x11;
@@ -3116,7 +3129,14 @@ public class C64Screen extends ExtChip implements Observer {
       // -------------------------------------------------------------------
       int from = fetchVicBase + (vc & 0x3ff) * 8 + rc;
       int to = vicBase + (vc & 0x3ff) * 8 + rc;
-      position = mixFetchAddressIfRomTransition(from, to);
+      // gAccessShift: use the LAGGED vicBase (captured end of previous
+      // VIC cycle) so a mid-line $DD00 bank change doesn't take effect
+      // until the next g-access — matches VICE Phi1(16+K) timing where
+      // FetchG runs in vicii_cycle for cycle 16+K, AFTER vbank was set
+      // by the CPU access at clk=15+K-1 but BEFORE clk=16+K.
+      // Without this, JaC64's bitmap fetch sees mid-line bank changes
+      // 1 col earlier than VICE (verified on fetchsplit pixel diff).
+      position = gAccessShift ? from : mixFetchAddressIfRomTransition(from, to);
       if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
           && cpu.cycles <= TRACE_VIC_CYCLE_END
           && !isCharRomFetchBase(from)
