@@ -112,7 +112,12 @@ public class C64Screen extends ExtChip implements Observer {
   // This is an IEC emulation (non ROM based)
   boolean emulateDisk = false; //true; //!CPU.EMULATE_1541; // false;
 
-  int[] cbmcolor = VICConstants.COLOR_SETS[0];
+  // Default to color set 3 (WinVICE-ripped) for closer pixel match with
+  // VICE x64sc when comparing screenshots/test outputs. Set 0 (JaC64
+  // original) and others remain available via File→Settings→Color Set.
+  int[] cbmcolor = VICConstants.COLOR_SETS[
+      Integer.getInteger("jac64.colorSet",
+          VICConstants.COLOR_SETS.length - 1)];
 
   // -------------------------------------------------------------------
   // VIC-II variables
