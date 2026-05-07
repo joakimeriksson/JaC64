@@ -241,8 +241,14 @@ public abstract class MOS6510Core extends MOS6510Ops {
   // VICE 6510dtvcore.c:1593-1600 marks SEI with
   // OPCODE_DISABLES_IRQ() when I was clear. main IRQ dispatch then allows
   // service for one boundary with `|| OPINFO_DISABLES_IRQ(...)`.
+  // Default ON: matches VICE — when SEI clears a pending IRQ window
+  // (I was 0, IRQ pending), the IRQ is still serviced at the next
+  // instruction boundary instead of being masked. With this off, ackcia3
+  // (CLI;SEI inside IRQ handler with unACKed CIA pending) failed because
+  // SEI's I=1 immediately blocked the still-pending IRQ. irq-ack-vicii +
+  // ackraster + ackcia + ackcia2 + cia-timer all unchanged.
   protected static final boolean VICE_SEI_IRQ_WINDOW =
-      Boolean.getBoolean("jac64.viceSeiIrqWindow");
+      !"false".equalsIgnoreCase(System.getProperty("jac64.viceSeiIrqWindow", "true"));
 
   protected static final boolean VICE_IRQ_DELAY_COUNTER =
       Boolean.getBoolean("jac64.viceIrqDelayCounter");
