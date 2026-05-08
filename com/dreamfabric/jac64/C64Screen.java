@@ -452,17 +452,19 @@ public class C64Screen extends ExtChip implements Observer {
       !"false".equalsIgnoreCase(System.getProperty("jac64.cAccessPhi2", "false"));
 
   // Use the LAGGED vicBase (vicBaseFetchDelay, captured at end of previous
-  // VIC cycle) for bitmap-mode g-access. Without this, JaC64's drawGraphics
-  // resolved bitmap fetch via mixFetchAddressIfRomTransition which returns
-  // the IMMEDIATE (post-write) vicBase for non-ROM bitmap fetches —
-  // bypassing the delay machinery and making mid-line $DD00 bank-effect
-  // boundaries land 1 col EARLY versus VICE.
-  // Default ON: matches VICE's chip-model.c PAL fetch table where FetchG
-  // for col K runs at Phi1(16+K) — i.e., in vicii_cycle for cycle 16+K
-  // which sees writes from cycles <= 14+K. Verified on fetchsplit: row 1
-  // now has 4 chars of "0" matching VICE (was 3).
+  // VIC cycle) for bitmap-mode g-access. JaC64's drawGraphics resolves
+  // bitmap fetch via mixFetchAddressIfRomTransition which returns the
+  // IMMEDIATE (post-write) vicBase for non-ROM bitmap fetches.
+  // With gAccessShift=true, fetches use the lagged value instead, matching
+  // VICE's Phi1(16+K) timing for some scenarios.
+  //
+  // Default OFF: empirically a wash on fetchsplit — fixes some rows but
+  // breaks others. Net cell-diff count vs VICE is essentially identical
+  // (340 vs 342). The underlying "row parity" issue isn't a simple
+  // 1-cycle lag question; needs deeper sub-routine-by-sub-routine
+  // analysis. Set -Djac64.gAccessShift=true to opt in.
   private final boolean gAccessShift =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.gAccessShift", "true"));
+      !"false".equalsIgnoreCase(System.getProperty("jac64.gAccessShift", "false"));
 
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
