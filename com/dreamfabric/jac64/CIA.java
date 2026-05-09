@@ -443,7 +443,7 @@ public class CIA {
     private void loadTimer(long cycles) {
       timer = latch;
       nextZero = cycles + latch;
- 
+
       if (TIMER_DEBUG && offset == 0x10d00) {
         System.out.println(ciaID() + ": " + id + " - timer loaded at "
             + cycles + " with: " + latch + " diff " +
@@ -548,7 +548,10 @@ public class CIA {
         break;
       case COUNT_STOP:
         if (!countUnderflow) {
-          timer = (int) (cycles - nextZero);
+          // Cache the remaining-count value when stopping. Was `cycles -
+          // nextZero` which is negative until underflow → got clamped to 0,
+          // making bascan tests 3/4/6/7 read 0 instead of the live value.
+          timer = (int) (nextZero - cycles);
           if (timer < 0) timer = 0;
         }
         state = STOP;
