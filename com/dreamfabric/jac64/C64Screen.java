@@ -131,10 +131,11 @@ public class C64Screen extends ExtChip implements Observer {
   int irqMask = 0;
   int irqFlags = 0;
   int control1 = 0;
-  // VICE-style delayed copy of $D011 for graphics fetches. Updated at the
-  // end of each VIC cycle so the next cycle sees the previous value, like
-  // vicii.reg11_delay in VICE.
+  // VICE-style delayed copies of $D011 for graphics fetches. JaC64's CPU
+  // write phase exposes the new register value one dispatcher cycle earlier
+  // than VICE's g-fetch stage, so fetch address selection samples delay2.
   int control1FetchDelay = 0;
+  int control1FetchDelay2 = 0;
   int control2 = 0;
   int sprXMSB = 0;
   int sprEN = 0;
@@ -372,18 +373,12 @@ public class C64Screen extends ExtChip implements Observer {
   private final boolean viceFetchDelay =
       Boolean.getBoolean("jac64.viceFetchDelay");
   private int vicBankFetchDelay = 0;
+  private int vicMemFetchDelay = 0;
   private int videoMatrixFetchDelay = 0;
   private int vicBaseFetchDelay = 0;
   private int charMemoryIndexFetchDelay = 0;
   private final boolean viceRenderDelay =
       Boolean.getBoolean("jac64.viceRenderDelay");
-  private final boolean vicMemLatch =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.d018Latch", "true"));
-  private boolean vicMemPending = false;
-  private int vicMemPendingValue = 0;
-  private long vicMemCommitClk = 0;
-  private int vicMem_vicCommitted = 0;
-
   // ----- VICE-style cycle-driven gfx pipeline (jac64.viceGfx) -----
   // Mirrors src/viciisc/vicii-draw-cycle.c structure. When enabled, the
   // per-cycle drawGraphicsVice() emits 8 pixels through an X-shift
@@ -414,57 +409,16 @@ public class C64Screen extends ExtChip implements Observer {
   private int vmode16Pipe = 0;   // MCM bit, latched at pixel 4
   private int vmode16Pipe2 = 0;  // vmode16Pipe lagged 1 cycle (used for MC pixel-pair logic)
 
-  // VIC bank-switch latch (1-cycle deferral on $DD00 → setVideoMem effect).
-  // Default ON: VICE-style split tests need the bank change to become
-  // visible to the VIC one cycle after the CPU write, not immediately.
-  // Set -Djac64.dd00BankLatch=false to fall back to the legacy path.
-  private final boolean cia2BankLatch =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.dd00BankLatch", "true"));
-  // Bank-delay sweep knob for fetchsplit. VICE-trace comparisons so far
-  // have suggested the boundary is sensitive to this by a single cycle.
-  private final long cia2BankDelayCycles =
-      Long.getLong("jac64.dd00BankDelayCycles", 2L);
-  private boolean cia2BankPending = false;
-  private int cia2BankPendingValue = 0;
-  private long cia2BankCommitClk = 0;
-  // VIC-visible copy of cia2PRA — only updated when the deferred bank
-  // change commits. cia2PRA itself updates immediately for IEC purposes.
-  // Initialised to 0xff so vicBank starts at 0 (default state) until
-  // the kernal does its first $DD00 write.
-  private int cia2PRA_vicCommitted = 0xff;
+  // VICE PAL fetch table alignment:
+  //   c-access for col K at Phi2(15+K) -> JaC64 case 15+K
+  //   g-access for col K at Phi1(16+K) -> lagged fetch base
 
-  // c-access cycle alignment fix: shift c-access from cases 16-55 to
-  // cases 15-54 so col K c-access happens at JaC64 case (15+K) =
-  // VICE PAL cycle (16+K) Phi2 of cycle (15+K) — matching VICE's table.
-  // See docs/vic-ii/CYCLE_ALIGNMENT.md.
-  private final boolean cAccessShift =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.cAccessShift", "true"));
-
-  // Move c-access (fetchBadLineData) from case-body to clockPhi2 hook so it
-  // runs at JaC64 vicCycle (14+K) Phi2 = VICE PAL cycle (15+K) Phi2 — exact
-  // match for VICE's vicii-chip-model.c PAL fetch table:
-  //   { Phi2(15), 0x010, None, FetchC, BaFetch, ChkSprCrunch }
-  // Without this, c-access happens 1 VICE cycle late (case body = JaC64 N =
-  // VICE N+1), and the current cia2BankDelayCycles=2 default compensates by
-  // deferring bank writes — two errors that cancel for $DD00 boundary but
-  // leave residual mismatches elsewhere. Flag default OFF until verified.
-  private final boolean cAccessPhi2 =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.cAccessPhi2", "false"));
-
-  // Use the LAGGED vicBase (vicBaseFetchDelay, captured at end of previous
-  // VIC cycle) for bitmap-mode g-access. JaC64's drawGraphics resolves
-  // bitmap fetch via mixFetchAddressIfRomTransition which returns the
-  // IMMEDIATE (post-write) vicBase for non-ROM bitmap fetches.
-  // With gAccessShift=true, fetches use the lagged value instead, matching
-  // VICE's Phi1(16+K) timing for some scenarios.
-  //
-  // Default OFF: empirically a wash on fetchsplit — fixes some rows but
-  // breaks others. Net cell-diff count vs VICE is essentially identical
-  // (340 vs 342). The underlying "row parity" issue isn't a simple
-  // 1-cycle lag question; needs deeper sub-routine-by-sub-routine
-  // analysis. Set -Djac64.gAccessShift=true to opt in.
-  private final boolean gAccessShift =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.gAccessShift", "false"));
+  // VICE c64gluelogic.c 252535-01 video-bank switch state. This models the
+  // C64C glue IC used by local x64sc defaults without exposing a timing flag.
+  private int glueVisibleVBank = 0;
+  private int glueOldVBank = 0;
+  private boolean glueAlarmActive = false;
+  private long glueAlarmClock = 0;
 
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
@@ -591,6 +545,28 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[reg - 0x27].color[2] = cbmcolor[v];
         sprites[reg - 0x27].col = v;
         break;
+    }
+  }
+
+  // 8565 color resolution can make a same-cycle $D021 write affect the
+  // already staged 8-pixel group; if pixel 0 used that register, VICE emits
+  // the light-grey "grey dot" instead of the new color.
+  private void applyD021CurrentCycleColor(int oldColor, int newColor) {
+    int vicCycle = (int) (cpu.cycles - lastLine);
+    if (vicCycle < 16 || vicCycle > 55 || notVisible
+        || !gfxVisible || paintBorder || vBorderOnly()) {
+      return;
+    }
+
+    int start = mpos - 8 + horizScroll;
+    if (start < 0 || start + 7 >= mem.length) {
+      return;
+    }
+
+    for (int i = 0; i < 8; i++) {
+      if (mem[start + i] == oldColor) {
+        mem[start + i] = (i == 0) ? cbmcolor[15] : newColor;
+      }
     }
   }
 
@@ -759,6 +735,21 @@ public class C64Screen extends ExtChip implements Observer {
       return (fromAddr & 0xff) | (toAddr & 0x3f00);
     }
     return toAddr;
+  }
+
+  private int mixPhi1FetchAddress(int fromAddr, int toAddr) {
+    if (!isCharRomFetchBase(fromAddr) && isCharRomFetchBase(toAddr)) {
+      return (fromAddr & 0xff) | (toAddr & 0x3f00);
+    }
+    return fromAddr;
+  }
+
+  private int charMemoryIndexFor(int bank, int memReg) {
+    int charSetBase = bank | (memReg & 0x0e) << 10;
+    if ((memReg & 0x0c) != 4 || (bank & 0x4000) == 0x4000) {
+      return charSetBase;
+    }
+    return (((memReg & 0x02) == 0) ? 0 : 0x0800) + CPU.CHAR_ROM2;
   }
 
   private boolean isBadLine(int scroll) {
@@ -1648,19 +1639,7 @@ public class C64Screen extends ExtChip implements Observer {
 
     case 0xd018: {
       vicMem = data;
-      if (vicMemLatch) {
-        if (vicMemPending && cpu.cycles >= vicMemCommitClk) {
-          vicMem_vicCommitted = vicMemPendingValue;
-          setVideoMem();
-        }
-        vicMemPending = true;
-        vicMemPendingValue = data;
-        vicMemCommitClk = cpu.cycles + 1;
-        setVideoMem();
-      } else {
-        vicMem_vicCommitted = data;
-        setVideoMem();
-      }
+      setVideoMem();
       if (Boolean.getBoolean("jac64.traceFli")) {
         int vicCycleNow = (int) (cpu.cycles - lastLine);
         System.err.println("D018=$" + Integer.toHexString(data)
@@ -1758,13 +1737,16 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 0xd021:
+      int oldBgColor = bgColor;
+      int newBgColor = cbmcolor[data & 15];
       bgCol[0] = data & 15;
+      applyD021CurrentCycleColor(oldBgColor, newBgColor);
       if (COLOR_DELAY) {
         lastColorReg = 0x21;
         lastColorValue = data & 15;
         lastColorClk = cpu.cycles;
       } else {
-        bgColor = cbmcolor[bgCol[0]];
+        bgColor = newBgColor;
         for (int i = 0, n = 8; i < n; i++) {
           sprites[i].color[0] = bgColor;
         }
@@ -1876,41 +1858,9 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       cia[1].performWrite(address + IO_OFFSET, data, cpu.cycles);
-      // VIC bank-switch latch (jac64.dd00BankLatch, default ON):
-      // Real 6569 has a 1-cycle delay on the bank-change taking effect
-      // for VIC fetches. The IEC/serial bus updates immediately, but the
-      // VIC's videoMatrix / vicBase / charMemoryIndex change only on the
-      // following cycle. Krestage 3 relies on this — its mid-line $DD00
-      // write at vbeam=66 cyc=41 splits the screen between two banks at
-      // exactly column 25; without the 1-cycle latch the split column
-      // shifts left by 1, producing wrong per-line FLI colors on the
-      // right half. See VirtualC64 issue #442 and the test ROM at
-      // ../VICE-testprogs/VICII/split-tests/fetchsplit/.
-      if (cia2BankLatch) {
-        // Commit any prior still-pending bank change first.
-        if (cia2BankPending && cpu.cycles >= cia2BankCommitClk) {
-          cia2PRA_vicCommitted = cia2BankPendingValue;
-          setVideoMem();
-        }
-        // Queue the new pending; cia2PRA_vicCommitted stays at the OLD
-        // value so $D018 / $DD02 paths that call setVideoMem() in the
-        // meantime continue to use the OLD bank.
-        cia2BankPending = true;
-        cia2BankPendingValue = data;
-        // The write is visible to IEC immediately, but the VIC bank
-        // should not see it until after the next VIC fetch slot. The
-        // fetchsplit trace still landed one character early with a +2
-        // commit, so move the VIC-visible bank one cycle further out.
-        cia2BankCommitClk = cpu.cycles + cia2BankDelayCycles;
-        // IEC/non-bank fields update immediately.
-        cia2PRA = data;
-        updateCia2IecBus(false);
-      } else {
-        cia2PRA = data;
-        cia2PRA_vicCommitted = data;
-        updateCia2IecBus(false);
-        setVideoMem();
-      }
+      cia2PRA = data;
+      updateCia2IecBus(false);
+      setGlueVBank(effectiveCia2VBank(), false);
       break;
 
     case 0xdd02:
@@ -1920,7 +1870,7 @@ public class C64Screen extends ExtChip implements Observer {
       cia2DDRA = data;
       cia[1].performWrite(address + IO_OFFSET, data, cpu.cycles);
       updateCia2IecBus(false);
-      setVideoMem();
+      setGlueVBank(effectiveCia2VBank(), true);
       break;
 
     default:
@@ -1970,37 +1920,62 @@ public class C64Screen extends ExtChip implements Observer {
           " cycles since IRQ: " + (cpu.cycles-lastIRQ) +
           " at " + vbeam);
     }
-    // Set-up vars for screen rendering. When jac64.dd00BankLatch is on,
-    // use the VIC-side committed copy of cia2PRA so the bank change from
-    // a $DD00 write only takes effect 1 cycle later (matching real 6569
-    // timing). When jac64.d018Latch is on, use the VIC-side committed copy
-    // of vicMem so mid-line $D018 writes are also delayed one cycle for the
-    // fetch path. Other paths ($DD02 DDR write) still call this method but
-    // using the committed copies ensures the VIC-visible bases stay at the
-    // previously-latched values until the deferred commit fires.
-    final int praForVic = cia2BankLatch ? cia2PRA_vicCommitted : cia2PRA;
-    final int vicMemForVic = vicMemLatch ? vicMem_vicCommitted : vicMem;
-    vicBank = (~(~cia2DDRA | praForVic) & 3) << 14;
-    charSet = vicBank | (vicMemForVic & 0x0e) << 10;
-    videoMatrix = vicBank | (vicMemForVic & 0xf0) << 6;
-    vicBase = vicBank | (vicMemForVic & 0x08) << 10;
+    // Set-up vars for screen rendering. $DD00/$DD02 bank visibility is fed
+    // through the VICE 252535-01 glue state above; $D018 itself is immediate.
+    vicBank = glueVisibleVBank << 14;
+    charSet = vicBank | (vicMem & 0x0e) << 10;
+    videoMatrix = vicBank | (vicMem & 0xf0) << 6;
+    vicBase = vicBank | (vicMem & 0x08) << 10;
     spr0BlockSel = 0x03f8 + videoMatrix;
 
     //check if vic not looking at char rom 1, 2, 4, 8
-    if ( (vicMemForVic & 0x0c) != 4 || (vicBank & 0x4000) == 0x4000) {
+    if ( (vicMem & 0x0c) != 4 || (vicBank & 0x4000) == 0x4000) {
       charMemoryIndex = charSet;
     } else {
-      charMemoryIndex = (((vicMemForVic & 0x02) == 0) ? 0 : 0x0800) +
+      charMemoryIndex = (((vicMem & 0x02) == 0) ? 0 : 0x0800) +
         CPU.CHAR_ROM2;
     }
+  }
+
+  private int effectiveCia2VBank() {
+    return ~(~cia2DDRA | cia2PRA) & 3;
+  }
+
+  private void performGlueVBankSwitch(int vbank) {
+    glueVisibleVBank = vbank & 3;
+    setVideoMem();
+  }
+
+  private void scheduleGlueAlarm(int vbank) {
+    glueAlarmClock = cpu.cycles + 2;
+    glueAlarmActive = true;
+  }
+
+  private void setGlueVBank(int vbank, boolean ddrFlag) {
+    int newVBank = vbank;
+    boolean updateNow = true;
+
+    if (((glueOldVBank ^ vbank) == 3)
+        && ((vbank & (vbank - 1)) == 0)
+        && vbank != 0) {
+      newVBank = 3;
+      scheduleGlueAlarm(vbank);
+    } else if (ddrFlag && vbank < glueOldVBank
+        && ((glueOldVBank ^ vbank) != 3)) {
+      updateNow = false;
+      scheduleGlueAlarm(vbank);
+    }
+
+    if (updateNow) {
+      performGlueVBankSwitch(newVBank);
+    }
+    glueOldVBank = vbank;
   }
 
   private void initUpdate() {
     vc = 0;
     vcBase = 0;
     vmli = 0;
-    vicMem_vicCommitted = vicMem;
-    vicMemPending = false;
     updating = true;
     for (int i = 0; i < 8; i++) {
       sprites[i].nextByte = 0;
@@ -2072,14 +2047,9 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   public final void clock(long cycles) {
-    // Commit any deferred $DD00 bank-switch (1-cycle latch). Runs before
-    // the cycle's case dispatcher so the new vicBank is visible to this
-    // cycle's c-access / g-access — matches real 6569 timing where the
-    // bank change written at cycle N takes effect from cycle N+1.
-    if (cia2BankPending && cycles >= cia2BankCommitClk) {
-      cia2PRA_vicCommitted = cia2BankPendingValue;
-      setVideoMem();
-      cia2BankPending = false;
+    if (glueAlarmActive && cycles >= glueAlarmClock) {
+      performGlueVBankSwitch(glueOldVBank);
+      glueAlarmActive = false;
     }
 
     // VICE-style 1-cycle delayed apply for color register writes.
@@ -2435,8 +2405,6 @@ public class C64Screen extends ExtChip implements Observer {
       mpos += 8;
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C14");
-        // VICE Phi2(15) col 0 c-access — JaC64 case 14 = VICE cycle 15.
-        if (cAccessPhi2) fetchBadLineData(0);
       }
       break;
     case 15:
@@ -2447,10 +2415,7 @@ public class C64Screen extends ExtChip implements Observer {
 
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C15");
-        // c-access for col 0 — fetched 1 cycle BEFORE col 0's pixel emit
-        // at case 16. Matches VICE Phi2(16) FetchC for col 0.
-        if (cAccessPhi2) fetchBadLineData(1);  // VICE Phi2(16) col 1
-        else if (cAccessShift) fetchBadLineData(0);
+        fetchBadLineData(0);  // VICE Phi2(15) col 0
       }
 
       // Turn off sprite DMA if finished reading!
@@ -2468,12 +2433,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C16");
-        // cAccessPhi2: fetch col 2 here (1 case earlier than cAccessShift).
-        // cAccessShift:  fetch col 1 (next cycle's pixel emit).
-        // legacy:       fetch col 0 (= vmli) at same cycle as emit.
-        if (cAccessPhi2) fetchBadLineData(2);  // VICE Phi2(17) col 2
-        else if (cAccessShift) fetchBadLineData(1);
-        else fetchBadLineData(vmli);
+        fetchBadLineData(1);  // VICE Phi2(16) col 1
       }
 
       // Draw one character here!
@@ -2493,9 +2453,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C17");
-        if (cAccessPhi2) fetchBadLineData(3);  // VICE Phi2(18) col 3
-        else if (cAccessShift) fetchBadLineData(2);
-        else fetchBadLineData(vmli);
+        fetchBadLineData(2);  // VICE Phi2(17) col 2
       }
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
@@ -2506,11 +2464,8 @@ public class C64Screen extends ExtChip implements Observer {
     default:
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-FETCH");
-        // cAccessPhi2: vicCycle 18..53 fetches col vicCycle-14 = col 4..39.
-        // cAccessShift: vicCycle 18..53 fetches col vicCycle-15 = col 3..38.
-        if (cAccessPhi2) fetchBadLineData(vicCycle - 14);
-        else if (cAccessShift) fetchBadLineData(vicCycle - 15);
-        else fetchBadLineData(vmli);
+        // vicCycle 18..53 fetches col vicCycle-15 = col 3..38.
+        fetchBadLineData(vicCycle - 15);
       }
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
@@ -2521,10 +2476,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 54:
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C54");
-        // cAccessPhi2: col 39 was already fetched at default case 53.
-        if (cAccessPhi2) { /* col 39 fetched at case 53 */ }
-        else if (cAccessShift) fetchBadLineData(39);
-        else fetchBadLineData(vmli);
+        fetchBadLineData(39);
       }
       int mult = 1;
       int ypos = vPos + SC_SPYOFFS;
@@ -2570,8 +2522,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C55");
-        // With cAccessShift: col 39 already fetched at case 54; no fetch here.
-        if (!cAccessShift) fetchBadLineData(vmli);
+        // All 40 c-accesses were completed by case 54.
       }
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
@@ -2764,7 +2715,7 @@ public class C64Screen extends ExtChip implements Observer {
         .append(" cyc=").append(vicCycle)
         .append(" bl=").append(badLine ? 1 : 0)
         .append(" baU=").append(cpu.baLowUntil)
-        .append(" dd00=$").append(Integer.toHexString(cia2PRA_vicCommitted & 0xff))
+        .append(" dd00=$").append(Integer.toHexString(cia2PRA & 0xff))
         .append(" vicBank=$").append(Integer.toHexString(vicBank))
         .append(" videoMatrix=$").append(Integer.toHexString(videoMatrix))
         .append(" vicBase=$").append(Integer.toHexString(vicBase))
@@ -2788,18 +2739,13 @@ public class C64Screen extends ExtChip implements Observer {
     }
 
     vicBankFetchDelay = vicBank;
+    vicMemFetchDelay = vicMem;
     videoMatrixFetchDelay = videoMatrix;
     vicBaseFetchDelay = vicBase;
     charMemoryIndexFetchDelay = charMemoryIndex;
-    if (vicMemLatch && vicMemPending && cycles >= vicMemCommitClk) {
-      vicMem_vicCommitted = vicMemPendingValue;
-      vicMemPending = false;
-      setVideoMem();
-    }
 
-    // Delay $D011 by one VIC cycle for the graphics fetch path.
-    // This mirrors VICE's vicii.reg11_delay, which is sampled by
-    // vicii_fetch_graphics() when building the next cycle's fetch address.
+    // Keep a two-stage $D011 history for graphics fetch address selection.
+    control1FetchDelay2 = control1FetchDelay;
     control1FetchDelay = control1;
   }
 
@@ -2878,7 +2824,7 @@ public class C64Screen extends ExtChip implements Observer {
     int gByte;
     int vByte = vicCharCache[vmli];
     int cByte = vicColCache[vmli] & 0x0f;
-    final int d011Fetch = (control1 & ~0x20) | (control1FetchDelay & 0x20);
+    final int d011Fetch = (control1 & ~0x20) | (control1FetchDelay2 & 0x20);
     if ((d011Fetch & 0x20) != 0) {              // BMM (bitmap)
       gByte = memory[vicBase + (vc & 0x3ff) * 8 + rc] & 0xff;
     } else if ((control1 & 0x40) != 0) {        // ECM text (current bit)
@@ -3015,7 +2961,7 @@ public class C64Screen extends ExtChip implements Observer {
     int collX = (vmli << 3) + horizScroll + SC_XOFFS;
     final int pipeVByte = vicCharCache[drawVmli];
     final int pipeCByte = vicColCache[drawVmli] & 0x0f;
-    final int d011Fetch = (control1 & ~0x20) | (control1FetchDelay & 0x20);
+    final int d011Fetch = (control1 & ~0x20) | (control1FetchDelay2 & 0x20);
 
     // Paint background if first col
     if (drawVmli == 0) {
@@ -3027,8 +2973,10 @@ public class C64Screen extends ExtChip implements Observer {
     int position = 0, data = 0, penColor = 0, bgcol = bgColor;
     final boolean bitmapFetch = (d011Fetch & 0x20) != 0;
     final boolean extendedFetch = (control1 & 0x40) != 0;
-    final int fetchCharMemoryIndex = charMemoryIndexFetchDelay;
-    final int fetchVicBase = vicBaseFetchDelay;
+    final int fetchBank = vicBankFetchDelay;
+    final int fetchMem = vicMemFetchDelay;
+    final int fetchCharMemoryIndex = charMemoryIndexFor(fetchBank, fetchMem);
+    final int fetchVicBase = fetchBank | (fetchMem & 0x08) << 10;
     if (!bitmapFetch) {
       int tmp;
       int pcol;
@@ -3045,12 +2993,12 @@ public class C64Screen extends ExtChip implements Observer {
             (((data = pipeVByte) & 0x3f) << 3);
         int to = charMemoryIndex +
             (((data = pipeVByte) & 0x3f) << 3);
-        position = mixFetchAddressIfRomTransition(from, to);
+        position = mixPhi1FetchAddress(from, to);
         bgcol = cbmcolor[bgCol[(data >> 6)]];
       } else {
         int from = fetchCharMemoryIndex + (pipeVByte << 3);
         int to = charMemoryIndex + (pipeVByte << 3);
-        position = mixFetchAddressIfRomTransition(from, to);
+        position = mixPhi1FetchAddress(from, to);
       }
 
       if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
@@ -3136,14 +3084,7 @@ public class C64Screen extends ExtChip implements Observer {
       // -------------------------------------------------------------------
       int from = fetchVicBase + (vc & 0x3ff) * 8 + rc;
       int to = vicBase + (vc & 0x3ff) * 8 + rc;
-      // gAccessShift: use the LAGGED vicBase (captured end of previous
-      // VIC cycle) so a mid-line $DD00 bank change doesn't take effect
-      // until the next g-access — matches VICE Phi1(16+K) timing where
-      // FetchG runs in vicii_cycle for cycle 16+K, AFTER vbank was set
-      // by the CPU access at clk=15+K-1 but BEFORE clk=16+K.
-      // Without this, JaC64's bitmap fetch sees mid-line bank changes
-      // 1 col earlier than VICE (verified on fetchsplit pixel diff).
-      position = gAccessShift ? from : mixFetchAddressIfRomTransition(from, to);
+      position = mixPhi1FetchAddress(from, to);
       if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
           && cpu.cycles <= TRACE_VIC_CYCLE_END
           && !isCharRomFetchBase(from)
@@ -3188,22 +3129,6 @@ public class C64Screen extends ExtChip implements Observer {
             + " d018=$" + Integer.toHexString(vicMem)
             + " vc=" + vc
             + " rc=" + rc);
-      }
-
-      if (Boolean.getBoolean("jac64.traceBitmap") && vmli == 0
-          && vbeam >= 80 && vbeam <= 82) {
-        System.err.println("BITMAP vbeam=" + vbeam + " vmli=" + vmli
-            + " vc=" + vc + " rc=" + rc
-            + " pos=$" + Integer.toHexString(position)
-            + " data=$" + Integer.toHexString(data & 0xff)
-            + " vmliData=$" + Integer.toHexString(vmliData & 0xff)
-            + " pen=$" + Integer.toHexString(penColor)
-            + " bg=$" + Integer.toHexString(bgcol)
-            + " videoMatrix=$" + Integer.toHexString(videoMatrix)
-            + " fetchVideoMatrix=$" + Integer.toHexString(viceFetchDelay ? videoMatrixFetchDelay : videoMatrix)
-            + " vicBase=$" + Integer.toHexString(vicBase)
-            + " fetchVicBase=$" + Integer.toHexString(fetchVicBase)
-            + " mc=" + multiCol);
       }
 
       if (multiCol) {

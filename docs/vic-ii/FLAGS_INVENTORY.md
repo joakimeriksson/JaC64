@@ -27,12 +27,12 @@ Generated from grep of `Boolean.getBoolean`, `Integer.getInteger`,
 ### VIC-II timing — C64Screen.java
 | Flag | Default | What it does | VICE behavior | Refactor target |
 |---|---|---|---|---|
-| `cAccessShift` | **on** | c-access for col K at JaC64 case (15+K) instead of (16+K) | VICE Phi2(15+K) | structural fix: move c-access into clockPhi2 hook properly |
-| `cAccessPhi2` | off | c-access at JaC64 vc=14+K (= VICE cycle 15+K Phi2) | matches VICE | structural — see refactor §1 |
-| `gAccessShift` | off | bitmap g-access uses lagged vicBaseFetchDelay | partial | structural — see refactor §1 |
-| `dd00BankLatch` | **on** | $DD00 bank change uses deferred commit | VICE: immediate (PLA glue) — but JaC64 default delay=2 compensates for case-N=VICE-N+1 mismatch | structural — see refactor §2 |
-| `dd00BankDelayCycles` | **2** | Cycles before $DD00 commit fires | VICE: 0 (PLA) or 1 (discrete glue) | remove after structural fix |
-| `d018Latch` | **on** | $D018 write defers screen base / charset by 1 cycle | VICE: immediate | structural — see refactor §2 |
+| `cAccessShift` | removed | c-access is now structurally aligned in the case dispatcher | VICE Phi2(15+K) | done |
+| `cAccessPhi2` | removed | no longer needed as an opt-in c-access experiment | VICE Phi2(15+K) | done |
+| `gAccessShift` | removed | g-access uses the lagged fetch base structurally | VICE Phi1(16+K) | done |
+| `dd00BankLatch` | removed | $DD00 bank visibility is handled by 252535-01 glue state | local x64sc custom glue | done |
+| `dd00BankDelayCycles` | removed | fixed delay knob replaced by VICE custom-glue alarm state | local x64sc custom glue | done |
+| `d018Latch` | removed | $D018 updates video memory bases immediately | matches VICE | done |
 | `viceFetchDelay` | off | fetchBadLineData uses lagged videoMatrix/charMemoryIndex | partial | merge into structural fix |
 | `viceRenderDelay` | off | drawGraphics renders col vmli-1 instead of vmli (1-cycle pipeline) | partial | merge |
 | `viceCollisionIrqDelay` | **on** | SSCol/SBCol IRQ visibility delayed 1 Phi2 | matches VICE | keep on permanently; remove flag |
@@ -71,39 +71,22 @@ VICE PAL fetch table places:
 
 JaC64 case-dispatcher convention: case N = VICE cycle N+1.
 
-Currently:
-- `cAccessShift=true` puts c-access at JaC64 case (15+K) = VICE cycle (16+K)
-  Phi1+Phi2 — **1 VICE cycle late** for c-access (should be Phi2(15+K)).
-- g-access happens in case body at (16+K) = VICE cycle (17+K) — **1 VICE
-  cycle late** for g-access (should be Phi1(16+K)).
-
-The default `dd00BankDelayCycles=2` is a "compensating wrong" — defers
-$DD00 effect by 2 cycles to align with the late c-access boundary. Net
-result: bank-effect boundary col matches VICE FOR LINE0A_DO writes BUT
-introduces row-dependent diffs on other test sub-routines.
-
-**Refactor target:**
-1. Move c-access (`fetchBadLineData`) from case-body to a new Phi2 hook that
-   fires at vc=14+K. Note: clockPhi2 doesn't fire during BA-low stalls
-   (badline c-access) — needs a different mechanism (run inside `clock()`
-   at the case-body Phi2-equivalent point AFTER current case work).
-2. Move g-access from case (16+K) to case (15+K) so col K's bitmap fetch
-   lands at JaC64 case 15+K = VICE cycle 16+K Phi1.
-3. After both shifts, **remove $DD00 latch** (= flip `dd00BankLatch=false`)
-   and **remove $D018 latch** (= `d018Latch=false`), matching VICE
-   immediate behavior.
-4. Verify on irq-ack-vicii (must stay 48/48), cia-timer (byte-identical),
-   fetchsplit (target: down to <100 cell-diffs).
-
-Risk: row-dependent regression on tests that previously matched. Need
-sub-routine-by-sub-routine validation.
+Status after the fetchsplit refactor:
+- c-access no longer uses `cAccessShift` / `cAccessPhi2`; badline fetches
+  are placed directly at the VICE PAL column slots.
+- g-access no longer uses `gAccessShift`; bitmap/text fetch address selection
+  samples the lagged bank and `$D018` state structurally.
+- `$D011` BMM address selection uses a two-stage delayed copy to match the
+  local x64sc 8565 fetchsplit boundary.
+- fetchsplit now matches the live local x64sc target at
+  `Total cell-diffs: 0/8000 cells = 0.00%`.
 
 ### §2 — Mid-line $DD00 / $D018 bank change → VICE-immediate semantics
 
-After §1 lands, `dd00BankLatch` and `d018Latch` should be unnecessary
-since the underlying c/g-access timing is now correct. Remove these flags
-and the deferred-commit machinery (`cia2BankPending`, `vicMemPending`,
-related fields). Both writes should call `setVideoMem()` synchronously.
+`dd00BankLatch`, `dd00BankDelayCycles`, and `d018Latch` are removed.
+`$D018` calls `setVideoMem()` synchronously. `$DD00` / `$DD02` update the
+VIC-visible bank through the VICE 252535-01 custom glue state used by local
+x64sc defaults.
 
 Reference: VICE `c64gluelogic.c:perform_vbank_switch` for PLA glue
 (immediate); only DISCRETE glue type uses +1 alarm — JaC64 should default
@@ -118,17 +101,16 @@ flip `viceGfx=true` default to get full per-cycle pixel pipeline match.
 
 ### §4 — Remove "wrong direction" flags after verification
 
-Flags currently default-on that VICE source explicitly does NOT do should
-become default-off + flag removed once a structural alternative is in
-place:
-- `dd00BankLatch=true` → false (after §1+§2)
-- `d018Latch=true` → false (after §1+§2)
-- `dd00BankDelayCycles=2` → 0 (after §1+§2)
+Flags removed by the fetchsplit refactor:
+- `cAccessShift`
+- `cAccessPhi2`
+- `gAccessShift`
+- `dd00BankLatch`
+- `dd00BankDelayCycles`
+- `d018Latch`
 
 Flags currently default-off that match VICE behavior should become
 default-on:
-- `cAccessPhi2=true` (after §1 implementation)
-- `gAccessShift=true` (after §1)
 - `viceFetchDelay=true` (after §1)
 - `viceRenderDelay=true` (after §3)
 - `colorDelay=true` (after verification)

@@ -8,8 +8,28 @@ Usage: python3 fetchsplit_diff.py <vice.png> <jac64.png>
 """
 
 import sys
-from PIL import Image
+import subprocess
 import numpy as np
+
+try:
+    from PIL import Image
+except ModuleNotFoundError:
+    Image = None
+
+
+def load_rgb(path):
+    if Image is not None:
+        return np.array(Image.open(path).convert('RGB'))
+
+    size = subprocess.check_output(
+        ['magick', 'identify', '-format', '%w %h', path],
+        text=True,
+    )
+    width, height = [int(part) for part in size.split()]
+    raw = subprocess.check_output(
+        ['magick', path, '-alpha', 'off', '-depth', '8', 'rgb:-']
+    )
+    return np.frombuffer(raw, dtype=np.uint8).reshape((height, width, 3)).copy()
 
 def find_title_y(im):
     """Find first raster where non-border content appears."""
@@ -38,11 +58,11 @@ def bitmap_byte(arr, y, col, x0, char_w=8):
 
 
 def diff_pngs(vice_path, jac_path):
-    vice = np.array(Image.open(vice_path).convert('RGB'))
-    jac = np.array(Image.open(jac_path).convert('RGB'))
+    vice = load_rgb(vice_path)
+    jac = load_rgb(jac_path)
 
-    print(f"VICE:  {vice.shape}  Title-y: {find_title_y(Image.open(vice_path))}")
-    print(f"JaC64: {jac.shape}   Title-y: {find_title_y(Image.open(jac_path))}")
+    print(f"VICE:  {vice.shape}  Title-y: {find_title_y(vice)}")
+    print(f"JaC64: {jac.shape}   Title-y: {find_title_y(jac)}")
 
     # Find display area horizontally — typically x=32..352 (40 chars * 8 px + 32 border)
     # PAL display visible: 320 px = cols 0..39
@@ -53,8 +73,8 @@ def diff_pngs(vice_path, jac_path):
 
     # Compute per-char bitmap byte for both. Char rows are 8 raster lines high.
     # Test display has 25 char rows.
-    vice_title_y = find_title_y(Image.open(vice_path))
-    jac_title_y = find_title_y(Image.open(jac_path))
+    vice_title_y = find_title_y(vice)
+    jac_title_y = find_title_y(jac)
     # Bitmap area starts AFTER the title char row
     vice_bm_y = vice_title_y + char_h
     jac_bm_y = jac_title_y + char_h
