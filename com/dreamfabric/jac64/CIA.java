@@ -527,7 +527,10 @@ public class CIA {
         // Nothing...
         break;
       case WAIT:
-        // Go to count next time!
+        // VICE pipeline: at this cycle the load completes (cnt=latch), and
+        // COUNT3 is still off so no decrement. Set nextZero now so the
+        // first cycle in COUNT (next update) reads `latch`.
+        loadTimer(cycles);
         state = COUNT;
         break;
       case LOAD_STOP:
@@ -543,8 +546,12 @@ public class CIA {
         if (nextZero == cycles + 1) {
           triggerInterrupt(cycles);
         }
+        // Cache latch into timer so getTimer() during the WAIT hold cycle
+        // returns the loaded value. nextZero is set when WAIT→COUNT runs,
+        // matching VICE's pipeline (cnt=latch on LOAD, hold cycle, then
+        // COUNT3 raised → decrement starts).
+        timer = latch;
         state = WAIT;
-        loadTimer(cycles);
         break;
       case COUNT_STOP:
         if (!countUnderflow) {
