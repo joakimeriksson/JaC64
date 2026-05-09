@@ -581,6 +581,26 @@ public class TestRaster {
             dumpScreenRam(dumpPath);
             System.out.println("Screen RAM dump in " + dumpPath);
         }
+        // jac64.dumpMemRange=START:END:PATH writes a raw binary copy of CPU
+        // RAM bytes [START..END) to PATH. Used to byte-compare bascan's
+        // BUFFER ($4000-$4900) against the test-bundled dump-c64.bin.
+        String dumpRange = System.getProperty("jac64.dumpMemRange");
+        if (dumpRange != null) {
+            String[] parts = dumpRange.split(":");
+            int start = Integer.decode(parts[0]);
+            int end = Integer.decode(parts[1]);
+            String binPath = parts.length >= 3 ? parts[2] : "/tmp/jac64_memdump.bin";
+            try (java.io.FileOutputStream fos = new java.io.FileOutputStream(binPath)) {
+                int[] mem = cpu.getMemory();
+                byte[] buf = new byte[end - start];
+                for (int i = 0; i < buf.length; i++) buf[i] = (byte)(mem[start + i] & 0xff);
+                fos.write(buf);
+                System.out.println("Memory dump $" + Integer.toHexString(start)
+                    + "-$" + Integer.toHexString(end) + " in " + binPath);
+            } catch (Exception e) {
+                System.err.println("Memory dump failed: " + e);
+            }
+        }
         System.exit(0);
     }
 
