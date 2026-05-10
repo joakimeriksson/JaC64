@@ -2068,10 +2068,19 @@ public class C64Screen extends ExtChip implements Observer {
    */
   @Override
   public void clockPhi2(long cycles) {
-    // SSCol/SBCol IRQ fire. With the default extra ready stage, detection
-    // captured at clock() end becomes IRQ-visible one Phi2 later.
+    // SSCol/SBCol IRQ fire. JaC64's collision detection without
+    // cycle_flags_pipe runs 1 VIC cycle earlier than VICE (VICE's draw
+    // consumes prev-cycle flags via cycle_flags_pipe; JaC64 historically
+    // consumed current-cycle flags). The ready-stage gate below adds a
+    // compensating 1-Phi2 visibility delay so the IRQ becomes visible at
+    // the same Phi2 as VICE.
+    //
+    // With cycleFlagsPipe ON the sprite pipeline now consumes prev-cycle
+    // flags (matches VICE) — so detection already aligns and the
+    // compensation must be skipped, otherwise irq-ack-vicii.prg fires
+    // SSCol IRQ one full cycle too late.
     if (sprColFirePending) {
-      if (!sprColFireReady) {
+      if (!sprColFireReady && !useCycleFlagsPipe) {
         sprColFireReady = true;
       } else {
         int oldFlags = irqFlags;
@@ -2096,7 +2105,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
     }
     if (sprBgColFirePending) {
-      if (!sprBgColFireReady) {
+      if (!sprBgColFireReady && !useCycleFlagsPipe) {
         sprBgColFireReady = true;
       } else {
         irqFlags |= 0x02;
@@ -3472,17 +3481,32 @@ public class C64Screen extends ExtChip implements Observer {
     // STEP 1 — consume PREVIOUS cycle's flag snapshot (cycle_flags_pipe).
     // Mirrors VICE viciisc/vicii-draw-cycle.c:697 draw_sprites8(cycle_flags_pipe)
     // where cycle_flags_pipe holds the previous cycle's flags.
+    //
+    // Pipe-ON path delays the cycle_flags_pipe-derived action flags
+    // (checkSprDisp, ptrDma0, dma1_dma2, displayBits) plus sprite X
+    // (VICE update_sprite_xpos() in viciisc/vicii-draw-cycle.c:478
+    // captures sprite[s].x at END of draw_sprites8, so the next call
+    // sees the just-prior value — equivalent to a 1-cycle snapshot).
+    //
+    // NOT pipe-delayed:
+    //   - xpos: JaC64's rasterX(vicCycle) already gives "VICE cycle
+    //     vicCycle's xpos", and JaC64 vicCycle N ≡ VICE cycle N+1, so
+    //     currentRasterX naturally lags 1 VICE cycle. Double-delaying
+    //     would offset sprites by 8 screen pixels.
+    //   - reg1b/1c/1d: VICE reads these LIVE at pixel 6 from
+    //     vicii.regs[] (vicii-draw-cycle.c:534-535), NOT from
+    //     cycle_flags_pipe.
     if (useCycleFlagsPipe) {
       viceSprPipe.checkSprDisp = sprPipeCheckSprDisp;
       viceSprPipe.spritePtrDma0 = sprPipePtrDma0;
       viceSprPipe.spriteDma1Dma2 = sprPipeDma1Dma2;
       viceSprPipe.spriteDmaNum = sprPipeDmaNum;
       viceSprPipe.spriteDisplayBits = sprPipeDisplayBits;
-      viceSprPipe.reg1bPipe = sprPipeReg1b;
-      viceSprPipe.reg1cPipe = sprPipeReg1c;
-      viceSprPipe.reg1dPipe = sprPipeReg1d;
+      viceSprPipe.reg1bPipe = memory[0xd01b + IO_OFFSET] & 0xff;
+      viceSprPipe.reg1cPipe = memory[0xd01c + IO_OFFSET] & 0xff;
+      viceSprPipe.reg1dPipe = memory[0xd01d + IO_OFFSET] & 0xff;
       System.arraycopy(sprPipeSpriteX, 0, viceSprPipe.currentSpriteX, 0, 8);
-      viceSprPipe.drawCycle8(sprPipeRasterX);
+      viceSprPipe.drawCycle8(currentRasterX);
     } else {
       // Legacy current-cycle path (pre-cycle_flags_pipe behaviour).
       viceSprPipe.checkSprDisp = (vicCycle == 57);
