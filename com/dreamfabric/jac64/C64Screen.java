@@ -1231,6 +1231,21 @@ public class C64Screen extends ExtChip implements Observer {
       mem[i] = cbmcolor[6];
     }
 
+    // VICE comparison trace: enable with -Djac64.viceSprPipeTrace=true.
+    // Format mirrors the JaC64 trace patch in viciisc/vicii-draw-cycle.c
+    // (trigger_sprites) so the two emulators emit byte-comparable lines.
+    if (Boolean.getBoolean("jac64.viceSprPipeTrace")) {
+      viceSprPipe.enableTrace((xpos, sbufReg, active, pending, halt, data) -> {
+        int vc = (int) (cpu.cycles - lastLine);
+        System.err.println("JAC-TRIG line=" + vbeam + " cyc=" + vc + " xpos=" + xpos
+            + " sbufReg=$" + Integer.toHexString(sbufReg)
+            + " active=$" + Integer.toHexString(active)
+            + " pending=$" + Integer.toHexString(pending)
+            + " halt=$" + Integer.toHexString(halt)
+            + " data=$" + Integer.toHexString(data));
+      });
+    }
+
     initUpdate();
   }
 

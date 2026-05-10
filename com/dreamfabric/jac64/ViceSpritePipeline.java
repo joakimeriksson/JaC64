@@ -262,9 +262,34 @@ public final class ViceSpritePipeline {
           sbufExpxFlops |= m;
           sbufMcFlops |= m;
           spriteActiveBits |= m;
+          if (TRACE && s == 0) {
+            traceSink.onTrigger(xpos, sbufReg[s], spriteActiveBits,
+                spritePendingBits, spriteHaltBits, currentSpriteData[s]);
+          }
         }
       }
     }
+  }
+
+  /**
+   * Trace hook for cross-checking the pipeline against VICE x64sc.
+   * Mirror of the JaC64 trace patch in viciisc/vicii-draw-cycle.c
+   * (trigger_sprites). Enabled at startup via {@link #enableTrace}.
+   */
+  public interface PipelineTrace {
+    void onTrigger(int xpos, int sbufReg, int active, int pending, int halt, int data);
+  }
+  /** Snapshot getters used by the C64Screen probe path. */
+  public int peekSpriteXPipe(int s) { return spriteXPipe[s]; }
+  public int peekSbufReg(int s) { return sbufReg[s]; }
+  public int peekActive() { return spriteActiveBits; }
+  public int peekPending() { return spritePendingBits; }
+  public int peekHalt() { return spriteHaltBits; }
+  private PipelineTrace traceSink;
+  private boolean TRACE = false;
+  public void enableTrace(PipelineTrace sink) {
+    this.traceSink = sink;
+    this.TRACE = sink != null;
   }
 
   /**
