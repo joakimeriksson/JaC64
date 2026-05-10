@@ -303,6 +303,18 @@ public class C64Screen extends ExtChip implements Observer {
 
   private int currentRasterX = 0;
 
+  // ============================================================
+  // VICE cycle-exact sprite pipeline (port of vicii-draw-cycle.c)
+  // ============================================================
+  // Faithful per-pixel sprite renderer; replaces the V2 span-based
+  // pipeline (renderMcSpriteExpanded etc.) ported from the fast/
+  // inaccurate vicii/vicii-sprites.c. Gated by jac64.viceSprPipe
+  // for verification; flip default once spritesplit diff drops to
+  // sub-1% across all 17 references.
+  private final ViceSpritePipeline viceSprPipe = new ViceSpritePipeline();
+  private final boolean useViceSprPipe =
+      Boolean.parseBoolean(System.getProperty("jac64.viceSprPipe", "false"));
+
   /** VICE-compatible raster_x given the current VIC cycle within a line. */
   private int rasterX(int vicCycle) {
     return (vicCycle - 17) * 8 + SCREEN_LEFT_BORDER_WIDTH;
@@ -3196,7 +3208,122 @@ public class C64Screen extends ExtChip implements Observer {
   // Sprites...
   // -------------------------------------------------------------------
   private final void drawSprites() {
-    drawSpritesV2();
+    if (useViceSprPipe) {
+      drawSpritesViceCycle();
+    } else {
+      drawSpritesV2();
+    }
+  }
+
+  /**
+   * Per-cycle (8-pixel) sprite render using the VICE cycle-exact
+   * pipeline. Faithful port of viciisc/vicii-draw-cycle.c
+   * draw_sprites8(). Reads priority from collissionMask bit 8 (set
+   * by drawBackground/drawGraphics for foreground pixels) and writes
+   * sprite color codes back into mem[] + collissionMask[].
+   */
+  private final void drawSpritesViceCycle() {
+    if (notVisible) {
+      xPos += 8;
+      return;
+    }
+
+    int screenStart = xPos - 8;
+
+    // Build priBuffer[] from existing collissionMask high bit (= foreground).
+    // This must match VICE pri_buffer[] which is set by graphics rendering
+    // before draw_sprites runs in the same cycle.
+    for (int i = 0; i < 8; i++) {
+      int pixelX = screenStart + i;
+      boolean fg = false;
+      if (pixelX >= 0 && pixelX < collissionMask.length) {
+        fg = (collissionMask[pixelX] & 0x100) != 0;
+      }
+      viceSprPipe.priBuffer[i] = fg;
+    }
+
+    // Per-cycle inputs (mirror state used by draw_sprites8 in VICE):
+    // reg1bPipe ($D01B priority), reg1cPipe ($D01C MC), reg1dPipe ($D01D
+    // expandX) come from the latest io-page reads. spriteDisplayBits is
+    // computed from sprite[].dma flags. spritePtrDma0/Dma1Dma2 reflect
+    // which PAL cycle this is (case 0..9 for SPR3-7, case 57..62 for SPR0-2).
+    int currentCase = (int) (cpu.cycles - lastLine);
+    viceSprPipe.checkSprDisp = (currentCase == 57); // VICE cycle 58
+    int dmaNum = -1;
+    boolean ptrDma0 = false;
+    boolean dma12 = false;
+    if (currentCase >= 0 && currentCase <= 9) {
+      // SPR3-7 fetches: even cases = ptr+dma0, odd = dma1+dma2.
+      dmaNum = 3 + (currentCase / 2);
+      if ((currentCase & 1) == 0) ptrDma0 = true;
+      else dma12 = true;
+    } else if (currentCase >= 57 && currentCase <= 62) {
+      // SPR0-2 fetches: 57/59/61 = ptr+dma0, 58/60/62 = dma1+dma2.
+      dmaNum = (currentCase - 57) / 2;
+      if (((currentCase - 57) & 1) == 0) ptrDma0 = true;
+      else dma12 = true;
+    }
+    viceSprPipe.spritePtrDma0 = ptrDma0;
+    viceSprPipe.spriteDma1Dma2 = dma12;
+    viceSprPipe.spriteDmaNum = dmaNum;
+
+    int displayBits = 0;
+    for (int s = 0; s < 8; s++) {
+      if (sprites[s].dma) displayBits |= (1 << s);
+      viceSprPipe.currentSpriteX[s] = sprites[s].x & 0x1ff;
+    }
+    viceSprPipe.spriteDisplayBits = displayBits;
+    viceSprPipe.reg1bPipe = memory[0xd01b + IO_OFFSET] & 0xff;
+    viceSprPipe.reg1cPipe = memory[0xd01c + IO_OFFSET] & 0xff;
+    viceSprPipe.reg1dPipe = memory[0xd01d + IO_OFFSET] & 0xff;
+
+    // Run the per-cycle pipeline (VICE draw_sprites8).
+    viceSprPipe.drawCycle8(currentRasterX);
+
+    // Paint outputs into mem[] + collissionMask[]. Color resolution
+    // matches VICE COL_D025/COL_D027+s/COL_D026 codes:
+    //   code 1 = sprite multicolor 0 ($D025)
+    //   code 2 = sprite color ($D027 + s)
+    //   code 3 = sprite multicolor 1 ($D026)
+    //   code 0 = transparent (no sprite pixel)
+    int mpos = vPos * SC_WIDTH;
+    int colorMc0 = cbmcolor[sprMC0];
+    int colorMc1 = cbmcolor[sprMC1];
+    boolean borderClosedNow = borderClosed();
+    boolean wasZeroSpr = (sprCol == 0);
+    boolean wasZeroBg = (sprBgCol == 0);
+    for (int i = 0; i < 8; i++) {
+      int pixelX = screenStart + i;
+
+      // Apply per-pixel sprite-sprite & sprite-bg collisions to global
+      // registers. These trigger IRQ on 0→non-zero edge (VICE end-of-
+      // cycle behavior is captured by sprColCanFire in caller flow).
+      int ssColl = viceSprPipe.outSpriteSpriteColl[i];
+      int sbColl = viceSprPipe.outSpriteBgColl[i];
+      if (ssColl != 0) sprCol |= ssColl;
+      if (sbColl != 0) sprBgCol |= sbColl;
+
+      int code = viceSprPipe.outColorCode[i];
+      int s = viceSprPipe.outSprite[i];
+      if (s < 0) continue;
+
+      if (pixelX < 0 || pixelX >= collissionMask.length) continue;
+
+      // Update collissionMask so foreground-priority bit 0x100 stays
+      // intact (already set by graphics) while OR'ing in this sprite's bit.
+      collissionMask[pixelX] |= (1 << s);
+
+      // Render only if pixel is non-transparent and not behind foreground.
+      if (code != 0 && pixelX < SC_WIDTH && !borderClosedNow) {
+        int color;
+        if (code == 1) color = colorMc0;
+        else if (code == 3) color = colorMc1;
+        else color = sprites[s].color[2]; // sprite individual color
+        mem[mpos + pixelX] = color;
+      }
+    }
+
+    xPos += 8;
   }
 
   /**
@@ -4155,6 +4282,10 @@ public class C64Screen extends ExtChip implements Observer {
       }
       nextByte += 3;
       spriteReg = (b0 << 16) | (b1 << 8) | b2;
+
+      // Mirror into VICE pipeline's per-sprite data array. Loaded into
+      // sbufReg at pixel 4 of the dma1_dma2 cycle by drawCycle8.
+      viceSprPipe.currentSpriteData[spriteNo] = spriteReg & 0xffffff;
 
       if (!expandY) expFlipFlop = false;
 
