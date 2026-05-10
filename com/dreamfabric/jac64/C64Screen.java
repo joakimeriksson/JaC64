@@ -3731,7 +3731,6 @@ public class C64Screen extends ExtChip implements Observer {
                                        int clipEnd) {
     SpriteSequencer seq = spriteSeqs[n];
     int spriteX = seq.renderX + seq.xShift;
-    int bugX = spriteRepeatBugX(seq.x) + seq.xShift;
     int spriteBit = 1 << n;
     int color = sprites[n].color[2];
 
@@ -3739,32 +3738,12 @@ public class C64Screen extends ExtChip implements Observer {
                | ((dataMid & 0xff) << 8)
                | (dataLo & 0xff);
 
-    int size = 24;
-    boolean mustRepeatPixels = false;
-
-    if (!Boolean.getBoolean("jac64.disableRepeatBug")
-        && bugX > SPRITE_NORMAL_REPEAT_START[n]
-        && bugX < SPRITE_REPEAT_END[n]) {
-      if (Boolean.getBoolean("jac64.traceSpriteRepeat")) {
-        System.err.println("SPR-REPEAT-NRM s=" + n + " vbeam=" + vbeam
-            + " regX=$" + Integer.toHexString(seq.x & 0x1ff)
-            + " bugX=$" + Integer.toHexString(bugX & 0x3ff)
-            + " xShift=" + seq.xShift
-            + " mc=" + seq.multicolor);
-      }
-      size = SPRITE_REPEAT_BEGIN[n] - bugX;
-      mustRepeatPixels = size > 0;
-      if (mustRepeatPixels) {
-        sprmsk = sprmsk >>> (24 - size);
-        int repeatPixel = sprmsk & 1;
-        for (int i = 0; i < 7; i++) {
-          sprmsk = (sprmsk << 1) | repeatPixel;
-        }
-        size += 7;
-      }
-    }
-
-    renderMaskedPixels(spriteX, sprmsk, size, spriteBit, color,
+    // VICE's draw_hires_sprite_normal (vicii-sprites.c:657) does NOT have
+    // must_repeat_pixels logic — that's only in the expanded variant.
+    // Earlier JaC64 had it here wrongly, causing spurious sprite-sprite
+    // collisions in spritescan at sprite X positions inside the
+    // repeat-zone.
+    renderMaskedPixels(spriteX, sprmsk, 24, spriteBit, color,
         seq.priority, clipStart, clipEnd);
   }
 
