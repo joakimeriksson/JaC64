@@ -1020,10 +1020,13 @@ public class C64Screen extends ExtChip implements Observer {
       rc = 0;
     }
 
-    if (vicCycle >= 16 && vicCycle < 59) {
+    if (vicCycle >= 15 && vicCycle < 59) {
       // VICE derives the current text column from the cycle where the line
       // becomes bad: xpos = cycle - (fetch cycle + 3). Using vmli directly
       // leaves JaC64 one column behind during mid-line FLD changes.
+      // FLI tests (colorfetchbug, blackmail) write $D011 at JaC64 case 15
+      // (= VICE cycle 16) — this triggers handleBadLineStart with vicCycle=15.
+      // Lower bound includes 15 so the FLI dummy-fetch window opens.
       badLineFetchStartColumn = vicCycle - (BADLINE_FETCH_CYCLE + 3);
       if (badLineFetchStartColumn < 0) {
         badLineFetchStartColumn = 0;
