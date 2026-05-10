@@ -2524,6 +2524,29 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C55");
         // All 40 c-accesses were completed by case 54.
       }
+      // Second sprite-Y match check — VICE PAL fetch table runs ChkSprDma
+      // at BOTH Phi1(55) and Phi1(56) (vicii-chip-model.c:220,222). JaC64
+      // case 54 covers Phi1(55); this case covers Phi1(56). Mid-line
+      // $D001 writes between the two cycles can restart a sprite that
+      // missed the first check (spriterestart.prg test).
+      {
+        int ypos2 = vPos + SC_SPYOFFS;
+        for (int i = 0; i < 8; i++) {
+          Sprite sprite = sprites[i];
+          if (sprite.enabled && !sprite.dma
+              && sprite.y == (ypos2 & 0xff) && (ypos2 < 270)) {
+            sprite.nextByte = 0;
+            sprite.dma = true;
+            sprite.expFlipFlop = true;
+            if (fldTrace) {
+              fldOut.println("SPR-DMA-ON-2 s=" + i +
+                  " vbeam=" + vbeam + " cyc=" + vicCycle +
+                  " y=$" + Integer.toHexString(sprite.y & 0xff) +
+                  " clk=" + cpu.cycles);
+            }
+          }
+        }
+      }
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
       drawSprites();
