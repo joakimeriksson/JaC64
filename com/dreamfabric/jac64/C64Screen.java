@@ -185,8 +185,15 @@ public class C64Screen extends ExtChip implements Observer {
   // uses. Sync happens at start of each clock() call.
   //
   // Enable with -Djac64.colorDelay=true. Default OFF until validated.
-  private static final boolean COLOR_DELAY =
-      Boolean.getBoolean("jac64.colorDelay");
+  // Phase E: VICE-style 1-cycle delayed color-register apply is REQUIRED
+  // when the render-buffer path is on, because drawColorsVice mirrors
+  // VICE viciisc/vicii-draw-cycle.c update_cregs() — the colors used at
+  // draw_colors time are the values committed at start of the cycle,
+  // not whatever the CPU just wrote mid-cycle. Auto-enable the existing
+  // single-pending-slot delay machinery when viceRenderBuf is on.
+  private final boolean COLOR_DELAY =
+      Boolean.getBoolean("jac64.colorDelay")
+          || Boolean.parseBoolean(System.getProperty("jac64.viceRenderBuf", "false"));
   // VICE-style single-pending-slot color register delay. Mirrors
   // viciisc/vicii-draw-cycle.c:586-590 update_cregs() pattern: last
   // register written this cycle is captured, applied at START of next
