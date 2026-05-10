@@ -2943,7 +2943,12 @@ public class C64Screen extends ExtChip implements Observer {
     int gByte;
     int vByte = vicCharCache[vmli];
     int cByte = vicColCache[vmli] & 0x0f;
-    final int d011Fetch = (control1 & ~0x20) | (control1FetchDelay2 & 0x20);
+    // VICE viciisc/vicii-fetch.c:240 (PAL 6569, color_latency=1):
+    //   addr = g_fetch_addr(regs[0x11] | (reg11_delay & 0x20))
+    // BMM is sticky-OR with the 1-cycle-prior value. ECM (0x40) stays
+    // live. control1FetchDelay holds end-of-previous-VIC-cycle control1
+    // (shift happens at end of clock(), so during draw it's 1 cycle old).
+    final int d011Fetch = control1 | (control1FetchDelay & 0x20);
     if ((d011Fetch & 0x20) != 0) {              // BMM (bitmap)
       gByte = memory[vicBase + (vc & 0x3ff) * 8 + rc] & 0xff;
     } else if ((control1 & 0x40) != 0) {        // ECM text (current bit)
@@ -3169,7 +3174,9 @@ public class C64Screen extends ExtChip implements Observer {
     int collX = (vmli << 3) + horizScroll + SC_XOFFS;
     final int pipeVByte = vicCharCache[drawVmli];
     final int pipeCByte = vicColCache[drawVmli] & 0x0f;
-    final int d011Fetch = (control1 & ~0x20) | (control1FetchDelay2 & 0x20);
+    // VICE viciisc/vicii-fetch.c:240 PAL 6569 — BMM sticky-OR with prior
+    // cycle, ECM live. See drawGraphicsVice for the same pattern.
+    final int d011Fetch = control1 | (control1FetchDelay & 0x20);
 
     // Paint background if first col
     if (drawVmli == 0) {
