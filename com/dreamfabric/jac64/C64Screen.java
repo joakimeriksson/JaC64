@@ -345,10 +345,6 @@ public class C64Screen extends ExtChip implements Observer {
   // the new sprite pipeline (stage 5).
   private final RasterChangeQueue spriteChangeQueue = new RasterChangeQueue();
 
-  // New pixel-level sprite sequencers. Gated behind -Djac64.newSprites
-  // (stage 4). Legacy path remains the default until stage 7.
-  private final boolean useNewSprites =
-      Boolean.getBoolean("jac64.newSprites");
   // Probe assist is now disabled by default — the writeRasterX +8
   // fix produces the correct $D01E naturally. Enable via
   // -Djac64.enableProbeAssist=true as a safety valve only.
@@ -2652,9 +2648,7 @@ public class C64Screen extends ExtChip implements Observer {
       if (sprites[2].painting) {
         sprites[2].readSpriteData();
       }
-      if (useNewSprites) {
-        drawSpritesV2Tail();
-      }
+      drawSpritesV2Tail();
       break;
     case 62:
       if (sprites[4].dma) {
@@ -3205,73 +3199,7 @@ public class C64Screen extends ExtChip implements Observer {
   // Sprites...
   // -------------------------------------------------------------------
   private final void drawSprites() {
-    if (useNewSprites) {
-      drawSpritesV2();
-    } else {
-      drawSpritesLegacy();
-    }
-  }
-
-  private final void drawSpritesLegacy() {
-    if (notVisible) {
-      return;
-    }
-    int smult = 0x100;
-    int lastX = xPos - 8;
-
-    for (int i = 7; i >= 0; i--) {
-      Sprite sprite = sprites[i];
-      // Done before the continue...
-      smult = smult >> 1;
-      if (sprite.lineFinished || !sprite.painting) {
-        continue;
-      }
-      int x = sprite.x + SC_SPXOFFS; // 0 in sprite x => xPos = 8
-      int mpos = vPos * SC_WIDTH;
-
-      if (x < xPos) {
-        int minX = lastX > x ? lastX : x;
-
-        for (int j = minX, m = xPos; j < m; j++) {
-          int c = sprite.getPixel();
-          if (c != 0 && borderState == 0) {
-            int tmp = (collissionMask[j] |= smult);
-            if (!sprite.priority || (tmp & 0x100) == 0) {
-              mem[mpos + j] = sprite.color[c];
-            }
-
-            if (tmp != smult) {
-              if ((tmp & 0x100) != 0) {
-                // Sprite-background collision: just accumulate. IRQ
-                // fires at end of clock() based on can_sprite_bg
-                // captured at cycle start (VICE vicii-cycle.c:431-433).
-                sprBgCol |= smult;
-              }
-              if ((tmp & 0xff) != smult) {
-                // Sprite-sprite collision: just accumulate. IRQ fires
-                // at end of clock() based on can_sprite_sprite captured
-                // at cycle start (VICE vicii-cycle.c:428-430).
-                sprCol |= tmp & 0xff;
-              }
-            }
-          }
-
-          if (SPRITEDEBUG) {
-            if ((sprite.nextByte == 3) && ((j & 4) == 0)) {
-              mem[mpos + j] = 0xff00ff00;
-            }
-            if ((sprite.nextByte == 63) && ((j & 4) == 0)) {
-              mem[mpos + j] = 0xffff0000;
-            }
-
-            if (j == x) {
-              mem[mpos + j] = 0xff000000 + sprite.pointer;
-            }
-          }
-        }
-      }
-    }
-    xPos += 8;
+    drawSpritesV2();
   }
 
   /**
@@ -4103,7 +4031,7 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   private int maybeAssistKrestageProbe(int value) {
-    if (!useNewSprites || !assistKrestageProbe) {
+    if (!assistKrestageProbe) {
       return value;
     }
     int pc = cpu.getPC() & 0xffff;
