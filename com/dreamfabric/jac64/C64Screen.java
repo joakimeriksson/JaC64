@@ -351,6 +351,24 @@ public class C64Screen extends ExtChip implements Observer {
   private final boolean useViceSprPipe =
       Boolean.parseBoolean(System.getProperty("jac64.viceSprPipe", "true"));
 
+  // VICE viciisc/vicii-draw-cycle.c:703 cycle_flags_pipe: draw_sprites8
+  // and draw_graphics8 at cycle N consume flags from cycle N-1 (the pipe
+  // value snapshotted at end of previous vicii_cycle()). JaC64 used to
+  // pass current-cycle flags to drawCycle8 — 1-cycle phase shift versus
+  // VICE. These pipe fields hold the snapshot to consume next cycle.
+  private boolean sprPipeCheckSprDisp = false;
+  private boolean sprPipePtrDma0 = false;
+  private boolean sprPipeDma1Dma2 = false;
+  private int sprPipeDmaNum = -1;
+  private int sprPipeDisplayBits = 0;
+  private int sprPipeReg1b = 0;
+  private int sprPipeReg1c = 0;
+  private int sprPipeReg1d = 0;
+  private final int[] sprPipeSpriteX = new int[8];
+  private int sprPipeRasterX = 0;
+  private final boolean useCycleFlagsPipe =
+      Boolean.parseBoolean(System.getProperty("jac64.cycleFlagsPipe", "false"));
+
   /** VICE-compatible raster_x given the current VIC cycle within a line. */
   private int rasterX(int vicCycle) {
     return (vicCycle - 17) * 8 + SCREEN_LEFT_BORDER_WIDTH;
@@ -3437,6 +3455,10 @@ public class C64Screen extends ExtChip implements Observer {
    * outSpriteSpriteColl[] / outSpriteBgColl[] for the paint step.
    */
   private final void advanceSpritePipeline(int vicCycle) {
+    // priBuffer carries graphics foreground-priority pixels for the
+    // CURRENT cycle. (Not in cycle_flags_pipe scope — it's separately
+    // produced by draw_graphics8 in VICE and consumed inside the same
+    // draw_sprites8 call.)
     int screenStart = xPos - 8;
     for (int i = 0; i < 8; i++) {
       int pixelX = screenStart + i;
@@ -3447,34 +3469,82 @@ public class C64Screen extends ExtChip implements Observer {
       viceSprPipe.priBuffer[i] = fg;
     }
 
-    viceSprPipe.checkSprDisp = (vicCycle == 57);
-    int dmaNum = -1;
-    boolean ptrDma0 = false;
-    boolean dma12 = false;
-    if (vicCycle >= 0 && vicCycle <= 9) {
-      dmaNum = 3 + (vicCycle / 2);
-      if ((vicCycle & 1) == 0) ptrDma0 = true;
-      else dma12 = true;
-    } else if (vicCycle >= 57 && vicCycle <= 62) {
-      dmaNum = (vicCycle - 57) / 2;
-      if (((vicCycle - 57) & 1) == 0) ptrDma0 = true;
-      else dma12 = true;
+    // STEP 1 — consume PREVIOUS cycle's flag snapshot (cycle_flags_pipe).
+    // Mirrors VICE viciisc/vicii-draw-cycle.c:697 draw_sprites8(cycle_flags_pipe)
+    // where cycle_flags_pipe holds the previous cycle's flags.
+    if (useCycleFlagsPipe) {
+      viceSprPipe.checkSprDisp = sprPipeCheckSprDisp;
+      viceSprPipe.spritePtrDma0 = sprPipePtrDma0;
+      viceSprPipe.spriteDma1Dma2 = sprPipeDma1Dma2;
+      viceSprPipe.spriteDmaNum = sprPipeDmaNum;
+      viceSprPipe.spriteDisplayBits = sprPipeDisplayBits;
+      viceSprPipe.reg1bPipe = sprPipeReg1b;
+      viceSprPipe.reg1cPipe = sprPipeReg1c;
+      viceSprPipe.reg1dPipe = sprPipeReg1d;
+      System.arraycopy(sprPipeSpriteX, 0, viceSprPipe.currentSpriteX, 0, 8);
+      viceSprPipe.drawCycle8(sprPipeRasterX);
+    } else {
+      // Legacy current-cycle path (pre-cycle_flags_pipe behaviour).
+      viceSprPipe.checkSprDisp = (vicCycle == 57);
+      int dmaNumNow = -1;
+      boolean ptrDma0Now = false;
+      boolean dma12Now = false;
+      if (vicCycle >= 0 && vicCycle <= 9) {
+        dmaNumNow = 3 + (vicCycle / 2);
+        if ((vicCycle & 1) == 0) ptrDma0Now = true;
+        else dma12Now = true;
+      } else if (vicCycle >= 57 && vicCycle <= 62) {
+        dmaNumNow = (vicCycle - 57) / 2;
+        if (((vicCycle - 57) & 1) == 0) ptrDma0Now = true;
+        else dma12Now = true;
+      }
+      viceSprPipe.spritePtrDma0 = ptrDma0Now;
+      viceSprPipe.spriteDma1Dma2 = dma12Now;
+      viceSprPipe.spriteDmaNum = dmaNumNow;
+      int displayBitsNow = 0;
+      for (int s = 0; s < 8; s++) {
+        if (sprites[s].dma) displayBitsNow |= (1 << s);
+        viceSprPipe.currentSpriteX[s] = sprites[s].x & 0x1ff;
+      }
+      viceSprPipe.spriteDisplayBits = displayBitsNow;
+      viceSprPipe.reg1bPipe = memory[0xd01b + IO_OFFSET] & 0xff;
+      viceSprPipe.reg1cPipe = memory[0xd01c + IO_OFFSET] & 0xff;
+      viceSprPipe.reg1dPipe = memory[0xd01d + IO_OFFSET] & 0xff;
+      viceSprPipe.drawCycle8(currentRasterX);
     }
-    viceSprPipe.spritePtrDma0 = ptrDma0;
-    viceSprPipe.spriteDma1Dma2 = dma12;
-    viceSprPipe.spriteDmaNum = dmaNum;
 
-    int displayBits = 0;
-    for (int s = 0; s < 8; s++) {
-      if (sprites[s].dma) displayBits |= (1 << s);
-      viceSprPipe.currentSpriteX[s] = sprites[s].x & 0x1ff;
+    // STEP 2 — compute THIS cycle's flags + snapshot for next call.
+    // Mirrors VICE viciisc/vicii-draw-cycle.c:703
+    //   cycle_flags_pipe = vicii.cycle_flags
+    // at end of vicii_draw_cycle().
+    if (useCycleFlagsPipe) {
+      sprPipeCheckSprDisp = (vicCycle == 57);
+      int dmaNumNext = -1;
+      boolean ptrDma0Next = false;
+      boolean dma12Next = false;
+      if (vicCycle >= 0 && vicCycle <= 9) {
+        dmaNumNext = 3 + (vicCycle / 2);
+        if ((vicCycle & 1) == 0) ptrDma0Next = true;
+        else dma12Next = true;
+      } else if (vicCycle >= 57 && vicCycle <= 62) {
+        dmaNumNext = (vicCycle - 57) / 2;
+        if (((vicCycle - 57) & 1) == 0) ptrDma0Next = true;
+        else dma12Next = true;
+      }
+      sprPipePtrDma0 = ptrDma0Next;
+      sprPipeDma1Dma2 = dma12Next;
+      sprPipeDmaNum = dmaNumNext;
+      int displayBitsNext = 0;
+      for (int s = 0; s < 8; s++) {
+        if (sprites[s].dma) displayBitsNext |= (1 << s);
+        sprPipeSpriteX[s] = sprites[s].x & 0x1ff;
+      }
+      sprPipeDisplayBits = displayBitsNext;
+      sprPipeReg1b = memory[0xd01b + IO_OFFSET] & 0xff;
+      sprPipeReg1c = memory[0xd01c + IO_OFFSET] & 0xff;
+      sprPipeReg1d = memory[0xd01d + IO_OFFSET] & 0xff;
+      sprPipeRasterX = currentRasterX;
     }
-    viceSprPipe.spriteDisplayBits = displayBits;
-    viceSprPipe.reg1bPipe = memory[0xd01b + IO_OFFSET] & 0xff;
-    viceSprPipe.reg1cPipe = memory[0xd01c + IO_OFFSET] & 0xff;
-    viceSprPipe.reg1dPipe = memory[0xd01d + IO_OFFSET] & 0xff;
-
-    viceSprPipe.drawCycle8(currentRasterX);
   }
 
   /**
