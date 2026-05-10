@@ -1408,7 +1408,14 @@ public class C64Screen extends ExtChip implements Observer {
             + " pc=$" + Integer.toHexString(cpu.pc & 0xffff)
             + " opPC=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
       }
-      return irqFlags;
+      // Bits 4-6 of $D019 are unconnected pins on the real VIC-II — they
+      // read back as 1. The demo's IRQ handler does LDA $D019 / STA $D019
+      // to ack; if we return $81 instead of $f1, the writeback to $D019
+      // ends up clearing only the actual flag bits instead of preserving
+      // VICE's hardware-faithful read-then-write-back semantics. Trace
+      // diff vs VICE x64sc on Krestage 3 IRQ-ack: ackVal=$81 (JaC64) vs
+      // $f1 (VICE). Fix by OR-ing the reserved bits on read.
+      return irqFlags | 0x70;
     case 0xd01a:
       return irqMask;
     case 0xd01b:
