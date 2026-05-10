@@ -3076,8 +3076,14 @@ public class C64Screen extends ExtChip implements Observer {
     }
 
     gbufPipe1Reg = gbufPipe0Reg;
-    gbufPipe0Reg = gByte;
-    xscrollPipe = horizScroll;
+    // VICE viciisc/vicii-draw-cycle.c:277-280 gates the gbuf_pipe0_reg
+    // and xscroll_pipe latch behind `vis_en && vborder == 0`. drawGraphicsVice
+    // already only runs in the visible-cycle window (cases 16-55), so vis_en
+    // is implicitly true; gate the latch on vborder == 0 to match VICE.
+    if (!vBorder) {
+      gbufPipe0Reg = gByte;
+      xscrollPipe = horizScroll;
+    }
     gbufMcFlop = mcFlop;
     vmode11Pipe = v11;
     vmode16Pipe = v16;
