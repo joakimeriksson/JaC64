@@ -71,7 +71,13 @@ public final class ViceSpritePipeline {
   /** Sprites halted (during DMA). Port of sprite_halt_bits. */
   private int spriteHaltBits = 0;
 
-  /** Per-sprite 24-bit shift registers (top 24 bits of int). Port of sbuf_reg[8]. */
+  /**
+   * Per-sprite shift registers. Port of sbuf_reg[8].
+   * Data lives in bits 23..0 of each int (byte0 at bits 23..16,
+   * byte1 at 15..8, byte2 at 7..0). Bit 23 = leftmost rendered pixel.
+   * Shifts left during rendering; data eventually shifts past bit 31
+   * and is lost.
+   */
   private final int[] sbufReg = new int[8];
 
   /** Per-sprite current pixel value (0..3 for MC, 0/2 for hires). Port of sbuf_pixel_reg[8]. */
@@ -185,8 +191,12 @@ public final class ViceSpritePipeline {
       spritePendingBits = spriteDisplayBits;
     }
     if (spriteDma1Dma2 && spriteDmaNum >= 0) {
-      // Top 24 bits of the 32-bit register hold sprite data.
-      sbufReg[spriteDmaNum] = currentSpriteData[spriteDmaNum] << 8;
+      // VICE viciisc/vicii-draw-cycle.c:455 — sbuf_reg = sprite.data
+      // directly. Data is laid out in bits 23..0 (byte0 at 23..16,
+      // byte1 at 15..8, byte2 at 7..0). Per-pixel extraction in
+      // drawSprites uses (sbufReg >> 23) for hires / (sbufReg >> 22)
+      // for MC, which only matches if the data lives in bits 23..0.
+      sbufReg[spriteDmaNum] = currentSpriteData[spriteDmaNum] & 0xffffff;
     }
     triggerSprites(xpos + 4, candidateBits);
     drawSprites(4);
