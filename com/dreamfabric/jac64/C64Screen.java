@@ -2095,6 +2095,16 @@ public class C64Screen extends ExtChip implements Observer {
     // VIC raster X — VICE formula (viciitypes.h:124).
     currentRasterX = rasterX(vicCycle);
 
+    // VICE viciisc/vicii-cycle.c:411 — vicii_draw_cycle (which calls
+    // draw_sprites8 internally) runs on EVERY cycle. JaC64 previously
+    // only ran the sprite pipeline on cases 13-60 via drawSprites(),
+    // missing state-machine transitions on cases 0-12 / 61-62 (sprite
+    // ptr/dma + idle pre-line cycles). Advance the per-cycle state
+    // here so halt/active/pending bits track VICE 1:1.
+    if (useViceSprPipe) {
+      advanceSpritePipeline(vicCycle);
+    }
+
     // At cycle 0, increment vbeam BEFORE the raster compare
     // (real VIC-II updates raster counter at start of line)
     if (vicCycle == 0) {
@@ -3216,23 +3226,16 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   /**
-   * Per-cycle (8-pixel) sprite render using the VICE cycle-exact
-   * pipeline. Faithful port of viciisc/vicii-draw-cycle.c
-   * draw_sprites8(). Reads priority from collissionMask bit 8 (set
-   * by drawBackground/drawGraphics for foreground pixels) and writes
-   * sprite color codes back into mem[] + collissionMask[].
+   * Per-cycle pipeline state advance. Sets cycle inputs and runs the
+   * VICE draw_sprites8 state machine. Called from clock() on EVERY
+   * VIC cycle (not just rendering cases) — matches VICE 1:1 so the
+   * sprite_pending/active/halt_bits machinery sees every transition
+   * (in particular SPR3-7 ptr/dma cycles at cases 0-9). The 8-pixel
+   * outputs land in viceSprPipe.outColorCode[] / outSprite[] /
+   * outSpriteSpriteColl[] / outSpriteBgColl[] for the paint step.
    */
-  private final void drawSpritesViceCycle() {
-    if (notVisible) {
-      xPos += 8;
-      return;
-    }
-
+  private final void advanceSpritePipeline(int vicCycle) {
     int screenStart = xPos - 8;
-
-    // Build priBuffer[] from existing collissionMask high bit (= foreground).
-    // This must match VICE pri_buffer[] which is set by graphics rendering
-    // before draw_sprites runs in the same cycle.
     for (int i = 0; i < 8; i++) {
       int pixelX = screenStart + i;
       boolean fg = false;
@@ -3242,25 +3245,17 @@ public class C64Screen extends ExtChip implements Observer {
       viceSprPipe.priBuffer[i] = fg;
     }
 
-    // Per-cycle inputs (mirror state used by draw_sprites8 in VICE):
-    // reg1bPipe ($D01B priority), reg1cPipe ($D01C MC), reg1dPipe ($D01D
-    // expandX) come from the latest io-page reads. spriteDisplayBits is
-    // computed from sprite[].dma flags. spritePtrDma0/Dma1Dma2 reflect
-    // which PAL cycle this is (case 0..9 for SPR3-7, case 57..62 for SPR0-2).
-    int currentCase = (int) (cpu.cycles - lastLine);
-    viceSprPipe.checkSprDisp = (currentCase == 57); // VICE cycle 58
+    viceSprPipe.checkSprDisp = (vicCycle == 57);
     int dmaNum = -1;
     boolean ptrDma0 = false;
     boolean dma12 = false;
-    if (currentCase >= 0 && currentCase <= 9) {
-      // SPR3-7 fetches: even cases = ptr+dma0, odd = dma1+dma2.
-      dmaNum = 3 + (currentCase / 2);
-      if ((currentCase & 1) == 0) ptrDma0 = true;
+    if (vicCycle >= 0 && vicCycle <= 9) {
+      dmaNum = 3 + (vicCycle / 2);
+      if ((vicCycle & 1) == 0) ptrDma0 = true;
       else dma12 = true;
-    } else if (currentCase >= 57 && currentCase <= 62) {
-      // SPR0-2 fetches: 57/59/61 = ptr+dma0, 58/60/62 = dma1+dma2.
-      dmaNum = (currentCase - 57) / 2;
-      if (((currentCase - 57) & 1) == 0) ptrDma0 = true;
+    } else if (vicCycle >= 57 && vicCycle <= 62) {
+      dmaNum = (vicCycle - 57) / 2;
+      if (((vicCycle - 57) & 1) == 0) ptrDma0 = true;
       else dma12 = true;
     }
     viceSprPipe.spritePtrDma0 = ptrDma0;
@@ -3277,8 +3272,22 @@ public class C64Screen extends ExtChip implements Observer {
     viceSprPipe.reg1cPipe = memory[0xd01c + IO_OFFSET] & 0xff;
     viceSprPipe.reg1dPipe = memory[0xd01d + IO_OFFSET] & 0xff;
 
-    // Run the per-cycle pipeline (VICE draw_sprites8).
     viceSprPipe.drawCycle8(currentRasterX);
+  }
+
+  /**
+   * Per-cycle (8-pixel) sprite paint. Reads pipeline outputs produced
+   * by the most recent advanceSpritePipeline() call and writes sprite
+   * color codes into mem[] + collissionMask[]. Only invoked on
+   * rendering cycles (cases 13-60) via drawSprites().
+   */
+  private final void drawSpritesViceCycle() {
+    if (notVisible) {
+      xPos += 8;
+      return;
+    }
+
+    int screenStart = xPos - 8;
 
     // Paint outputs into mem[] + collissionMask[]. Color resolution
     // matches VICE COL_D025/COL_D027+s/COL_D026 codes:
