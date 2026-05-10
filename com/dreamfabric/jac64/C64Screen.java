@@ -192,8 +192,8 @@ public class C64Screen extends ExtChip implements Observer {
   // not whatever the CPU just wrote mid-cycle. Auto-enable the existing
   // single-pending-slot delay machinery when viceRenderBuf is on.
   private final boolean COLOR_DELAY =
-      Boolean.getBoolean("jac64.colorDelay")
-          || Boolean.parseBoolean(System.getProperty("jac64.viceRenderBuf", "false"));
+      Boolean.parseBoolean(System.getProperty("jac64.colorDelay", "true"))
+          || Boolean.parseBoolean(System.getProperty("jac64.viceRenderBuf", "true"));
   // VICE-style single-pending-slot color register delay. Mirrors
   // viciisc/vicii-draw-cycle.c:586-590 update_cregs() pattern: last
   // register written this cycle is captured, applied at START of next
@@ -306,7 +306,7 @@ public class C64Screen extends ExtChip implements Observer {
   private final int[] renderBuf = new int[8];
   private final boolean[] priBuf = new boolean[8];
   private final boolean useViceRenderBuf =
-      Boolean.parseBoolean(System.getProperty("jac64.viceRenderBuf", "false"));
+      Boolean.parseBoolean(System.getProperty("jac64.viceRenderBuf", "true"));
   // True if drawGraphicsVice has populated renderBuf this cycle.
   // Sprite paint (drawSpritesViceCycle) checks this to decide whether
   // to overlay renderBuf (= visible-window cycle, Phase B path) or
@@ -349,7 +349,7 @@ public class C64Screen extends ExtChip implements Observer {
   // sub-1% across all 17 references.
   private final ViceSpritePipeline viceSprPipe = new ViceSpritePipeline();
   private final boolean useViceSprPipe =
-      Boolean.parseBoolean(System.getProperty("jac64.viceSprPipe", "false"));
+      Boolean.parseBoolean(System.getProperty("jac64.viceSprPipe", "true"));
 
   /** VICE-compatible raster_x given the current VIC cycle within a line. */
   private int rasterX(int vicCycle) {
