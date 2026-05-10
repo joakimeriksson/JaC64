@@ -1570,40 +1570,31 @@ public class C64Screen extends ExtChip implements Observer {
       break;
       // d011 -> high address of raster pos
     case 0xd011 :
+      // VICE-style passive register store. Mirrors viciisc/vicii-mem.c
+      // d011_store: only updates ysmooth + regs[0x11] + raster_irq_line.
+      // Per-cycle clock() re-evaluates check_badline() and fires
+      // handleBadLineStart/Stop on transition, so the writer doesn't
+      // touch badLine, rc, vc, or fetch-window state.
       int oldRaster = raster;
       raster = (raster & 0xff) | ((data << 1) & 0x100);
       updateRasterIrqLine(oldRaster);
       control1 = data;
 
-      int vicCycle = (int) (cpu.cycles - lastLine);
-      boolean wasBadLine = badLine;
-      boolean wasVisible = gfxVisible;
-
       updateDisplayEnabledFromControl(data);
 
-      // Update vScroll and recalculate badLine on any D011 write.
+      // ysmooth latch (live; cycle dispatcher re-derives badLine).
       vScroll = data & 0x7;
-      boolean newBadLine = isBadLine(vScroll);
 
-      if (!wasBadLine && newBadLine) {
-        badLine = true;
-        handleBadLineStart(vicCycle, wasVisible);
-      } else if (wasBadLine && !newBadLine) {
-        if (vicCycle < BADLINE_FETCH_CYCLE) {
-          badLine = false;
-          handleBadLineStop(vicCycle, wasVisible);
-        } else {
-          // Once badline DMA has started, the current line stays bad even if
-          // Y-scroll changes mid-line. The new scroll value applies next line.
-          badLine = true;
-        }
-      } else {
-        badLine = newBadLine;
-      }
+      extended = (data & 0x40) != 0;
+      blankRow = (data & 0x08) == 0;
+
+      videoMode = (extended ? 0x02 : 0)
+      | (multiCol ? 0x01 : 0) | (((data & 0x20) != 0) ? 0x04 : 0x00);
 
       if (shouldTraceRasterWrites()) {
+        int wCyc = (int) (cpu.cycles - lastLine);
         fldOut.println("D011=" + Integer.toHexString(data) +
-            " vbeam=" + vbeam + " cyc=" + vicCycle +
+            " vbeam=" + vbeam + " cyc=" + wCyc +
             " vScroll=" + vScroll + " badLine=" + badLine +
             " gfxVis=" + gfxVisible + " rc=" + rc +
             " vmli=" + vmli + " vc=" + vc +
@@ -1615,18 +1606,13 @@ public class C64Screen extends ExtChip implements Observer {
             " dispEn=" + displayEnabled);
       }
       if (Boolean.getBoolean("jac64.traceFli")) {
+        int wCyc = (int) (cpu.cycles - lastLine);
         System.err.println("D011=$" + Integer.toHexString(data)
-            + " vbeam=" + vbeam + " cyc=" + vicCycle
+            + " vbeam=" + vbeam + " cyc=" + wCyc
             + " vScroll=" + vScroll + " badLine=" + badLine
             + " bmap=" + ((data & 0x20) != 0)
             + " pc=$" + Integer.toHexString(cpu.pc & 0xffff));
       }
-
-      extended = (data & 0x40) != 0;
-      blankRow = (data & 0x08) == 0;
-
-      videoMode = (extended ? 0x02 : 0)
-      | (multiCol ? 0x01 : 0) | (((data & 0x20) != 0) ? 0x04 : 0x00);
 
       if (VIC_MEM_DEBUG || BAD_LINE_DEBUG) {
         monitor.info("d011 = " + data + " at " + vbeam +
@@ -2242,6 +2228,37 @@ public class C64Screen extends ExtChip implements Observer {
           borderState |= 1;
         } else {
           borderState &= 0xfe;
+        }
+      }
+    }
+
+    // VICE viciisc/vicii-cycle.c:581 — check_badline runs every vicii_cycle
+    // when allow_bad_lines is set. JaC64 used to evaluate badLine only at
+    // cycle 0 + on $D011 writes (writer-side state machine). For demos
+    // that write $D011 mid-line (FLI, soft-scrollers), the writer-side
+    // path produced one-charrow timing skew vs VICE. Move re-evaluation
+    // here so any mid-line vScroll change is re-derived at the next VIC
+    // cycle, exactly mirroring VICE.
+    //
+    // case 0 still does its own initial badLine = isBadLine(vScroll),
+    // resetBadLineFetchWindow, line-start setup. We only handle the
+    // mid-line transition cases here (vicCycle != 0).
+    if (vicCycle != 0) {
+      boolean newBadLine = isBadLine(vScroll);
+      if (newBadLine != badLine) {
+        boolean wasVisibleNow = gfxVisible;
+        if (newBadLine) {
+          badLine = true;
+          handleBadLineStart(vicCycle, wasVisibleNow);
+        } else {
+          if (vicCycle < BADLINE_FETCH_CYCLE) {
+            badLine = false;
+            handleBadLineStop(vicCycle, wasVisibleNow);
+          } else {
+            // Once badline DMA has started, line stays bad even if
+            // YSCROLL changes mid-line. New value applies next line.
+            badLine = true;
+          }
         }
       }
     }
