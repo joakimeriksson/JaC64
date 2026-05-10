@@ -3311,7 +3311,10 @@ public class C64Screen extends ExtChip implements Observer {
     Sprite legacy = sprites[n];
     SpriteSequencer seq = spriteSeqs[n];
 
-    if (!legacy.painting || !seq.enabled || !legacy.dma) {
+    // Match legacy semantics: paint while .painting is true, regardless of
+    // whether DMA was cleared this line. Sprite Y-restart can leave
+    // painting=true after DMA momentarily cleared (spriterestart.prg).
+    if (!legacy.painting || !seq.enabled) {
       return;
     }
     int mask = Integer.getInteger("jac64.spriteDisableMask", 0);
