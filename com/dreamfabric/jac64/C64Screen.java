@@ -300,6 +300,12 @@ public class C64Screen extends ExtChip implements Observer {
   private final boolean[] priBuf = new boolean[8];
   private final boolean useViceRenderBuf =
       Boolean.parseBoolean(System.getProperty("jac64.viceRenderBuf", "false"));
+  // True if drawGraphicsVice has populated renderBuf this cycle.
+  // Sprite paint (drawSpritesViceCycle) checks this to decide whether
+  // to overlay renderBuf (= visible-window cycle, Phase B path) or
+  // paint mem[] directly (= cases 13-15/56-60 where drawGraphicsVice
+  // didn't run; legacy fallback). Reset to false after drawColorsVice.
+  private boolean renderBufFresh = false;
 
   Sprite sprites[] = new Sprite[8];
 
@@ -455,9 +461,15 @@ public class C64Screen extends ExtChip implements Observer {
   private static final int VC_CBUF     = 0x13;
   private static final int VC_CBUF_MC  = 0x14;
   private static final int VC_D02X_EXT = 0x15;
+  private static final int VC_D020     = 0x20;  // border (used by draw_border8)
   private static final int VC_D021     = 0x21;
   private static final int VC_D022     = 0x22;
   private static final int VC_D023     = 0x23;
+  // Sprite color codes (Phase C). VICE COL_D025/COL_D026 are sprite
+  // multicolor 0/1; COL_D027 + s is sprite s's individual color.
+  private static final int VC_D025     = 0x25;  // sprite multicolor 0
+  private static final int VC_D026     = 0x26;  // sprite multicolor 1
+  private static final int VC_D027     = 0x27;  // sprite 0 color (+s for sprite s)
 
   // 32-entry colors[] table copied verbatim from VICE
   // (src/viciisc/vicii-draw-cycle.c). Indexed by (vmode | px) where:
@@ -2490,15 +2502,12 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       // Draw one character here!
-      if (useViceGfx) {
-        drawGraphicsVice(mpos);
-        if (useViceRenderBuf) drawColorsVice(mpos);
-      } else {
-        drawGraphics(mpos + horizScroll);
-      }
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
       if (borderState != 0)
         drawBackground();
+      finishCycleVice(mpos);
       mpos += 8;
 
       break;
@@ -2512,13 +2521,10 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C17");
         fetchBadLineData(2);  // VICE Phi2(17) col 2
       }
-      if (useViceGfx) {
-        drawGraphicsVice(mpos);
-        if (useViceRenderBuf) drawColorsVice(mpos);
-      } else {
-        drawGraphics(mpos + horizScroll);
-      }
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
+      finishCycleVice(mpos);
       mpos += 8;
       break;
       // Cycle 18 - 53
@@ -2528,13 +2534,10 @@ public class C64Screen extends ExtChip implements Observer {
         // vicCycle 18..53 fetches col vicCycle-15 = col 3..38.
         fetchBadLineData(vicCycle - 15);
       }
-      if (useViceGfx) {
-        drawGraphicsVice(mpos);
-        if (useViceRenderBuf) drawColorsVice(mpos);
-      } else {
-        drawGraphics(mpos + horizScroll);
-      }
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
+      finishCycleVice(mpos);
 
       mpos += 8;
       break;
@@ -2571,13 +2574,10 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_SP0, "SPR0");
       }
 
-      if (useViceGfx) {
-        drawGraphicsVice(mpos);
-        if (useViceRenderBuf) drawColorsVice(mpos);
-      } else {
-        drawGraphics(mpos + horizScroll);
-      }
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
+      finishCycleVice(mpos);
 
       mpos += 8;
 
@@ -2616,15 +2616,12 @@ public class C64Screen extends ExtChip implements Observer {
           }
         }
       }
-      if (useViceGfx) {
-        drawGraphicsVice(mpos);
-        if (useViceRenderBuf) drawColorsVice(mpos);
-      } else {
-        drawGraphics(mpos + horizScroll);
-      }
+      if (useViceGfx) drawGraphicsVice(mpos);
+      else drawGraphics(mpos + horizScroll);
       drawSprites();
       if (borderState != 0)
           drawBackground();
+      finishCycleVice(mpos);
       mpos += 8;
 
       break;
@@ -2896,33 +2893,30 @@ public class C64Screen extends ExtChip implements Observer {
       gbufPipe1Reg = gbufPipe0Reg;
       gbufPipe0Reg = 0;
       if (useViceRenderBuf) {
-        // VICE: out-of-frame leaves render_buffer/pri_buffer
-        // contents undefined for these cycles; downstream draw_border8
-        // / draw_colors8 use border color regardless. Match by clearing
-        // both buffers to a "no graphics" code.
         for (int i = 0; i < 8; i++) {
           renderBuf[i] = VC_NONE;
           priBuf[i] = false;
         }
+        renderBufFresh = true;
       }
       return;
     }
 
     if (!gfxVisible || paintBorder || vBorderOnly()) {
-      int color = (paintBorder || borderClosed()) ? borderColor : bgColor;
+      // VICE viciisc/vicii-draw-cycle.c — outside display, render_buffer
+      // is filled by draw_graphics with $D021 (or VC_NONE for hard
+      // border) then optionally overwritten by draw_border8 with $D020.
+      // We populate renderBuf here and let drawColorsVice/drawBorderVice
+      // resolve. When useViceRenderBuf is OFF, paint mem[] directly.
       int borderCode = (paintBorder || borderClosed()) ? VC_NONE : VC_D021;
       if (useViceRenderBuf) {
         for (int i = 0; i < 8; i++) {
           renderBuf[i] = borderCode;
           priBuf[i] = false;
         }
-        // Phase E will resolve renderBuf → mem[]. Until then, keep
-        // direct mem[] paint here as a parallel path so the visible
-        // output stays correct.
-        for (int i = 0; i < 8; i++) {
-          mem[mpos + i] = color;
-        }
+        renderBufFresh = true;
       } else {
+        int color = (paintBorder || borderClosed()) ? borderColor : bgColor;
         for (int i = 0; i < 8; i++) {
           mem[mpos + i] = color;
         }
@@ -3062,6 +3056,43 @@ public class C64Screen extends ExtChip implements Observer {
 
     vc = (vc + 1) & 0x3ff;
     vmli++;
+
+    if (useViceRenderBuf) {
+      renderBufFresh = true;
+    }
+  }
+
+  /**
+   * Mirrors VICE viciisc/vicii-draw-cycle.c:672-688 vicii_draw_cycle()
+   * end-of-cycle sequence: draw_border8 → draw_colors8. Called from
+   * the case dispatcher after drawGraphicsVice + drawSprites have
+   * populated renderBuf with graphics + sprite codes. Does nothing
+   * unless -Djac64.viceRenderBuf=true and renderBuf was populated
+   * this cycle (cases 13-15/56-60 keep legacy direct-paint).
+   */
+  private final void finishCycleVice(int mpos) {
+    if (!useViceRenderBuf || !renderBufFresh) return;
+    drawBorderVice();
+    drawColorsVice(mpos);
+  }
+
+  /**
+   * VICE viciisc/vicii-draw-cycle.c draw_border8() — overlays
+   * renderBuf[] with VC_D020 (border color code) when border is
+   * active. Active only when -Djac64.viceRenderBuf=true.
+   *
+   * Simplified vs upstream VICE: doesn't yet model the partial-border
+   * CSEL=0 transition cycle (where pixel 7 alone is border). JaC64's
+   * existing borderClosed()/paintBorder/vBorderOnly() flags carry
+   * enough state to drive a coarser overlay; the VICE-style per-cycle
+   * border state machine can be ported in a follow-on pass.
+   */
+  private final void drawBorderVice() {
+    if (paintBorder || borderClosed() || vBorderOnly()) {
+      for (int i = 0; i < 8; i++) {
+        renderBuf[i] = VC_D020;
+      }
+    }
   }
 
   /**
@@ -3080,20 +3111,29 @@ public class C64Screen extends ExtChip implements Observer {
     for (int i = 0; i < 8; i++) {
       int code = renderBuf[i];
       int rgba;
-      switch (code) {
-        case VC_NONE:     rgba = 0xff000000; break;
-        case VC_VBUF_L:   rgba = cbmcolor[vbufReg & 0x0f]; break;
-        case VC_VBUF_H:   rgba = cbmcolor[(vbufReg >> 4) & 0x0f]; break;
-        case VC_CBUF:     rgba = cbmcolor[cbufReg & 0x0f]; break;
-        case VC_CBUF_MC:  rgba = cbmcolor[cbufReg & 0x07]; break;
-        case VC_D02X_EXT: rgba = cbmcolor[bgCol[(vbufReg >> 6) & 3]]; break;
-        case VC_D021:     rgba = bgColor; break;
-        case VC_D022:     rgba = cbmcolor[bgCol[1]]; break;
-        case VC_D023:     rgba = cbmcolor[bgCol[2]]; break;
-        default:          rgba = 0xff000000;
+      if (code >= VC_D027 && code <= VC_D027 + 7) {
+        // Sprite individual color (Phase C). VICE: COL_D027 + s.
+        rgba = sprites[code - VC_D027].color[2];
+      } else {
+        switch (code) {
+          case VC_NONE:     rgba = 0xff000000; break;
+          case VC_VBUF_L:   rgba = cbmcolor[vbufReg & 0x0f]; break;
+          case VC_VBUF_H:   rgba = cbmcolor[(vbufReg >> 4) & 0x0f]; break;
+          case VC_CBUF:     rgba = cbmcolor[cbufReg & 0x0f]; break;
+          case VC_CBUF_MC:  rgba = cbmcolor[cbufReg & 0x07]; break;
+          case VC_D02X_EXT: rgba = cbmcolor[bgCol[(vbufReg >> 6) & 3]]; break;
+          case VC_D020:     rgba = borderColor; break;
+          case VC_D021:     rgba = bgColor; break;
+          case VC_D022:     rgba = cbmcolor[bgCol[1]]; break;
+          case VC_D023:     rgba = cbmcolor[bgCol[2]]; break;
+          case VC_D025:     rgba = cbmcolor[sprMC0]; break;
+          case VC_D026:     rgba = cbmcolor[sprMC1]; break;
+          default:          rgba = 0xff000000;
+        }
       }
       mem[mpos + i] = rgba;
     }
+    renderBufFresh = false;
   }
 
   /**
@@ -3449,11 +3489,23 @@ public class C64Screen extends ExtChip implements Observer {
 
       // Render only if pixel is non-transparent and not behind foreground.
       if (code != 0 && pixelX < SC_WIDTH && !borderClosedNow) {
-        int color;
-        if (code == 1) color = colorMc0;
-        else if (code == 3) color = colorMc1;
-        else color = sprites[s].color[2]; // sprite individual color
-        mem[mpos + pixelX] = color;
+        if (useViceRenderBuf && renderBufFresh) {
+          // Phase C: overlay sprite color CODE into renderBuf so
+          // drawColorsVice resolves it together with graphics. Mirrors
+          // VICE viciisc/vicii-draw-cycle.c:406-418 where draw_sprites
+          // writes COL_D025/COL_D027+s/COL_D026 into render_buffer[i].
+          int spriteCode;
+          if (code == 1) spriteCode = VC_D025;
+          else if (code == 3) spriteCode = VC_D026;
+          else spriteCode = VC_D027 + s;
+          renderBuf[i] = spriteCode;
+        } else {
+          int color;
+          if (code == 1) color = colorMc0;
+          else if (code == 3) color = colorMc1;
+          else color = sprites[s].color[2]; // sprite individual color
+          mem[mpos + pixelX] = color;
+        }
       }
     }
 
