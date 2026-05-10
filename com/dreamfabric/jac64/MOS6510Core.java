@@ -222,14 +222,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
   // VICE 6510dtvcore.c RTI(): "RTI does must not use
   // OPCODE_ENABLES_IRQ()" when it restores I from 1 to 0, because status
   // is restored before the final RTI cycles complete.
-  // Default ON: matches VICE — RTI does NOT have the 1-instruction IRQ
-  // recognition delay that CLI has. With this off, JaC64 incorrectly
-  // delayed IRQ recognition for one instruction after RTI restored I=0,
-  // letting opcodes leak through where the 6502 should re-enter the
-  // handler immediately. Fix verified with ackraster/ackcia (both PASS,
-  // were FAIL); irq-ack-vicii + cia-timer + 12 other tests unchanged.
-  protected static final boolean VICE_RTI_NO_IRQ_ENABLE_DELAY =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.viceRtiNoIrqDelay", "true"));
+  // VICE-correct: RTI does NOT have the 1-instruction IRQ recognition
+  // delay that CLI has. Locked in (no flag).
+  protected static final boolean VICE_RTI_NO_IRQ_ENABLE_DELAY = true;
 
   // Diagnostic only: JaC64 labels/schedules read cycles after cycles++,
   // whereas VICE captures IRQ clk in the CLK_INC() path after the CPU access.
@@ -238,17 +233,10 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected static final boolean IRQ_ASSERT_PRE_INCREMENT =
       Boolean.getBoolean("jac64.irqAssertPreIncrement");
 
-  // VICE 6510dtvcore.c:1593-1600 marks SEI with
-  // OPCODE_DISABLES_IRQ() when I was clear. main IRQ dispatch then allows
-  // service for one boundary with `|| OPINFO_DISABLES_IRQ(...)`.
-  // Default ON: matches VICE — when SEI clears a pending IRQ window
-  // (I was 0, IRQ pending), the IRQ is still serviced at the next
-  // instruction boundary instead of being masked. With this off, ackcia3
-  // (CLI;SEI inside IRQ handler with unACKed CIA pending) failed because
-  // SEI's I=1 immediately blocked the still-pending IRQ. irq-ack-vicii +
-  // ackraster + ackcia + ackcia2 + cia-timer all unchanged.
-  protected static final boolean VICE_SEI_IRQ_WINDOW =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.viceSeiIrqWindow", "true"));
+  // VICE 6510dtvcore.c:1593-1600 — SEI grants 1-boundary IRQ window when
+  // I was clear and IRQ was pending. Locked in (no flag); was breaking
+  // ackcia3 when off.
+  protected static final boolean VICE_SEI_IRQ_WINDOW = true;
 
   protected static final boolean VICE_IRQ_DELAY_COUNTER =
       Boolean.getBoolean("jac64.viceIrqDelayCounter");

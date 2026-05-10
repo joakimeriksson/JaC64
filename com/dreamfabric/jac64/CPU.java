@@ -133,14 +133,12 @@ public class CPU extends MOS6510Core {
   //   write:             write at cycles -> cycles++ -> schedule/phi2
   // Legacy pre-increment access remains available for A/B testing.
   //
-  // Set -Djac64.viceCycleAccessPhase=false to revert access phase for
-  // A/B testing. Set -Djac64.viceMem=false for the older BA/schedule order.
-  private static final boolean VICE_MEM_MODEL =
-      !"false".equalsIgnoreCase(System.getProperty("jac64.viceMem", "true"));
-
-  private static final boolean VICE_CYCLE_ACCESS_PHASE =
-      !"false".equalsIgnoreCase(
-          System.getProperty("jac64.viceCycleAccessPhase", "true"));
+  // VICE-style memory access semantics — locked in (no flag).
+  // viceMem and viceCycleAccessPhase used to be toggleable; setting them
+  // to false breaks irq-ack-vicii and cia-timer-newcias, so the legacy
+  // branches are dead code. Constants kept for code clarity.
+  private static final boolean VICE_MEM_MODEL = true;
+  private static final boolean VICE_CYCLE_ACCESS_PHASE = true;
 
   private void waitForBus() {
     waitForBus(false);

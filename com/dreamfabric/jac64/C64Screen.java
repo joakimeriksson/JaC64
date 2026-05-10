@@ -222,9 +222,6 @@ public class C64Screen extends ExtChip implements Observer {
   private boolean sprBgColFirePending = false;
   private boolean sprColFireReady = false;
   private boolean sprBgColFireReady = false;
-  private static final boolean VICE_COLLISION_IRQ_EXTRA_DELAY =
-      !"false".equalsIgnoreCase(
-          System.getProperty("jac64.viceCollisionIrqDelay", "true"));
   private int lastColorValue = 0;
   private long lastColorClk = -1;
 
@@ -946,10 +943,7 @@ public class C64Screen extends ExtChip implements Observer {
     // call regardless, producing extra raster IRQ events VICE doesn't
     // produce (e.g. rast=74 in RASTER testset frames after irq_reset_frame
     // sets $D012=69 but rasterIrqClock was scheduled for line 74).
-    // Gated by -Djac64.viceRasterGuard=true (default ON when set).
-    boolean rasterGuard =
-        !"false".equalsIgnoreCase(System.getProperty("jac64.viceRasterGuard", "true"));
-    if (rasterGuard && (irqFlags & 0x1) != 0 && irqTriggered) {
+    if ((irqFlags & 0x1) != 0 && irqTriggered) {
       // Already pending and not acked — don't re-fire.
       // Still advance rasterIrqClock so we don't busy-loop.
       if (rasterIrqClock != RASTER_IRQ_DISABLED && rasterIrqClock <= irqClock) {
@@ -2715,11 +2709,11 @@ public class C64Screen extends ExtChip implements Observer {
     // handled in clockPhi2(), with an optional one-Phi2 ready stage.
     if (sprColCanFire && sprCol != 0 && !sprColFirePending) {
       sprColFirePending = true;
-      sprColFireReady = !VICE_COLLISION_IRQ_EXTRA_DELAY;
+      sprColFireReady = false;
     }
     if (sprBgColCanFire && sprBgCol != 0 && !sprBgColFirePending) {
       sprBgColFirePending = true;
-      sprBgColFireReady = !VICE_COLLISION_IRQ_EXTRA_DELAY;
+      sprBgColFireReady = false;
     }
 
     // Per-cycle VIC trace — emit one line summarizing this cycle.
@@ -4079,10 +4073,7 @@ public class C64Screen extends ExtChip implements Observer {
     // physical clock (vicii_reset sets raster_cycle=6, first
     // wrap at maincpu_clk 1+56=57 in theory but viciisc reset
     // timing puts it at clk 63 empirically).
-    // Gated by -Djac64.viceLineAlign (default ON when set).
-    boolean lineAlign =
-        !"false".equalsIgnoreCase(System.getProperty("jac64.viceLineAlign", "true"));
-    lastLine = cpu.cycles - (lineAlign ? 1 : 0);
+    lastLine = cpu.cycles - 1;
     nextIOUpdate = cpu.cycles + 47;
 
     for (int i = 0; i < mem.length; i++) mem[i] = 0;
