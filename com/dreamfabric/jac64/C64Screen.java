@@ -278,6 +278,29 @@ public class C64Screen extends ExtChip implements Observer {
   // 48 extra for the case of an expanded sprite byte
   int collissionMask[] = new int[SC_WIDTH + 48];
 
+  // ============================================================
+  // VICE-style per-cycle render buffer infrastructure (Phase A)
+  // ============================================================
+  // Mirrors VICE viciisc/vicii-draw-cycle.c per-cycle state:
+  //   render_buffer[8]  — 8 color CODES (COL_D021/COL_VBUF_L/...)
+  //                       produced by draw_graphics8, overlaid by
+  //                       draw_sprites8, then resolved to RGBA by
+  //                       draw_colors8 via the cregs[] lookup.
+  //   pri_buffer[8]     — 8 foreground-priority bits set by
+  //                       draw_graphics8; read by draw_sprites8 to
+  //                       gate sprite-over-graphics priority.
+  //
+  // Currently active only behind -Djac64.viceRenderBuf=true while
+  // the surrounding pipeline is migrated phase-by-phase. Phase B
+  // makes drawGraphicsVice write here; Phase C migrates sprite
+  // paint; Phase D adds border; Phase E adds the color-resolution
+  // step that writes mem[].
+  // ============================================================
+  private final int[] renderBuf = new int[8];
+  private final boolean[] priBuf = new boolean[8];
+  private final boolean useViceRenderBuf =
+      Boolean.parseBoolean(System.getProperty("jac64.viceRenderBuf", "false"));
+
   Sprite sprites[] = new Sprite[8];
 
   private int horizScroll = 0;
@@ -2467,8 +2490,12 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       // Draw one character here!
-      if (useViceGfx) drawGraphicsVice(mpos);
-      else drawGraphics(mpos + horizScroll);
+      if (useViceGfx) {
+        drawGraphicsVice(mpos);
+        if (useViceRenderBuf) drawColorsVice(mpos);
+      } else {
+        drawGraphics(mpos + horizScroll);
+      }
       drawSprites();
       if (borderState != 0)
         drawBackground();
@@ -2485,8 +2512,12 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C17");
         fetchBadLineData(2);  // VICE Phi2(17) col 2
       }
-      if (useViceGfx) drawGraphicsVice(mpos);
-      else drawGraphics(mpos + horizScroll);
+      if (useViceGfx) {
+        drawGraphicsVice(mpos);
+        if (useViceRenderBuf) drawColorsVice(mpos);
+      } else {
+        drawGraphics(mpos + horizScroll);
+      }
       drawSprites();
       mpos += 8;
       break;
@@ -2497,8 +2528,12 @@ public class C64Screen extends ExtChip implements Observer {
         // vicCycle 18..53 fetches col vicCycle-15 = col 3..38.
         fetchBadLineData(vicCycle - 15);
       }
-      if (useViceGfx) drawGraphicsVice(mpos);
-      else drawGraphics(mpos + horizScroll);
+      if (useViceGfx) {
+        drawGraphicsVice(mpos);
+        if (useViceRenderBuf) drawColorsVice(mpos);
+      } else {
+        drawGraphics(mpos + horizScroll);
+      }
       drawSprites();
 
       mpos += 8;
@@ -2536,8 +2571,12 @@ public class C64Screen extends ExtChip implements Observer {
         setBaLowUntil(lastLine + VICConstants.BA_SP0, "SPR0");
       }
 
-      if (useViceGfx) drawGraphicsVice(mpos);
-      else drawGraphics(mpos + horizScroll);
+      if (useViceGfx) {
+        drawGraphicsVice(mpos);
+        if (useViceRenderBuf) drawColorsVice(mpos);
+      } else {
+        drawGraphics(mpos + horizScroll);
+      }
       drawSprites();
 
       mpos += 8;
@@ -2577,8 +2616,12 @@ public class C64Screen extends ExtChip implements Observer {
           }
         }
       }
-      if (useViceGfx) drawGraphicsVice(mpos);
-      else drawGraphics(mpos + horizScroll);
+      if (useViceGfx) {
+        drawGraphicsVice(mpos);
+        if (useViceRenderBuf) drawColorsVice(mpos);
+      } else {
+        drawGraphics(mpos + horizScroll);
+      }
       drawSprites();
       if (borderState != 0)
           drawBackground();
@@ -2852,13 +2895,37 @@ public class C64Screen extends ExtChip implements Observer {
       vmli++;
       gbufPipe1Reg = gbufPipe0Reg;
       gbufPipe0Reg = 0;
+      if (useViceRenderBuf) {
+        // VICE: out-of-frame leaves render_buffer/pri_buffer
+        // contents undefined for these cycles; downstream draw_border8
+        // / draw_colors8 use border color regardless. Match by clearing
+        // both buffers to a "no graphics" code.
+        for (int i = 0; i < 8; i++) {
+          renderBuf[i] = VC_NONE;
+          priBuf[i] = false;
+        }
+      }
       return;
     }
 
     if (!gfxVisible || paintBorder || vBorderOnly()) {
       int color = (paintBorder || borderClosed()) ? borderColor : bgColor;
-      for (int i = 0; i < 8; i++) {
-        mem[mpos + i] = color;
+      int borderCode = (paintBorder || borderClosed()) ? VC_NONE : VC_D021;
+      if (useViceRenderBuf) {
+        for (int i = 0; i < 8; i++) {
+          renderBuf[i] = borderCode;
+          priBuf[i] = false;
+        }
+        // Phase E will resolve renderBuf → mem[]. Until then, keep
+        // direct mem[] paint here as a parallel path so the visible
+        // output stays correct.
+        for (int i = 0; i < 8; i++) {
+          mem[mpos + i] = color;
+        }
+      } else {
+        for (int i = 0; i < 8; i++) {
+          mem[mpos + i] = color;
+        }
       }
       vmli++;
       gbufPipe1Reg = gbufPipe0Reg;
@@ -2933,27 +3000,38 @@ public class C64Screen extends ExtChip implements Observer {
       reg = (reg << 1) & 0xff;
       mcFlop ^= 1;
 
-      // Color resolution via VICE's 32-entry table.
+      // VICE viciisc/vicii-draw-cycle.c:196-227 — code lookup happens
+      // during draw_graphics(); RGBA resolution happens later in
+      // draw_colors8(). Phase B writes the CODE to renderBuf for the
+      // new path; the legacy path resolves directly to mem[].
       final int code = VC_GFX_COLORS[(v11 | v16) | px];
-      int rgba;
-      switch (code) {
-        case VC_NONE:     rgba = 0xff000000; break;
-        case VC_VBUF_L:   rgba = cbmcolor[vbufReg & 0x0f]; break;
-        case VC_VBUF_H:   rgba = cbmcolor[(vbufReg >> 4) & 0x0f]; break;
-        case VC_CBUF:     rgba = cbmcolor[cbufReg & 0x0f]; break;
-        case VC_CBUF_MC:  rgba = cbmcolor[cbufReg & 0x07]; break;
-        case VC_D02X_EXT: rgba = cbmcolor[bgCol[(vbufReg >> 6) & 3]]; break;
-        case VC_D021:     rgba = bgColor; break;
-        case VC_D022:     rgba = cbmcolor[bgCol[1]]; break;
-        case VC_D023:     rgba = cbmcolor[bgCol[2]]; break;
-        default:          rgba = 0xff000000;
+      final boolean pixelPri = (px & 2) != 0;
+      renderBuf[pix] = code;
+      priBuf[pix] = pixelPri;
+
+      if (!useViceRenderBuf) {
+        int rgba;
+        switch (code) {
+          case VC_NONE:     rgba = 0xff000000; break;
+          case VC_VBUF_L:   rgba = cbmcolor[vbufReg & 0x0f]; break;
+          case VC_VBUF_H:   rgba = cbmcolor[(vbufReg >> 4) & 0x0f]; break;
+          case VC_CBUF:     rgba = cbmcolor[cbufReg & 0x0f]; break;
+          case VC_CBUF_MC:  rgba = cbmcolor[cbufReg & 0x07]; break;
+          case VC_D02X_EXT: rgba = cbmcolor[bgCol[(vbufReg >> 6) & 3]]; break;
+          case VC_D021:     rgba = bgColor; break;
+          case VC_D022:     rgba = cbmcolor[bgCol[1]]; break;
+          case VC_D023:     rgba = cbmcolor[bgCol[2]]; break;
+          default:          rgba = 0xff000000;
+        }
+        mem[mpos + pix] = rgba;
       }
-      mem[mpos + pix] = rgba;
 
       // Sprite-collision foreground mask: px bit 1 = foreground.
+      // Always written (drawSpritesViceCycle still reads collissionMask
+      // bit 0x100 for FG priority until Phase C migrates that path).
       final int cx = collX + pix;
       if (cx >= 0 && cx < collissionMask.length) {
-        collissionMask[cx] = (px & 2) != 0 ? 256 : 0;
+        collissionMask[cx] = pixelPri ? 256 : 0;
       }
 
       // VICE's mid-cycle mode latching (PAL 6569 color_latency=1):
@@ -2984,6 +3062,38 @@ public class C64Screen extends ExtChip implements Observer {
 
     vc = (vc + 1) & 0x3ff;
     vmli++;
+  }
+
+  /**
+   * VICE viciisc/vicii-draw-cycle.c draw_colors8() — resolves the 8
+   * color CODES in renderBuf[] to RGBA via cbmcolor[] / bgCol[] and
+   * writes them to mem[mpos..mpos+7]. Mirrors VICE's late color
+   * resolution where the per-pixel palette is sampled at draw_colors
+   * time, NOT at draw_graphics time. Mid-cycle $D021/$D022/$D023
+   * writes therefore affect un-emitted pixels of the same cycle.
+   *
+   * Active only when -Djac64.viceRenderBuf=true. Phase E (later)
+   * adds the cregs[] 1-cycle delayed apply (`update_cregs`) so
+   * mid-cycle $D02x writes precisely match VICE timing.
+   */
+  private final void drawColorsVice(int mpos) {
+    for (int i = 0; i < 8; i++) {
+      int code = renderBuf[i];
+      int rgba;
+      switch (code) {
+        case VC_NONE:     rgba = 0xff000000; break;
+        case VC_VBUF_L:   rgba = cbmcolor[vbufReg & 0x0f]; break;
+        case VC_VBUF_H:   rgba = cbmcolor[(vbufReg >> 4) & 0x0f]; break;
+        case VC_CBUF:     rgba = cbmcolor[cbufReg & 0x0f]; break;
+        case VC_CBUF_MC:  rgba = cbmcolor[cbufReg & 0x07]; break;
+        case VC_D02X_EXT: rgba = cbmcolor[bgCol[(vbufReg >> 6) & 3]]; break;
+        case VC_D021:     rgba = bgColor; break;
+        case VC_D022:     rgba = cbmcolor[bgCol[1]]; break;
+        case VC_D023:     rgba = cbmcolor[bgCol[2]]; break;
+        default:          rgba = 0xff000000;
+      }
+      mem[mpos + i] = rgba;
+    }
   }
 
   /**
