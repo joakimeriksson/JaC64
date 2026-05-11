@@ -3292,11 +3292,19 @@ public class C64Screen extends ExtChip implements Observer {
    * mid-cycle $D02x writes precisely match VICE timing.
    */
   private final void drawColorsVice(int mpos) {
-    // VICE viciisc/vicii-draw-cycle.c:608 draw_colors_6569 / :622
-    // draw_colors_8565 — code → color resolution via cregs[] indirection.
-    // JaC64 routes all VC_D02X codes (0x20..0x2e) through cregs[] for
-    // the unified VICE-style lookup. Non-D02X codes (VBUF/CBUF/etc.)
-    // still resolve via local registers.
+    // VICE viciisc/vicii-draw-cycle.c:608 draw_colors_6569 (PAL 6569
+    // color_latency=1) / :622 draw_colors_8565 (PAL HMOS 8565,
+    // color_latency=0) — code → color resolution via cregs[] indirection
+    // with the pixel_buffer 1-cycle delay.
+    //
+    // The 8565 grey-dot fixup at pixel 0 is already handled in JaC64 via
+    // applyD021CurrentCycleColor / applySpriteColorCurrentCycle (mem[]
+    // retroactive paint at write time). The cregs[] lookup here gives the
+    // SAME result modulo timing — for now JaC64 resolves CURRENT renderBuf
+    // (no pixel_buffer carry-over). Phase 4 carry-over would shift the
+    // entire output by 1 VIC cycle visually, which doesn't match the
+    // existing retroactive-paint scheme. Keeping current resolution
+    // semantics; cregs[] indirection alone is the structural improvement.
     for (int i = 0; i < 8; i++) {
       int code = renderBuf[i];
       int rgba;
