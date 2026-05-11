@@ -61,8 +61,13 @@ public class C64Screen extends ExtChip implements Observer {
   private int colIndex = 0;
 
   // This is the screen width and height used...
+  // SC_HEIGHT matches VICE PAL NORMAL display: 272 raster lines
+  // (VICII_PAL_NORMAL_FIRST_DISPLAYED_LINE 0x10 .. LAST 0x11f, vicii-timing.h:68).
+  // FIRST_VISIBLE_VBEAM = 15 → vbeam starts being painted at 16 (= 0x10).
+  // Previous value 284 = 0x10 .. 0x12b (full mode), which inflated cell-diff
+  // alignments vs VICE -8565.png references that are captured in normal mode.
   private final static int SC_WIDTH = 384; //403;
-  private final static int SC_HEIGHT = 284;
+  private final static int SC_HEIGHT = 272;
   private final int SC_XOFFS = 32;
   // Done: this should be - 24!
   private final int SC_SPXOFFS = SC_XOFFS - 24;
@@ -2319,7 +2324,7 @@ public class C64Screen extends ExtChip implements Observer {
       // collision existed, producing wrong patterns on
       // irq-ack-vicii.prg's SS-COL test.
       notVisible = false;
-      if (vPos < 0 || vPos >= 284) {
+      if (vPos < 0 || vPos >= SC_HEIGHT) {
         notVisible = true;
         if (STATE_DEBUG)
           monitor.info("FINISH next at " + vbeam);
@@ -2796,7 +2801,7 @@ public class C64Screen extends ExtChip implements Observer {
       lastLine += VICConstants.SCAN_RATE;
       // Update screen
       if (updating) {
-        if (vPos == 285) {
+        if (vPos == SC_HEIGHT + 1) {
           // Throttle to 50 Hz only when audio driver has no sound
           // (e.g. Android without blocking audio). With ReSID on
           // desktop, audio output already provides the timing —

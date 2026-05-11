@@ -155,7 +155,9 @@ public class TestRaster {
     private void screenshot(String filename) throws Exception {
         int[] pixels = scr.getPixelBuffer();
         int w = 384;  // SC_WIDTH
-        int h = 284;  // SC_HEIGHT
+        // Derive h from the pixel buffer so geometry changes in C64Screen.SC_HEIGHT
+        // don't require updating TestRaster in lockstep.
+        int h = pixels.length / w;
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         img.setRGB(0, 0, w, h, pixels, 0, w);
         File f = new File(filename);
