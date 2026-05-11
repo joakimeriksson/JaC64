@@ -443,6 +443,17 @@ public class C64Screen extends ExtChip implements Observer {
   private int badLineFetchStartColumn = 0;
   private int badLineDummyColumns = 0;
   private int badLineFetchSourceColumn = 0;
+
+  // VICE viciisc/vicii-cycle.c:657-666 prefetch_cycles. Tracks how many
+  // cycles of BA-low we've been in. While prefetch_cycles > 0, the VIC
+  // is in the FLI-bug pre-fetch window — c-access fetches return $3FFF
+  // bus + CPU PC byte instead of normal screen RAM / color RAM. After
+  // 3 cycles of bad_line, prefetch_cycles=0 and normal fetches resume.
+  //
+  // This matches VICE's per-cycle GAP semantic: bad_line can flip
+  // on/off mid-line and the prefetch counter tracks each on→off→on
+  // transition correctly, replacing JaC64's start-column shortcut.
+  private int prefetchCycles = 4;
   private long rasterIrqClock = RASTER_IRQ_DISABLED;
   private final boolean debugProbe = Boolean.getBoolean("jac64.debugProbe");
 
@@ -1186,25 +1197,13 @@ public class C64Screen extends ExtChip implements Observer {
     final int fetchVideoMatrix = viceFetchDelay ? videoMatrixFetchDelay : videoMatrix;
     final int fetchCharMemoryIndex = viceFetchDelay ? charMemoryIndexFetchDelay : charMemoryIndex;
 
-    if (column >= badLineFetchStartColumn && badLineDummyColumns > 0) {
-      int fetchColumn = column - badLineFetchStartColumn;
-      if (fetchColumn < badLineDummyColumns) {
-        // FLI-bug prefetch columns: VIC takes the bus mid-cycle and reads
-        // whatever the CPU was about to fetch — the byte at the CPU's PC.
-        // VICE viciisc/vicii-fetch.c:vicii_fetch_matrix() with
-        // prefetch_cycles > 0:
-        //   vbuf = 0xff
-        //   cbuf = ram_base_phi2[reg_pc] & 0xf
-        // Krestage 3's "move the FLI bug to the right" trick relies on
-        // the CPU's PC giving specific colors here; hardcoding 0 made
-        // the moved FLI bug always render as black instead of the demo
-        // intended palette.
-        vicCharCache[column] = 0xff;
-        vicColCache[column] = memory[cpu.pc & 0xffff] & 0x0f;
-        return;
-      }
-
-      sourceColumn = badLineFetchSourceColumn + fetchColumn - badLineDummyColumns;
+    // VICE viciisc/vicii-fetch.c:194 — when prefetch_cycles > 0, fetch
+    // returns $3FFF bus + PC byte (FLI-bug pre-fetch). Otherwise normal
+    // c-access at current vc.
+    if (prefetchCycles > 0) {
+      vicCharCache[column] = 0xff;
+      vicColCache[column] = memory[cpu.pc & 0xffff] & 0x0f;
+      return;
     }
 
     if (sourceColumn < 0 || sourceColumn >= 40) {
@@ -2352,19 +2351,10 @@ public class C64Screen extends ExtChip implements Observer {
         boolean wasVisibleNow = gfxVisible;
         if (newBadLine) {
           badLine = true;
-          // FLI fix: $D011 writes that flip YSCROLL multiple times per line
-          // can re-trigger badline within the FetchC window. Each call to
-          // handleBadLineStart resets badLineFetchStartColumn — leading to
-          // wrong c-access offsets when the demo flips badline more than
-          // once. Track "already started this line" so only the FIRST
-          // false→true transition commits the fetch-start column.
-          // Krestage 3's FLI scrolling-girl banding is the visible symptom.
           if (!badLineStartedThisLine) {
             badLineStartedThisLine = true;
             handleBadLineStart(vicCycle, wasVisibleNow);
           } else {
-            // Subsequent re-arming: only refresh BA-low; keep
-            // badLineFetchStartColumn from first trigger.
             setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-REARM");
           }
         } else {
@@ -2372,12 +2362,20 @@ public class C64Screen extends ExtChip implements Observer {
             badLine = false;
             handleBadLineStop(vicCycle, wasVisibleNow);
           } else {
-            // Once badline DMA has started, line stays bad even if
-            // YSCROLL changes mid-line. New value applies next line.
             badLine = true;
           }
         }
       }
+    }
+
+    // VICE viciisc/vicii-cycle.c:657-666 — prefetch_cycles counter.
+    // While ba_low (= bad_line active), count down. When ba_low goes
+    // high, reset to 3+1. The first 3 cycles of bad_line return the
+    // FLI-bug prefetch byte (CPU PC), normal c-access starts at cycle 4.
+    if (badLine) {
+      if (prefetchCycles > 0) prefetchCycles--;
+    } else {
+      prefetchCycles = 4;
     }
 
     switch (vicCycle) {
