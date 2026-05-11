@@ -112,12 +112,15 @@ public class C64Screen extends ExtChip implements Observer {
   // This is an IEC emulation (non ROM based)
   boolean emulateDisk = false; //true; //!CPU.EMULATE_1541; // false;
 
-  // Default to color set 3 (WinVICE-ripped) for closer pixel match with
-  // VICE x64sc when comparing screenshots/test outputs. Set 0 (JaC64
-  // original) and others remain available via File→Settings→Color Set.
+  // Default to color set 1 — empirically derived from VICE x64sc
+  // -8565.png reference images (greydot, rmwtest, modesplit). Set 1
+  // gives near-pixel-perfect match with the modern VICE 8565 palette
+  // (#352879 blue, #6c5eb5 lt.blue, #6c6c6c gray). Previously default
+  // was set 3 ("WinVICE-ripped" from XP era), which was an older
+  // palette and inflated cell-diffs by ~300 cells across the VICII
+  // test suite — see project_vice_test_baseline_2026_05_11.
   int[] cbmcolor = VICConstants.COLOR_SETS[
-      Integer.getInteger("jac64.colorSet",
-          VICConstants.COLOR_SETS.length - 1)];
+      Integer.getInteger("jac64.colorSet", 1)];
 
   // -------------------------------------------------------------------
   // VIC-II variables

@@ -705,15 +705,23 @@ public class TestRaster {
 
     /**
      * Reverse mapping from rendered ARGB to the 16-color JaC64 palette.
-     * Matches VICConstants.COLOR_SETS[0] exactly.
+     * Reads the live palette from C64Screen.cbmcolor so it tracks the
+     * jac64.colorSet system property (default now: set 1, VICE 8565-aligned).
      */
     private int cbmRgbToIndex(int rgb) {
-        int[] pal = {
-            0x000000, 0xffffff, 0xe04040, 0x60ffff,
-            0xe060e0, 0x40e040, 0x4040e0, 0xffff40,
-            0xe0a040, 0x9c7448, 0xffa0a0, 0x545454,
-            0x888888, 0xa0ffa0, 0xa0a0ff, 0xc0c0c0,
-        };
+        int[] pal;
+        try {
+            java.lang.reflect.Field f = scr.getClass().getField("cbmcolor");
+            pal = (int[]) f.get(scr);
+        } catch (Exception e) {
+            // Fall back to set 1 (VICE 8565) literal.
+            pal = new int[] {
+                0x000000, 0xffffff, 0x68372b, 0x70a4b2,
+                0x6f3d86, 0x588d43, 0x352879, 0xb8c76f,
+                0x6f4f25, 0x433900, 0x9a6759, 0x444444,
+                0x6c6c6c, 0x9ad284, 0x6c5eb5, 0x959595,
+            };
+        }
         int best = -1;
         int bestD = Integer.MAX_VALUE;
         int r = (rgb >> 16) & 0xff, g = (rgb >> 8) & 0xff, b = rgb & 0xff;
