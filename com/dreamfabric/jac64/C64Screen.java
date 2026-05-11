@@ -251,6 +251,12 @@ public class C64Screen extends ExtChip implements Observer {
 
   private int vicBase = 0;
   private boolean badLine = false;
+  // FLI fix: tracks whether handleBadLineStart has already fired for the
+  // current line. Reset to badLine at case 0 (line start). Krestage 3 and
+  // other FLI demos write $D011 multiple times per line, which without this
+  // guard re-triggers handleBadLineStart and overwrites the committed
+  // badLineFetchStartColumn — producing visible per-charrow stripes.
+  private boolean badLineStartedThisLine = false;
   private int spr0BlockSel;
 
   // New type of position in video matrix - Video Counter (VIC II docs)
@@ -2346,7 +2352,21 @@ public class C64Screen extends ExtChip implements Observer {
         boolean wasVisibleNow = gfxVisible;
         if (newBadLine) {
           badLine = true;
-          handleBadLineStart(vicCycle, wasVisibleNow);
+          // FLI fix: $D011 writes that flip YSCROLL multiple times per line
+          // can re-trigger badline within the FetchC window. Each call to
+          // handleBadLineStart resets badLineFetchStartColumn — leading to
+          // wrong c-access offsets when the demo flips badline more than
+          // once. Track "already started this line" so only the FIRST
+          // false→true transition commits the fetch-start column.
+          // Krestage 3's FLI scrolling-girl banding is the visible symptom.
+          if (!badLineStartedThisLine) {
+            badLineStartedThisLine = true;
+            handleBadLineStart(vicCycle, wasVisibleNow);
+          } else {
+            // Subsequent re-arming: only refresh BA-low; keep
+            // badLineFetchStartColumn from first trigger.
+            setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-REARM");
+          }
         } else {
           if (vicCycle < BADLINE_FETCH_CYCLE) {
             badLine = false;
@@ -2398,6 +2418,8 @@ public class C64Screen extends ExtChip implements Observer {
 
       badLine = isBadLine(vScroll);
       resetBadLineFetchWindow();
+      // Reset the per-line idempotency guard for handleBadLineStart.
+      badLineStartedThisLine = badLine;
 
       // Clear sprite-register change queue for the new line. Stage 2:
       // queue is populated on writes but not yet consumed.
