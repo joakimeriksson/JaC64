@@ -806,11 +806,21 @@ public class C64Screen extends ExtChip implements Observer {
     int den = (control1 & 0x10) != 0 ? 1 : 0;
     int stopLine = rsel == 1 ? 251 : 247;
     int startLine = rsel == 1 ? 51 : 55;
+    boolean prev = setVBorder;
     if (vbeam == stopLine) {
       setVBorder = true;
     }
     if (vbeam == startLine && den == 1) {
       setVBorder = false;
+    }
+    if (TRACE_VIC_CYCLE && prev != setVBorder
+        && cpu.cycles >= TRACE_VIC_CYCLE_START
+        && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+      traceVicCycleOut.println("EV-ChkVBrd clk=" + cpu.cycles
+          + " rast=$" + Integer.toHexString(vbeam)
+          + " cyc=" + (cpu.cycles - lastLine)
+          + " rsel=" + rsel + " den=" + den
+          + " setVB:" + prev + "->" + setVBorder);
     }
   }
 
@@ -820,12 +830,24 @@ public class C64Screen extends ExtChip implements Observer {
    * opens mainBorder (viciisc/vicii-cycle.c:188-195).
    */
   private void checkHBorderLeft() {
+    boolean prevMain = mainBorder;
+    boolean prevV = vBorder;
     checkVBorderTopBottom();
     vBorder = setVBorder;
     if (!vBorder) {
       mainBorder = false;
     }
     if (TRACE_VIC_CYCLE) traceAct("ChkBrdL");
+    if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+        && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+      traceVicCycleOut.println("EV-ChkBrdL clk=" + cpu.cycles
+          + " rast=$" + Integer.toHexString(vbeam)
+          + " cyc=" + (cpu.cycles - lastLine)
+          + " csel=" + (hideColumn ? "0" : "1")
+          + " setVB=" + setVBorder
+          + " vB:" + prevV + "->" + vBorder
+          + " mainB:" + prevMain + "->" + mainBorder);
+    }
   }
 
   /**
@@ -833,8 +855,17 @@ public class C64Screen extends ExtChip implements Observer {
    * if CSEL=1. Closes mainBorder (viciisc/vicii-cycle.c:196-199).
    */
   private void checkHBorderRight() {
+    boolean prevMain = mainBorder;
     mainBorder = true;
     if (TRACE_VIC_CYCLE) traceAct("ChkBrdR" + (hideColumn ? "0" : "1"));
+    if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+        && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+      traceVicCycleOut.println("EV-ChkBrdR clk=" + cpu.cycles
+          + " rast=$" + Integer.toHexString(vbeam)
+          + " cyc=" + (cpu.cycles - lastLine)
+          + " csel=" + (hideColumn ? "0" : "1")
+          + " mainB:" + prevMain + "->" + mainBorder);
+    }
   }
 
   /** Single gate for rendering: VICE's main_border. */
