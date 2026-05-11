@@ -181,6 +181,15 @@ public class C64Screen extends ExtChip implements Observer {
   int bCol = 0;
   int bgCol[] = new int[4];
 
+  // VICE viciisc/vicii-draw-cycle.c:116 cregs[] — color register array
+  // indexed by VC_D02X code (=  reg offset 0x20..0x2e). draw_colors8
+  // resolves render_buffer codes via `cregs[pixel_buffer[i]]`, which
+  // is the unified path through which all color register writes affect
+  // the rendered output. JaC64 mirrors VICE's structure: applyDelayed-
+  // ColorReg writes both the legacy per-color fields AND cregs[reg].
+  // drawColorsVice can then use cregs[code] for VC_D020..VC_D02E.
+  private final int[] cregs = new int[0x2f];
+
   // VICE-style 1-cycle delay for color registers ($D020-$D024). VICE
   // applies the new value to cregs[] at start of NEXT vicii_cycle (see
   // viciisc/vicii-draw-cycle.c:635-638), so a register write at cycle N
@@ -594,6 +603,11 @@ public class C64Screen extends ExtChip implements Observer {
    */
   private void applyDelayedColorReg(int reg, int value) {
     int v = value & 0x0f;
+    // VICE viciisc/vicii-draw-cycle.c:653 `cregs[last_color_reg] = ...`
+    // — unified cregs[] update used by draw_colors8 for code → color
+    // resolution. JaC64 also keeps legacy per-color fields for the
+    // mem-direct paint paths.
+    if (reg >= 0x20 && reg <= 0x2e) cregs[reg] = v;
     switch (reg) {
       case 0x20: borderColor = cbmcolor[v]; break;
       case 0x21:
@@ -3278,12 +3292,17 @@ public class C64Screen extends ExtChip implements Observer {
    * mid-cycle $D02x writes precisely match VICE timing.
    */
   private final void drawColorsVice(int mpos) {
+    // VICE viciisc/vicii-draw-cycle.c:608 draw_colors_6569 / :622
+    // draw_colors_8565 — code → color resolution via cregs[] indirection.
+    // JaC64 routes all VC_D02X codes (0x20..0x2e) through cregs[] for
+    // the unified VICE-style lookup. Non-D02X codes (VBUF/CBUF/etc.)
+    // still resolve via local registers.
     for (int i = 0; i < 8; i++) {
       int code = renderBuf[i];
       int rgba;
-      if (code >= VC_D027 && code <= VC_D027 + 7) {
-        // Sprite individual color (Phase C). VICE: COL_D027 + s.
-        rgba = sprites[code - VC_D027].color[2];
+      if (code >= 0x20 && code <= 0x2e) {
+        // VC_D020..VC_D02E: route through cregs[] (mirrors VICE).
+        rgba = cbmcolor[cregs[code]];
       } else {
         switch (code) {
           case VC_NONE:     rgba = 0xff000000; break;
@@ -3292,12 +3311,6 @@ public class C64Screen extends ExtChip implements Observer {
           case VC_CBUF:     rgba = cbmcolor[cbufReg & 0x0f]; break;
           case VC_CBUF_MC:  rgba = cbmcolor[cbufReg & 0x07]; break;
           case VC_D02X_EXT: rgba = cbmcolor[bgCol[(vbufReg >> 6) & 3]]; break;
-          case VC_D020:     rgba = borderColor; break;
-          case VC_D021:     rgba = bgColor; break;
-          case VC_D022:     rgba = cbmcolor[bgCol[1]]; break;
-          case VC_D023:     rgba = cbmcolor[bgCol[2]]; break;
-          case VC_D025:     rgba = cbmcolor[sprMC0]; break;
-          case VC_D026:     rgba = cbmcolor[sprMC1]; break;
           default:          rgba = 0xff000000;
         }
       }
