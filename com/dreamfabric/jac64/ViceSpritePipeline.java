@@ -48,6 +48,20 @@ package com.dreamfabric.jac64;
  */
 public final class ViceSpritePipeline {
 
+  // Static trace gate evaluated once at class load — zero per-pixel cost
+  // when off. Enable with -Djac64.traceSpriteDraw=true and optional
+  // -Djac64.traceSpriteLineLo / -Djac64.traceSpriteLineHi to narrow range.
+  private static final boolean TRACE_SPR_DRAW =
+      Boolean.getBoolean("jac64.traceSpriteDraw");
+  private static final int TRACE_SPR_LINE_LO =
+      Integer.getInteger("jac64.traceSpriteLineLo", 0);
+  private static final int TRACE_SPR_LINE_HI =
+      Integer.getInteger("jac64.traceSpriteLineHi", 0x1ff);
+
+  /** Set by caller before drawCycle8 — current raster line / cycle. */
+  public int traceLine = 0;
+  public int traceCyc = 0;
+
   // ==== State (mirror of vicii-draw-cycle.c statics) ====
 
   /** Pipelined sprite X positions; latched at end of cycle. Port of sprite_x_pipe[8]. */
@@ -353,6 +367,18 @@ public final class ViceSpritePipeline {
         // No data left — deactivate
         spriteActiveBits &= ~m;
       }
+    }
+
+    // Per-pixel sprite-0 shift trace — mirrors VICE-DRAW-S0 in
+    // vicii-draw-cycle.c:412. Gated by static flag so zero cost when off.
+    if (TRACE_SPR_DRAW
+        && (collisionMask & 1) != 0
+        && traceLine >= TRACE_SPR_LINE_LO
+        && traceLine <= TRACE_SPR_LINE_HI) {
+      System.err.println("JAC-DRAW-S0 line=" + traceLine
+          + " cyc=" + traceCyc + " pix=" + i
+          + " sbufReg=$" + Integer.toHexString(sbufReg[0])
+          + " px=$" + Integer.toHexString(sbufPixelReg[0]));
     }
 
     if (collisionMask != 0) {
