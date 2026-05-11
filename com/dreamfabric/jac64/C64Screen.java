@@ -624,6 +624,28 @@ public class C64Screen extends ExtChip implements Observer {
   // 8565 color resolution can make a same-cycle $D021 write affect the
   // already staged 8-pixel group; if pixel 0 used that register, VICE emits
   // the light-grey "grey dot" instead of the new color.
+  // VICE 8565 grey-dot pixel-0 fixup for sprite individual color ($D027-$D02E).
+  // When the CPU writes a sprite color register mid-line, the just-rendered
+  // sprite pixels (in the PREVIOUS cycle's 8-pixel mem[] block) that match
+  // the old sprite color should retroactively become the new color, with
+  // pixel 0 of that cycle substituted by light grey (color 15). Mirrors
+  // applyD021CurrentCycleColor but matches the sprite's old color.
+  private void applySpriteColorCurrentCycle(int oldColor, int newColor) {
+    int vicCycle = (int) (cpu.cycles - lastLine);
+    if (vicCycle < 16 || vicCycle > 55 || notVisible) {
+      return;
+    }
+    int start = mpos - 8 + horizScroll;
+    if (start < 0 || start + 7 >= mem.length) {
+      return;
+    }
+    for (int i = 0; i < 8; i++) {
+      if (mem[start + i] == oldColor) {
+        mem[start + i] = (i == 0) ? cbmcolor[15] : newColor;
+      }
+    }
+  }
+
   private void applyD021CurrentCycleColor(int oldColor, int newColor) {
     int vicCycle = (int) (cpu.cycles - lastLine);
     if (vicCycle < 16 || vicCycle > 55 || notVisible
@@ -1857,7 +1879,10 @@ public class C64Screen extends ExtChip implements Observer {
         bgCol[address - 0xd021] = data & 15;
       }
       break;
-    case 0xd025:
+    case 0xd025: {
+      int oldMC0 = cbmcolor[sprMC0];
+      int newMC0 = cbmcolor[data & 15];
+      applySpriteColorCurrentCycle(oldMC0, newMC0);
       if (COLOR_DELAY) {
         lastColorReg = 0x25;
         lastColorValue = data & 15;
@@ -1869,7 +1894,11 @@ public class C64Screen extends ExtChip implements Observer {
         }
       }
       break;
-    case 0xd026:
+    }
+    case 0xd026: {
+      int oldMC1 = cbmcolor[sprMC1];
+      int newMC1 = cbmcolor[data & 15];
+      applySpriteColorCurrentCycle(oldMC1, newMC1);
       if (COLOR_DELAY) {
         lastColorReg = 0x26;
         lastColorValue = data & 15;
@@ -1881,6 +1910,7 @@ public class C64Screen extends ExtChip implements Observer {
         }
       }
       break;
+    }
     case 0xd027:
     case 0xd028:
     case 0xd029:
@@ -1888,16 +1918,27 @@ public class C64Screen extends ExtChip implements Observer {
     case 0xd02b:
     case 0xd02c:
     case 0xd02d:
-    case 0xd02e:
+    case 0xd02e: {
+      int spriteNum = address - 0xd027;
+      int oldSprColor = sprites[spriteNum].color[2];
+      int newSprColor = cbmcolor[data & 15];
+      // VICE 8565 grey-dot pixel-0 fixup for sprite individual color
+      // (vicii-draw-cycle.c:630). Mirrors applyD021CurrentCycleColor
+      // for $D021 — retroactively rewrite pixels in PREVIOUS cycle's
+      // mem[] block that hold the old sprite color, substituting the
+      // new color (pixel 0 → grey 15). Fixes ss-hires-color cell-diff
+      // at sprite-color split positions.
+      applySpriteColorCurrentCycle(oldSprColor, newSprColor);
       if (COLOR_DELAY) {
         lastColorReg = address - 0xd000;
         lastColorValue = data & 15;
         lastColorClk = cpu.cycles;
       } else {
-        sprites[address - 0xd027].color[2] = cbmcolor[data & 15];
-        sprites[address - 0xd027].col = data & 15;
+        sprites[spriteNum].color[2] = newSprColor;
+        sprites[spriteNum].col = data & 15;
       }
       break;
+    }
     case 0xd02f:
       // Debug: trigger FLD trace
       if (data == 0x01) startFldTrace();
