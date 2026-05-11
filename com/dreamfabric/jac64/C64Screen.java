@@ -2530,6 +2530,7 @@ public class C64Screen extends ExtChip implements Observer {
       // calculate mpos before starting the rendering!
       mpos = vPos * SC_WIDTH;
       drawBackground();
+      finishCycleVice(mpos);
 
       xPos = 16;
       mpos += 8;
@@ -2538,6 +2539,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 13:
       drawBackground();
       drawSprites();
+      finishCycleVice(mpos);
       mpos += 8;
 
       // Set vc, reset vmli...
@@ -2574,6 +2576,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 14:
       drawBackground();
       drawSprites();
+      finishCycleVice(mpos);
       mpos += 8;
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C14");
@@ -2583,6 +2586,7 @@ public class C64Screen extends ExtChip implements Observer {
 
       drawBackground();
       drawSprites();
+      finishCycleVice(mpos);
       mpos += 8;
 
       if (badLine) {
@@ -2740,6 +2744,7 @@ public class C64Screen extends ExtChip implements Observer {
       }
       drawBackground();
       drawSprites();
+      finishCycleVice(mpos);
       mpos += 8;
 
 
@@ -2767,6 +2772,7 @@ public class C64Screen extends ExtChip implements Observer {
 
       drawBackground();
       drawSprites();
+      finishCycleVice(mpos);
       mpos += 8;
 
 
@@ -2795,6 +2801,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 58:
       drawBackground();
       drawSprites();
+      finishCycleVice(mpos);
       mpos += 8;
 
       // Sprite 2 BA-low: VICE BaSpr3(0,1,2) starts at Phi1(59),
@@ -2809,6 +2816,7 @@ public class C64Screen extends ExtChip implements Observer {
     case 59:
       drawBackground();
       drawSprites();
+      finishCycleVice(mpos);
       mpos += 8;
 
       if (sprites[1].painting) {
@@ -2951,6 +2959,16 @@ public class C64Screen extends ExtChip implements Observer {
   // painted...
   private void drawBackground() {
     if (notVisible) {
+      return;
+    }
+    if (useViceRenderBuf) {
+      // Phase 1 deep VICE port: fill renderBuf with bg-color CODE
+      // (VC_D021). Caller follows with drawSprites + finishCycleVice
+      // which runs drawBorderVice (per-cycle border state machine,
+      // mirrors viciisc/vicii-draw-cycle.c:557 draw_border8) and
+      // drawColorsVice (resolves codes to RGBA, mirrors draw_colors8).
+      for (int i = 0; i < 8; i++) renderBuf[i] = VC_D021;
+      renderBufFresh = true;
       return;
     }
     int bpos = mpos;
