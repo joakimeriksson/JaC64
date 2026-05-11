@@ -1839,6 +1839,15 @@ public class C64Screen extends ExtChip implements Observer {
         sprites[i].expandX = (data & m) != 0;
       }
       queueSpriteXExpand(oldXExpand, data);
+      if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+          && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+        traceVicCycleOut.println("EV-WrD01D clk=" + cpu.cycles
+            + " rast=$" + Integer.toHexString(vbeam)
+            + " cyc=" + (cpu.cycles - lastLine)
+            + " val=$" + Integer.toHexString(data & 0xff)
+            + " old=$" + Integer.toHexString(oldXExpand & 0xff)
+            + " opPC=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
+      }
       break;
     }
 
