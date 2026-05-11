@@ -2953,7 +2953,14 @@ public class C64Screen extends ExtChip implements Observer {
     // Keep a two-stage $D011 history for graphics fetch address selection.
     control1FetchDelay2 = control1FetchDelay;
     control1FetchDelay = control1;
+
+    // VICE viciisc/vicii-draw-cycle.c:581 — capture end-of-cycle
+    // main_border. Read by next cycle's drawBorderVice for transition
+    // state machine.
+    borderStatePrev = paintBorder || borderClosed() || vBorderOnly();
   }
+
+  private boolean borderStatePrev = true;
 
   // Used to draw background where either border or background should be
   // painted...
@@ -3224,9 +3231,36 @@ public class C64Screen extends ExtChip implements Observer {
    * border state machine can be ported in a follow-on pass.
    */
   private final void drawBorderVice() {
-    if (paintBorder || borderClosed() || vBorderOnly()) {
-      for (int i = 0; i < 8; i++) {
-        renderBuf[i] = VC_D020;
+    boolean curBorder = paintBorder || borderClosed() || vBorderOnly();
+    // VICE viciisc/vicii-draw-cycle.c:557 draw_border8 — full transition
+    // state machine. `borderStatePrev` is the end-of-previous-VIC-cycle
+    // main_border value (captured at end of clock()). `curBorder` is
+    // this cycle's value (post-checkHBorder).
+    //
+    //   - Both off (open): leave renderBuf as gfx codes.
+    //   - Both on (closed): all 8 pixels = border.
+    //   - Transition with CSEL=1: all 8 pixels follow PREV state.
+    //   - Transition with CSEL=0: pixels 0-6 follow PREV, pixel 7 follows
+    //     CUR (creates the 1-pixel gfx-leak on CSEL=0 close/open
+    //     transitions).
+    if (!borderStatePrev && !curBorder) {
+      return;
+    }
+    if (borderStatePrev && curBorder) {
+      for (int i = 0; i < 8; i++) renderBuf[i] = VC_D020;
+      return;
+    }
+    boolean csel = !hideColumn;
+    if (csel) {
+      if (borderStatePrev) {
+        for (int i = 0; i < 8; i++) renderBuf[i] = VC_D020;
+      }
+    } else {
+      if (borderStatePrev) {
+        for (int i = 0; i < 7; i++) renderBuf[i] = VC_D020;
+      }
+      if (curBorder) {
+        renderBuf[7] = VC_D020;
       }
     }
   }
