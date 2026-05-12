@@ -2690,7 +2690,7 @@ public class C64Screen extends ExtChip implements Observer {
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
       drawSprites();
-      if (borderState != 0)
+      if (!useViceRenderBuf && borderState != 0)
         drawBackground();
       finishCycleVice(mpos);
       mpos += 8;
@@ -2804,7 +2804,7 @@ public class C64Screen extends ExtChip implements Observer {
       if (useViceGfx) drawGraphicsVice(mpos);
       else drawGraphics(mpos + horizScroll);
       drawSprites();
-      if (borderState != 0)
+      if (!useViceRenderBuf && borderState != 0)
           drawBackground();
       finishCycleVice(mpos);
       mpos += 8;
