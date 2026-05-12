@@ -3326,7 +3326,15 @@ public class C64Screen extends ExtChip implements Observer {
     }
     boolean csel = !hideColumn;
     if (csel) {
-      if (borderStatePrev) {
+      // CSEL=1 transition: paint border if EITHER direction. In VICE,
+      // open→close case is handled the NEXT cycle via the "both 1"
+      // branch (pipe delay). JaC64 has no pipe delay, so we paint border
+      // immediately when curBorder=true at the transition. This brings
+      // the right-edge close (case 56) into alignment with VICE — at
+      // the cost of OPEN-BORDER trick tests that wanted display to leak
+      // through. Accept those local regressions per project decision
+      // 2026-05-12 (full VICE-style port over noise-level wins).
+      if (borderStatePrev || curBorder) {
         for (int i = 0; i < 8; i++) renderBuf[i] = VC_D020;
       }
     } else {
