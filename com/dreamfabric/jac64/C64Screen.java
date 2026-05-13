@@ -679,10 +679,15 @@ public class C64Screen extends ExtChip implements Observer {
 
   private void applyD021CurrentCycleColor(int oldColor, int newColor) {
     int vicCycle = (int) (cpu.cycles - lastLine);
-    if (vicCycle < 16 || vicCycle > 55 || notVisible
-        || !gfxVisible || paintBorder || vBorderOnly()) {
+    if (vicCycle < 16 || vicCycle > 55 || notVisible) {
       return;
     }
+    // gfxVisible/paintBorder/vBorderOnly gate REMOVED per
+    // project_d021_pipe_delay.md analysis. The mem[i] == oldColor
+    // check prevents spurious paints when the slot holds border
+    // pixels. Allowing the retroactive paint in top/bottom border
+    // areas fixes mid-line $D021 split on OPEN-TOP-BORDER tests
+    // (ss-exp-unexp-hires).
 
     int start = mpos - 8 + horizScroll;
     if (start < 0 || start + 7 >= mem.length) {
