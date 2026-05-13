@@ -663,7 +663,12 @@ public class C64Screen extends ExtChip implements Observer {
   // applyD021CurrentCycleColor but matches the sprite's old color.
   private void applySpriteColorCurrentCycle(int oldColor, int newColor) {
     int vicCycle = (int) (cpu.cycles - lastLine);
-    if (vicCycle < 16 || vicCycle > 55 || notVisible) {
+    // Widened from 16..55 to 14..57 (Phi2 paint cycles + adjacent) per
+    // 2026-05-13 refactor: $D027-$D02E sprite color writes can land
+    // outside the 16..55 visible-cycle range when test IRQs use
+    // pre-display/post-display setup. The mem[i] == oldColor per-pixel
+    // check still prevents spurious paints when slots hold border.
+    if (vicCycle < 14 || vicCycle > 57 || notVisible) {
       return;
     }
     int start = mpos - 8 + horizScroll;
