@@ -677,6 +677,25 @@ public class C64Screen extends ExtChip implements Observer {
     }
   }
 
+  // Companion to applyD021CurrentCycleColor for $D020 border color.
+  // Same VICE pipe-delay alignment rationale. Substitutes oldBorderColor
+  // → newBorderColor in prev cycle's mem slot.
+  private void applyD020CurrentCycleColor(int oldColor, int newColor) {
+    int vicCycle = (int) (cpu.cycles - lastLine);
+    if (vicCycle < 16 || vicCycle > 55 || notVisible) {
+      return;
+    }
+    int start = mpos - 8 + horizScroll;
+    if (start < 0 || start + 7 >= mem.length) {
+      return;
+    }
+    for (int i = 0; i < 8; i++) {
+      if (mem[start + i] == oldColor) {
+        mem[start + i] = (i == 0) ? cbmcolor[15] : newColor;
+      }
+    }
+  }
+
   private void applyD021CurrentCycleColor(int oldColor, int newColor) {
     int vicCycle = (int) (cpu.cycles - lastLine);
     if (vicCycle < 16 || vicCycle > 55 || notVisible) {
@@ -1887,14 +1906,18 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     }
 
-    case 0xd020:
+    case 0xd020: {
+      int oldBorderColor = borderColor;
+      int newBorderColor = cbmcolor[data & 15];
       bCol = data & 15;
+      applyD020CurrentCycleColor(oldBorderColor, newBorderColor);
       if (COLOR_DELAY) {
         lastColorReg = 0x20;
         lastColorValue = data & 15;
         lastColorClk = cpu.cycles;
       } else {
-        borderColor = cbmcolor[bCol];
+        borderColor = newBorderColor;
+      }
       }
       if (Boolean.getBoolean("jac64.traceColorWrites")) {
         System.err.println("D020=$" + Integer.toHexString(data & 0xff)
@@ -1934,7 +1957,10 @@ public class C64Screen extends ExtChip implements Observer {
       break;
     case 0xd022:
     case 0xd023:
-    case 0xd024:
+    case 0xd024: {
+      int oldD02xColor = cbmcolor[bgCol[address - 0xd021]];
+      int newD02xColor = cbmcolor[data & 15];
+      applyD021CurrentCycleColor(oldD02xColor, newD02xColor);
       if (COLOR_DELAY) {
         lastColorReg = address - 0xd000;
         lastColorValue = data & 15;
@@ -1943,6 +1969,7 @@ public class C64Screen extends ExtChip implements Observer {
         bgCol[address - 0xd021] = data & 15;
       }
       break;
+    }
     case 0xd025: {
       int oldMC0 = cbmcolor[sprMC0];
       int newMC0 = cbmcolor[data & 15];
