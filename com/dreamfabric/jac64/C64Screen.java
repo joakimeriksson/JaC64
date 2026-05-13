@@ -687,7 +687,7 @@ public class C64Screen extends ExtChip implements Observer {
   // → newBorderColor in prev cycle's mem slot.
   private void applyD020CurrentCycleColor(int oldColor, int newColor) {
     int vicCycle = (int) (cpu.cycles - lastLine);
-    if (vicCycle < 16 || vicCycle > 55 || notVisible) {
+    if (vicCycle < 14 || vicCycle > 57 || notVisible) {
       return;
     }
     int start = mpos - 8 + horizScroll;
@@ -703,7 +703,7 @@ public class C64Screen extends ExtChip implements Observer {
 
   private void applyD021CurrentCycleColor(int oldColor, int newColor) {
     int vicCycle = (int) (cpu.cycles - lastLine);
-    if (vicCycle < 16 || vicCycle > 55 || notVisible) {
+    if (vicCycle < 14 || vicCycle > 57 || notVisible) {
       return;
     }
     // gfxVisible/paintBorder/vBorderOnly gate REMOVED per
