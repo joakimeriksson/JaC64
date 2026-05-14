@@ -3135,13 +3135,11 @@ public class C64Screen extends ExtChip implements Observer {
       vmli++;
       gbufPipe1Reg = gbufPipe0Reg;
       gbufPipe0Reg = 0;
-      if (useViceRenderBuf) {
-        for (int i = 0; i < 8; i++) {
-          renderBuf[i] = VC_NONE;
-          priBuf[i] = false;
-        }
-        renderBufFresh = true;
-      }
+      // BUGFIX 2026-05-14: DO NOT set renderBufFresh=true when
+      // notVisible. mpos is invalid (negative vPos*SC_WIDTH) and
+      // drawColorsVice would crash with ArrayIndexOutOfBoundsException.
+      // Match drawGraphics's legacy behavior which simply returns
+      // without setting any render state.
       return;
     }
 
