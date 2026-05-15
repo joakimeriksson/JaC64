@@ -1990,16 +1990,22 @@ public class C64Screen extends ExtChip implements Observer {
       int oldBgColor = bgColor;
       int newBgColor = cbmcolor[data & 15];
       bgCol[0] = data & 15;
-      applyD021CurrentCycleColor(oldBgColor, newBgColor);
-      if (COLOR_DELAY) {
-        lastColorReg = 0x21;
-        lastColorValue = data & 15;
-        lastColorClk = cpu.cycles;
-      } else {
+      // Phase K iter#4: with COLOR_DELAY on (VICE-style 1-cycle defer),
+      // skip the retroactive paint — applyDelayedColorReg commits at
+      // start of next cycle, matching VICE viciisc draw_colors timing.
+      // The retroactive paint can't distinguish FG/BG pixels (mem[i]
+      // == oldColor matches both), corrupting cells where FG and old
+      // BG happen to share a color (colorsplit with color RAM=0).
+      if (!COLOR_DELAY) {
+        applyD021CurrentCycleColor(oldBgColor, newBgColor);
         bgColor = newBgColor;
         for (int i = 0, n = 8; i < n; i++) {
           sprites[i].color[0] = bgColor;
         }
+      } else {
+        lastColorReg = 0x21;
+        lastColorValue = data & 15;
+        lastColorClk = cpu.cycles;
       }
       if (Boolean.getBoolean("jac64.traceColorWrites")) {
         int inLine = (int) (cpu.cycles - lastLine);
