@@ -1871,6 +1871,32 @@ static const uint8_t fetch_tab[] = {
                         maincpu_ba_low_flags_get() ? 1u : 0u);
                     fflush(jac64_pc_trace);
                 }
+                /* Phase K iter#5: dump screen+color RAM at SYS-entry to
+                 * the test program. Triggers on first occurrence of
+                 * PC=$0815 (canonical entry point for VICE-testprogs).
+                 * Writes 0x800 bytes: 0x400 screen RAM ($0400-$07FF)
+                 * followed by 0x400 color RAM ($D800-$DBFF, only low 4
+                 * bits are valid per real hardware). JaC64 replicates
+                 * this pattern in TestRaster.
+                 */
+                if (CALLER == e_comp_space
+                        && (jac64_pre_pc & 0xffff) == 0x0815) {
+                    static int dumped = 0;
+                    if (!dumped) {
+                        const char *dpath = getenv("JAC64_SCREEN_DUMP_FILE");
+                        if (dpath) {
+                            extern uint8_t mem_ram[];
+                            extern uint8_t *mem_color_ram_cpu;
+                            FILE *df = fopen(dpath, "wb");
+                            if (df) {
+                                fwrite(&mem_ram[0x0400], 1, 0x0400, df);
+                                fwrite(mem_color_ram_cpu, 1, 0x0400, df);
+                                fclose(df);
+                            }
+                        }
+                        dumped = 1;
+                    }
+                }
             }
         }
 

@@ -519,6 +519,34 @@ public class TestRaster {
                         }
                         System.out.println("Zeroed screen RAM (Phase K iter#3 opt-in)");
                     }
+                    // Phase K iter#5: load a VICE-captured screen+color RAM
+                    // dump into JaC64's RAM at SYS-entry. Replicates VICE's
+                    // post-BASIC state (banner + "READY." + light-blue
+                    // color RAM) so tests that depend on it (colorsplit)
+                    // render with the same memory pattern as VICE.
+                    // Format: 0x400 screen RAM + 0x400 color RAM (4 bits).
+                    // Generate via VICE patch: JAC64_SCREEN_DUMP_FILE=... x64sc.
+                    String dumpPath = System.getProperty("jac64.screenDumpFile");
+                    if (dumpPath != null) {
+                        try {
+                            byte[] buf = java.nio.file.Files.readAllBytes(
+                                java.nio.file.Paths.get(dumpPath));
+                            if (buf.length >= 0x800) {
+                                int[] mem = cpu.getMemory();
+                                for (int i = 0; i < 0x400; i++) {
+                                    mem[0x0400 + i] = buf[i] & 0xff;
+                                }
+                                for (int i = 0; i < 0x400; i++) {
+                                    mem[0x10800 + i] = buf[0x400 + i] & 0xff;
+                                }
+                                System.out.println("Loaded screen+color RAM dump from " + dumpPath);
+                            } else {
+                                System.err.println("WARN: dump file too short: " + buf.length);
+                            }
+                        } catch (Exception e) {
+                            System.err.println("WARN: failed to load dump: " + e);
+                        }
+                    }
                     cpu.jumpToSubroutine(sysAddress);
                     cpu.setPause(false);
                 } else {
