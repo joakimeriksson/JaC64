@@ -504,6 +504,21 @@ public class TestRaster {
                         }
                         System.out.println("Zeroed color RAM (Phase H2)");
                     }
+                    // Phase K iter#3: zero screen RAM ($0400-$07FF). OPT-IN.
+                    // BASIC fills screen RAM with $20 (space char); colorsplit
+                    // and similar tests inherit this state and render solid
+                    // stripes instead of the VICE-reference dotted pattern.
+                    // Empirically: zeroing -> colorsplit cell-diff 2676 -> 1428
+                    // (47% drop). May regress tests that depend on screen RAM
+                    // contents — left opt-in via -Djac64.zeroScreenRam=true.
+                    if ("true".equalsIgnoreCase(
+                            System.getProperty("jac64.zeroScreenRam", "false"))) {
+                        int[] mem = cpu.getMemory();
+                        for (int i = 0; i < 0x400; i++) {
+                            mem[0x0400 + i] = 0;
+                        }
+                        System.out.println("Zeroed screen RAM (Phase K iter#3 opt-in)");
+                    }
                     cpu.jumpToSubroutine(sysAddress);
                     cpu.setPause(false);
                 } else {
