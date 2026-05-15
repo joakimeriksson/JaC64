@@ -466,6 +466,34 @@ public abstract class MOS6510Core extends MOS6510Ops {
     long preCycles = cycles;
     int prePC = pc;
     instructionStartPC = prePC & 0xffff;
+    // Phase J: emit PC trace at INSTRUCTION START (= pre-state),
+    // matching VICE's FETCH_OPCODE trace point in 6510dtvcore.c.
+    // This way the trace's A/X/Y/SP/P reflect the state BEFORE the
+    // instruction executes, enabling cycle-by-cycle diff alignment.
+    if (TRACE_PC_CYCLES && cycles >= TRACE_PC_START
+        && cycles <= TRACE_PC_END
+        && "C64 CPU".equals(getName())) {
+      int rasterLine = -1, rasterCyc = -1;
+      int baFlag = 0;
+      if (chips instanceof C64Screen) {
+        C64Screen scr = (C64Screen) chips;
+        rasterLine = scr.vbeam;
+        rasterCyc = (int) (preCycles - scr.lastLine);
+        baFlag = (baLowUntil > preCycles) ? 1 : 0;
+      }
+      tracePcOut.println("I=" + (jac64InstrCounter++)
+          + " PC=$" + Integer.toHexString(prePC & 0xffff)
+          + " op=$" + Integer.toHexString(memory[prePC & 0xffff] & 0xff)
+          + " clk=" + preCycles
+          + " A=$" + Integer.toHexString(acc & 0xff)
+          + " X=$" + Integer.toHexString(x & 0xff)
+          + " Y=$" + Integer.toHexString(y & 0xff)
+          + " SP=$" + Integer.toHexString(s & 0xff)
+          + " P=$" + Integer.toHexString(getStatusByte() & 0xff)
+          + " rast=" + rasterLine
+          + " cyc=" + rasterCyc
+          + " ba=" + baFlag);
+    }
     updatePendingIRQLineState();
     boolean hadIrqEnableDelay = irqEnableDelayOps > 0;
     boolean irqAllowedByStatus = !disableInterupt
@@ -1093,36 +1121,8 @@ public abstract class MOS6510Core extends MOS6510Ops {
       irqEnableDelayOps--;
     }
 
-    if (TRACE_PC_CYCLES && cycles >= TRACE_PC_START
-        && cycles <= TRACE_PC_END
-        && "C64 CPU".equals(getName())) {
-      // Only trace MAIN CPU; the C1541 drive shares MOS6510Core but
-      // its cycle counter is independent and would interleave with
-      // main CPU's trace. Filter by getName() to keep traces
-      // comparable to VICE x64sc (single-CPU).
-      // Phase J: emit instruction sequence number + full CPU state
-      // for cpu_diff.py alignment (matches VICE 6510dtvcore.c format).
-      int rasterLine = -1, rasterCyc = -1;
-      int baFlag = 0;
-      if (chips instanceof C64Screen) {
-        C64Screen scr = (C64Screen) chips;
-        rasterLine = scr.vbeam;
-        rasterCyc = (int) (preCycles - scr.lastLine);
-        baFlag = (baLowUntil > preCycles) ? 1 : 0;
-      }
-      tracePcOut.println("I=" + (jac64InstrCounter++)
-          + " PC=$" + Integer.toHexString(prePC & 0xffff)
-          + " op=$" + Integer.toHexString(memory[prePC & 0xffff] & 0xff)
-          + " clk=" + preCycles
-          + " A=$" + Integer.toHexString(acc & 0xff)
-          + " X=$" + Integer.toHexString(x & 0xff)
-          + " Y=$" + Integer.toHexString(y & 0xff)
-          + " SP=$" + Integer.toHexString(s & 0xff)
-          + " P=$" + Integer.toHexString(getStatusByte() & 0xff)
-          + " rast=" + rasterLine
-          + " cyc=" + rasterCyc
-          + " ba=" + baFlag);
-    }
+    // Phase J trace MOVED to top of emulateOp (line ~465) to match
+    // VICE's FETCH_OPCODE trace point (pre-state).
   }
 
   /** Phase J: monotonic instruction counter for diff alignment. */

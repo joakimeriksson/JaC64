@@ -51,11 +51,33 @@ Anchored at PC=$0815 (SYS entry):
 |---|---|---|---|---|
 | 0 | SEI | A=0 X=0 Y=0 SP=$f6 P=$20 rast=122 cyc=38 | (same) P=$24 cyc=38 | P (I flag inherited from BASIC autostart) |
 | 1 | LDA #$35 | A=$00 cyc=40 | A=$35 cyc=40 | A (pre-state captured at different sub-point) |
-| 4 | LDA abs,X | cyc=48 | cyc=47 | **1-cyc raster drift** |
+| 4 | LDA abs,X | cyc=48 | cyc=47 | **1-cyc raster drift** (later found = trace bug) |
 
-At step 4 (= reading IRQ vector table), JaC64 and VICE diverge by 1
-raster cycle. This is the FIRST concrete CPU-VIC interleaving
-divergence found. Phase K iterations can target this.
+## Phase K iter #1 — trace bug fix
+
+The "1-cyc raster drift" was traced to a bug in VICE's Phase J patch.
+The original patch captured `jac64_pre_clk = CLK` BEFORE `FETCH_OPCODE`,
+but read `vicii_get_raster_cycle()` AFTER `FETCH_OPCODE`. Since
+FETCH_OPCODE runs 2–3 CLK_INCs (each of which bumps both maincpu_clk
+and vicii.raster_cycle), the reported `cyc` was 2–3 ahead of `clk`.
+
+Fix: capture `jac64_pre_rast` and `jac64_pre_cyc` BEFORE FETCH_OPCODE.
+After the fix, per-instruction clk Δ and cyc Δ match exactly between
+JaC64 and VICE for all 7 steps after SYS entry. (JaC64's side was
+already correctly pre-fetch.)
+
+Other observations:
+- VICE is **non-deterministic at autostart** — across runs the PC=$0815
+  entry happens at different `rast` values (90, 167, 280, …). The
+  test program self-syncs via raster IRQ, so cell output is the same;
+  but trace alignment by absolute clk/rast is unreliable for boot
+  comparison.
+- Remaining diff at $84c (program's idle JMP loop):
+  - `P=$30` (VICE) vs `P=$20` (JaC64): VICE keeps B-flag in `reg_p`;
+    JaC64 derives it. **Cosmetic** — B has no effect on execution
+    outside BRK / PHP / PLP push semantics.
+  - 4-cycle static `cyc` offset: artifact of VICE non-deterministic
+    autostart, not a real drift.
 
 ## Caveat
 JaC64's `op=$%x` trace reads `memory[prePC]` directly — for ROM
