@@ -1100,12 +1100,33 @@ public abstract class MOS6510Core extends MOS6510Ops {
       // its cycle counter is independent and would interleave with
       // main CPU's trace. Filter by getName() to keep traces
       // comparable to VICE x64sc (single-CPU).
-      tracePcOut.println("PC=$" + Integer.toHexString(prePC & 0xffff)
+      // Phase J: emit instruction sequence number + full CPU state
+      // for cpu_diff.py alignment (matches VICE 6510dtvcore.c format).
+      int rasterLine = -1, rasterCyc = -1;
+      int baFlag = 0;
+      if (chips instanceof C64Screen) {
+        C64Screen scr = (C64Screen) chips;
+        rasterLine = scr.vbeam;
+        rasterCyc = (int) (preCycles - scr.lastLine);
+        baFlag = (baLowUntil > preCycles) ? 1 : 0;
+      }
+      tracePcOut.println("I=" + (jac64InstrCounter++)
+          + " PC=$" + Integer.toHexString(prePC & 0xffff)
           + " op=$" + Integer.toHexString(memory[prePC & 0xffff] & 0xff)
-          + " cyc=" + (cycles - preCycles)
-          + " clk=" + cycles);
+          + " clk=" + preCycles
+          + " A=$" + Integer.toHexString(acc & 0xff)
+          + " X=$" + Integer.toHexString(x & 0xff)
+          + " Y=$" + Integer.toHexString(y & 0xff)
+          + " SP=$" + Integer.toHexString(s & 0xff)
+          + " P=$" + Integer.toHexString(getStatusByte() & 0xff)
+          + " rast=" + rasterLine
+          + " cyc=" + rasterCyc
+          + " ba=" + baFlag);
     }
   }
+
+  /** Phase J: monotonic instruction counter for diff alignment. */
+  private long jac64InstrCounter = 0;
 
   public void unknownInstruction(int pc, int op) {
     System.out.println("Unknown instruction: " + op);
