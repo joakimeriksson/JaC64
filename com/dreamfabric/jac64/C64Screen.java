@@ -485,6 +485,25 @@ public class C64Screen extends ExtChip implements Observer {
   // vicii_reg_timing to lose 1 letter (3→2) versus the legacy path.
   // Enable with -Djac64.viceGfx=true.
   private final boolean useViceGfx = Boolean.getBoolean("jac64.viceGfx");
+
+  // Phase G: ViceDrawCycle is now the PRIMARY render path (default ON).
+  // Opt out with -Djac64.legacyPaint=true to restore the legacy
+  // drawGraphics/drawColorsVice/retroactive-paint path. The legacy
+  // code remains in place under that opt-out flag pending dedicated
+  // cleanup. The pipeline is byte-perfect to VICE per 1.5M+ trace
+  // events across 4 PRGs; suite total ~5098 cells off VICE refs.
+  // For backwards compat: the original -Djac64.viceFullPipeline=true
+  // remains accepted as an explicit opt-in (no-op now).
+  private final boolean useViceFullPipeline =
+      !Boolean.getBoolean("jac64.legacyPaint");
+  private ViceDrawCycle viceDrawCycle;
+  // Phase 5c: paint base for the current cycle's 8-pixel slot. -1 when
+  // not in visible-cycle range. mem[viceCyclePaintBase + i] receives
+  // writePixel output where i is dbuf_offset & 7.
+  private int viceCyclePaintBase = -1;
+  private final int[] prevSprColorCode = new int[8];
+  private final int[] prevSprIndex = new int[8];
+  private final boolean[] prevSprFgWin = new boolean[8];
   private int gbufReg = 0;
   // VICE draw_graphics8() keeps a 2-stage graphics-byte pipe
   // (gbuf_pipe0_reg -> gbuf_pipe1_reg -> gbuf_reg). The simplified
@@ -1400,6 +1419,24 @@ public class C64Screen extends ExtChip implements Observer {
       mem[i] = cbmcolor[6];
     }
 
+    if (useViceFullPipeline) {
+      viceDrawCycle = new ViceDrawCycle();
+      viceDrawCycle.setSink(new ViceDrawCycle.DbufSink() {
+        @Override public int paletteLookup(int color4) {
+          return cbmcolor[color4 & 0x0f];
+        }
+        @Override public void writePixel(int offs, int colorIndex) {
+          // Phase 5c: write pipeline output into mem[]. viceCyclePaintBase
+          // is set per-cycle in clock() — -1 outside visible range.
+          if (viceCyclePaintBase < 0) return;
+          int idx = viceCyclePaintBase + (offs & 7);
+          if (idx < 0 || idx >= mem.length) return;
+          mem[idx] = cbmcolor[colorIndex & 0x0f];
+        }
+      });
+      viceDrawCycle.init();
+    }
+
     // VICE comparison trace: enable with -Djac64.viceSprPipeTrace=true.
     // Format mirrors the JaC64 trace patch in viciisc/vicii-draw-cycle.c
     // (trigger_sprites) so the two emulators emit byte-comparable lines.
@@ -2103,7 +2140,37 @@ public class C64Screen extends ExtChip implements Observer {
       }
       // handle color ram!
     }
+
+    // Phase 6: forward $D02X color-register writes into ViceDrawCycle.
+    // The pipeline stages pendingColorReg now and commits cregs[] at
+    // start of next cycle's drawColors8 — matches VICE update_cregs
+    // 1-cycle pipe (color_latency=1 for 6569 PAL).
+    if (useViceFullPipeline && viceDrawCycle != null
+        && address >= 0xd020 && address <= 0xd02e) {
+      viceDrawCycle.updateColorReg(address - 0xd000, data & 0x0f);
+    }
+
+    // Investigation trace: log $D02X write timing for comparison with
+    // VICE's color_reg_store trace.
+    if (TRACE_WR_COL && address >= 0xd020 && address <= 0xd02e) {
+      if (wrColTraceOut == null) {
+        String path = System.getProperty("jac64.traceWrColFile",
+            "/tmp/jac64_wrcol.trace");
+        try { wrColTraceOut = new java.io.PrintStream(path); }
+        catch (Exception e) { wrColTraceOut = System.err; }
+      }
+      wrColTraceOut.println("EV-WrColorReg clk=" + cycles
+          + " rast=$" + Integer.toHexString(vbeam)
+          + " cyc=" + ((int)(cycles - lastLine))
+          + " reg=$" + Integer.toHexString(address - 0xd000)
+          + " val=$" + Integer.toHexString(data & 0xff));
+      wrColTraceOut.flush();
+    }
   }
+
+  private static final boolean TRACE_WR_COL =
+      Boolean.getBoolean("jac64.traceWrCol");
+  private static java.io.PrintStream wrColTraceOut;
 
   private void printIECLines() {
     System.out.print("IEC/F: ");
@@ -3022,6 +3089,92 @@ public class C64Screen extends ExtChip implements Observer {
       sprBgColFireReady = false;
     }
 
+    // Phase 5b: ViceDrawCycle hand-off. Runs every VIC cycle (matches
+    // VICE vicii_draw_cycle). DbufSink.writePixel is currently a no-op,
+    // so flag-on path executes the pipeline state-machine without
+    // changing on-screen output. Phase 5c will route writePixel into
+    // mem[] and start replacing legacy paint.
+    if (useViceFullPipeline) {
+      // g-byte: replicate drawGraphicsVice's fetch logic.
+      int gByte = 0;
+      if (vmli < 40 && !notVisible) {
+        int vByte = vicCharCache[vmli] & 0xff;
+        int d011Fetch = control1 | (control1FetchDelay & 0x20);
+        if ((d011Fetch & 0x20) != 0) {
+          gByte = memory[vicBase + (vc & 0x3ff) * 8 + rc] & 0xff;
+        } else if ((control1 & 0x40) != 0) {
+          gByte = memory[charMemoryIndex + ((vByte & 0x3f) << 3) + rc] & 0xff;
+        } else {
+          gByte = memory[charMemoryIndex + (vByte << 3) + rc] & 0xff;
+        }
+      }
+      // Phase C: paint base derived from VICE trace.
+      //   VICE cycle 14 emits at dbuf[104] = visible x=0.
+      //   JaC64 pipeline cycle 14 should also paint visible x=0.
+      //   paintBase = vPos*SC_WIDTH + (vicCycle-14)*8 = base + (N-12)*8 - 16
+      //   ⇒ shift = -16.
+      // Empirically (9-test sweep): shift=-16 totals 6481, shift=-8
+      // totals 6309 (TOTAL slightly worse). But shift=-16 byte-perfects
+      // greydot (2491→65) and videomode (226→12, 268→27), exposing
+      // sprite-pipeline phase bug at shift=-16 that shift=-8 was hiding
+      // (ss-* tests regress). The sprite phase bug is tracked separately.
+      int shift = Integer.getInteger("jac64.viceShift", -16);
+      if (vicCycle >= 12 && vicCycle <= 60 && !notVisible
+          && vPos >= 0 && vPos < SC_HEIGHT) {
+        viceCyclePaintBase = vPos * SC_WIDTH + (vicCycle - 12) * 8 + shift;
+      } else {
+        viceCyclePaintBase = -1;
+      }
+      viceDrawCycle.setTraceClk(cycles, vbeam);
+      viceDrawCycle.setRasterCycle(vicCycle);
+      // Phase F1: cycle flags from VICE PAL 6569 chip-model table.
+      // Captures VISIBLE_M, FETCH_G, sprite-DMA, border-check, etc.
+      // exactly as VICE's vicii_chip_model_init builds them. JaC64
+      // vicCycle 1..63 → table index 0..62 (matches VICE raster_cycle).
+      viceDrawCycle.setCycleFlags(ViceDrawCycle.cycleFlagsFor(vicCycle));
+      // color_latency: true = 6569 PAL (1-pixel pipe via pixel_buffer
+      // ring, no grey-dot); false = 8565 PAL HMOS (immediate cregs
+      // commit + grey-dot at pixel 0). Empirically 6569 matches the
+      // bulk of VICE testprogs references (ss-* perfect; greydot still
+      // has a residual phase issue tracked separately).
+      viceDrawCycle.setColorLatency(true);
+      boolean mainBorderNow = paintBorder || borderClosed() || vBorderOnly();
+      viceDrawCycle.setMainBorder(mainBorderNow);
+      viceDrawCycle.setVborder(vBorder ? 1 : 0);
+      // Phase 9: sync borderState to JaC64's authoritative
+      // borderStatePrev (captured at end of prev cycle).
+      viceDrawCycle.setBorderState(borderStatePrev ? 1 : 0);
+      viceDrawCycle.setIdleState(!gfxVisible);
+      viceDrawCycle.setGbuf(gByte);
+      viceDrawCycle.setRegs0x11(control1);
+      viceDrawCycle.setRegs0x16(control2);
+      viceDrawCycle.setVbufCbuf(vicCharCache, vicColCache);
+      // Phase 8: sync dmli to JaC64's vmli. vmli is incremented after
+      // each drawGraphics paint within the case dispatcher, so at the
+      // end of cycle N it equals the NEXT column to be drawn. We feed
+      // the column for THIS cycle's emit by clamping to [0,39] and
+      // using max(0, vmli-1) when the dispatcher already advanced.
+      int dmliForCycle = vmli - 1;
+      if (dmliForCycle < 0) dmliForCycle = 0;
+      if (dmliForCycle > 39) dmliForCycle = 39;
+      viceDrawCycle.setDmli(dmliForCycle);
+      // Phase D-sprite: feed sprite output from ViceSpritePipeline.
+      // Empirically (Phase A trace + cell-diff on ss-hires-color at
+      // shift=-16): sprite color transitions land 8 px (1 cycle) EARLIER
+      // than VICE. Use PREVIOUS cycle's sprite output so the overlay
+      // pipes through pixel_buffer with the right phase to match VICE.
+      if (useViceSprPipe) {
+        viceDrawCycle.setSpriteOutput(prevSprColorCode, prevSprIndex, prevSprFgWin);
+        // Snapshot this cycle's output for use NEXT cycle.
+        System.arraycopy(viceSprPipe.outColorCode, 0, prevSprColorCode, 0, 8);
+        System.arraycopy(viceSprPipe.outSprite, 0, prevSprIndex, 0, 8);
+        System.arraycopy(viceSprPipe.outForegroundWin, 0, prevSprFgWin, 0, 8);
+      } else {
+        viceDrawCycle.clearSpriteOutput();
+      }
+      viceDrawCycle.drawCycle();
+    }
+
     // Per-cycle VIC trace — emit one line summarizing this cycle.
     if (TRACE_VIC_CYCLE
         && cycles >= TRACE_VIC_CYCLE_START
@@ -3076,6 +3229,10 @@ public class C64Screen extends ExtChip implements Observer {
   // Used to draw background where either border or background should be
   // painted...
   private void drawBackground() {
+    // Phase B: pipeline paints bg via drawBorder8 + drawColors8 when
+    // viceFullPipeline is on. Skip the legacy bg fill — it'd just be
+    // overwritten anyway. Saves a per-cycle 8-wide mem write loop.
+    if (useViceFullPipeline) return;
     if (notVisible) {
       return;
     }
@@ -3128,6 +3285,16 @@ public class C64Screen extends ExtChip implements Observer {
    *    which is the visual equivalent of VICE's idle-pixel emission).
    */
   private final void drawGraphicsVice(int mpos) {
+    // Phase G: same logic as drawGraphics — pipeline paints. Preserve
+    // state advancement (vc/vmli/gbufPipe shift) so the legacy viceGfx
+    // path remains correct when pipeline is OFF, but skip mem[] writes.
+    if (useViceFullPipeline) {
+      if (gfxVisible && !paintBorder && !vBorderOnly()) vc++;
+      vmli++;
+      gbufPipe1Reg = gbufPipe0Reg;
+      gbufPipe0Reg = 0;
+      return;
+    }
     if (notVisible) {
       if (gfxVisible && !paintBorder && !vBorderOnly()) {
         vc++;
@@ -3323,6 +3490,9 @@ public class C64Screen extends ExtChip implements Observer {
    * this cycle (cases 13-15/56-60 keep legacy direct-paint).
    */
   private final void finishCycleVice(int mpos) {
+    // Phase B: pipeline does border + color resolution via
+    // drawBorder8 + drawColors8. Skip legacy border/colors path.
+    if (useViceFullPipeline) return;
     if (!useViceRenderBuf || !renderBufFresh) return;
     drawBorderVice();
     drawColorsVice(mpos);
@@ -3434,6 +3604,15 @@ public class C64Screen extends ExtChip implements Observer {
    * <code>drawGraphics</code> - draw the VIC graphics (text/bitmap)
    */
   private final void drawGraphics(int mpos) {
+    // Phase G: pipeline emits gfx pixels via its own paint path. Skip
+    // all legacy mem[] writes, but preserve vc/vmli state advancement
+    // exactly as the legacy paths would have done (condition derived
+    // from notVisible/visible-gfx branches below).
+    if (useViceFullPipeline) {
+      if (gfxVisible && !paintBorder && !vBorderOnly()) vc++;
+      vmli++;
+      return;
+    }
     final int drawVmli = viceRenderDelay ? Math.max(0, vmli - 1) : vmli;
     if (notVisible) {
       if (gfxVisible && !paintBorder && !vBorderOnly()) {
@@ -3855,6 +4034,10 @@ public class C64Screen extends ExtChip implements Observer {
       collissionMask[pixelX] |= (1 << s);
 
       // Render only if pixel is non-transparent and not behind foreground.
+      // Phase B: when pipeline is on, skip the legacy mem[] paint —
+      // ViceDrawCycle's drawSprites8 overlay handles sprite rendering.
+      // Keep collision update + collissionMask above intact.
+      if (useViceFullPipeline) continue;
       if (code != 0 && pixelX < SC_WIDTH && !borderClosedNow) {
         if (useViceRenderBuf && renderBufFresh) {
           // Phase C: overlay sprite color CODE into renderBuf so

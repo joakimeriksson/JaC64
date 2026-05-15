@@ -486,6 +486,24 @@ public class TestRaster {
                     System.out.println("Paused at cycle " + landed
                         + " (target " + target + "), jumping to SYS $"
                         + Integer.toHexString(sysAddress));
+                    // Phase H2: match VICE -autostartprgmode 1 by zeroing
+                    // color RAM ($D800-$DBFF) before SYS jump. JaC64
+                    // BASIC ROM init populates color RAM with $05/$0E;
+                    // VICE skips BASIC init so its color RAM is 0 at
+                    // test start. Without this, tests inheriting color
+                    // RAM state (ss-pri, rmwtest, others) diverge.
+                    // Set via -Djac64.zeroColorRam=false to skip.
+                    if (!"false".equalsIgnoreCase(
+                            System.getProperty("jac64.zeroColorRam", "true"))) {
+                        int[] mem = cpu.getMemory();
+                        // Color RAM lives at IO_OFFSET+$D800. IO_OFFSET
+                        // = 0x10000 - 0xd000 = 0x3000 → color RAM base
+                        // at 0x10800.
+                        for (int i = 0; i < 0x400; i++) {
+                            mem[0x10800 + i] = 0;
+                        }
+                        System.out.println("Zeroed color RAM (Phase H2)");
+                    }
                     cpu.jumpToSubroutine(sysAddress);
                     cpu.setPause(false);
                 } else {
