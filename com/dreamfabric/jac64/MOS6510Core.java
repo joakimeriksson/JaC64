@@ -463,37 +463,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
   }
 
   public void emulateOp() {
-    long preCycles = cycles;
-    int prePC = pc;
-    instructionStartPC = prePC & 0xffff;
-    // Phase J: emit PC trace at INSTRUCTION START (= pre-state),
-    // matching VICE's FETCH_OPCODE trace point in 6510dtvcore.c.
-    // This way the trace's A/X/Y/SP/P reflect the state BEFORE the
-    // instruction executes, enabling cycle-by-cycle diff alignment.
-    if (TRACE_PC_CYCLES && cycles >= TRACE_PC_START
-        && cycles <= TRACE_PC_END
-        && "C64 CPU".equals(getName())) {
-      int rasterLine = -1, rasterCyc = -1;
-      int baFlag = 0;
-      if (chips instanceof C64Screen) {
-        C64Screen scr = (C64Screen) chips;
-        rasterLine = scr.vbeam;
-        rasterCyc = (int) (preCycles - scr.lastLine);
-        baFlag = (baLowUntil > preCycles) ? 1 : 0;
-      }
-      tracePcOut.println("I=" + (jac64InstrCounter++)
-          + " PC=$" + Integer.toHexString(prePC & 0xffff)
-          + " op=$" + Integer.toHexString(memory[prePC & 0xffff] & 0xff)
-          + " clk=" + preCycles
-          + " A=$" + Integer.toHexString(acc & 0xff)
-          + " X=$" + Integer.toHexString(x & 0xff)
-          + " Y=$" + Integer.toHexString(y & 0xff)
-          + " SP=$" + Integer.toHexString(s & 0xff)
-          + " P=$" + Integer.toHexString(getStatusByte() & 0xff)
-          + " rast=" + rasterLine
-          + " cyc=" + rasterCyc
-          + " ba=" + baFlag);
-    }
+    instructionStartPC = pc & 0xffff;
     updatePendingIRQLineState();
     boolean hadIrqEnableDelay = irqEnableDelayOps > 0;
     boolean irqAllowedByStatus = !disableInterupt
@@ -559,6 +529,39 @@ public abstract class MOS6510Core extends MOS6510Ops {
     // taken with no page-boundary cross.
     branchDelaysIrq = false;
     lastOpcodeDisablesIrq = false;
+
+    // Phase J trace: emit at INSTRUCTION START (pre-state) — matching
+    // VICE's FETCH_OPCODE trace point in 6510dtvcore.c (line 1821+).
+    // CRITICAL: this block runs AFTER the IRQ check above. If an IRQ
+    // fired, the `return` in the checkInterrupt branch skipped this,
+    // so the trace will NOT log a preempted instruction. The next
+    // emulateOp() call will log the first instruction of the IRQ
+    // handler. Matches VICE's ordering where DO_INTERRUPT is dispatched
+    // BEFORE the trace block (6510dtvcore.c:1771-1791 vs 1821).
+    if (TRACE_PC_CYCLES && cycles >= TRACE_PC_START
+        && cycles <= TRACE_PC_END
+        && "C64 CPU".equals(getName())) {
+      int rasterLine = -1, rasterCyc = -1;
+      int baFlag = 0;
+      if (chips instanceof C64Screen) {
+        C64Screen scr = (C64Screen) chips;
+        rasterLine = scr.vbeam;
+        rasterCyc = (int) (cycles - scr.lastLine);
+        baFlag = (baLowUntil > cycles) ? 1 : 0;
+      }
+      tracePcOut.println("I=" + (jac64InstrCounter++)
+          + " PC=$" + Integer.toHexString(pc & 0xffff)
+          + " op=$" + Integer.toHexString(memory[pc & 0xffff] & 0xff)
+          + " clk=" + cycles
+          + " A=$" + Integer.toHexString(acc & 0xff)
+          + " X=$" + Integer.toHexString(x & 0xff)
+          + " Y=$" + Integer.toHexString(y & 0xff)
+          + " SP=$" + Integer.toHexString(s & 0xff)
+          + " P=$" + Integer.toHexString(getStatusByte() & 0xff)
+          + " rast=" + rasterLine
+          + " cyc=" + rasterCyc
+          + " ba=" + baFlag);
+    }
 
     // Ok no interrupts, execute instruction
     // fetch instruction!
