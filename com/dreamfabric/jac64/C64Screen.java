@@ -1212,9 +1212,27 @@ public class C64Screen extends ExtChip implements Observer {
         && raster >= 0 && raster < RASTER_LINES;
     scheduleRasterIrq();
     if (triggerNow) {
+      // Phase η: VICE detects raster-compare match at the chip's
+      // per-cycle vicii_cycle, which runs at the NEXT cycle boundary
+      // AFTER the write. For RMW dummy-write, the dummy value briefly
+      // sets raster_irq_line = raster_line; VICE fires the IRQ at the
+      // next cycle (= start of cycle 6 of RMW). JaC64's synchronous
+      // fire here was 1 cycle too early.
+      // Fix: during RMW dummy-write, defer the fire by 1 cycle by
+      // setting pendingRasterIrqFireClk. The next clock() iteration
+      // will fire it.
+      if (cpu instanceof MOS6510Core && ((MOS6510Core)cpu).isRmwDummyWrite()) {
+        pendingRasterIrqFireClk = cpu.cycles + 1;
+        return;
+      }
       triggerRasterIrq(cpu.cycles);
     }
   }
+
+  // Phase η: deferred raster-IRQ fire for RMW dummy-write matches.
+  // Set to cpu.cycles+1 in updateRasterIrqLine; consumed at the next
+  // clock() iteration. RASTER_IRQ_DISABLED sentinel = not pending.
+  private long pendingRasterIrqFireClk = RASTER_IRQ_DISABLED;
 
   private void handleBadLineStart(int vicCycle, boolean wasVisible) {
     setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-START");
@@ -2452,6 +2470,14 @@ public class C64Screen extends ExtChip implements Observer {
 
     while (rasterIrqClock != RASTER_IRQ_DISABLED && cycles >= rasterIrqClock) {
       triggerRasterIrq(rasterIrqClock);
+    }
+
+    // Phase η: consume any deferred RMW-dummy-write raster IRQ trigger.
+    if (pendingRasterIrqFireClk != RASTER_IRQ_DISABLED
+        && cycles >= pendingRasterIrqFireClk) {
+      long fireClk = pendingRasterIrqFireClk;
+      pendingRasterIrqFireClk = RASTER_IRQ_DISABLED;
+      triggerRasterIrq(fireClk);
     }
 
     // NOTE: gfxVisible is deliberately not set here. Entering display
