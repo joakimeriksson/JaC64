@@ -1129,6 +1129,15 @@ public class C64Screen extends ExtChip implements Observer {
   private static final long TRACE_VIC_CYCLE_END =
       Long.getLong("jac64.traceVicCycleEnd", Long.MAX_VALUE);
   private static java.io.PrintStream traceVicCycleOut = System.err;
+  // Phase K iter#9: per-cycle VIC internal state trace for diffing
+  // vc/vmli/rc/idle/bad against VICE viciisc.
+  private static final boolean TRACE_VIC_STATE =
+      Boolean.getBoolean("jac64.traceVicState");
+  private static final long TRACE_VIC_STATE_START =
+      Long.getLong("jac64.traceVicStateStart", 0L);
+  private static final long TRACE_VIC_STATE_END =
+      Long.getLong("jac64.traceVicStateEnd", Long.MAX_VALUE);
+  private static java.io.PrintStream viceStateOut = null;
   static {
     if (TRACE_VIC_CYCLE) {
       String f = System.getProperty("jac64.traceVicCycleFile", "");
@@ -2555,6 +2564,29 @@ public class C64Screen extends ExtChip implements Observer {
       if (prefetchCycles > 0) prefetchCycles--;
     } else {
       prefetchCycles = 4;
+    }
+
+    // Phase K iter#9: per-cycle VIC state trace for diff against VICE.
+    // Gated by -Djac64.traceVicState=true + jac64.traceVicStateFile.
+    // Emits vc/vmli/rc/vcbase/idle/bad each cycle so we can diff
+    // internal state at matching (rast,cyc) vs VICE viciisc.
+    if (TRACE_VIC_STATE && cycles >= TRACE_VIC_STATE_START
+        && cycles <= TRACE_VIC_STATE_END) {
+      if (viceStateOut == null) {
+        String path = System.getProperty("jac64.traceVicStateFile",
+            "/tmp/jac64_state.trace");
+        try { viceStateOut = new java.io.PrintStream(path); }
+        catch (Exception e) { viceStateOut = System.err; }
+      }
+      viceStateOut.println("EV-State clk=" + cycles
+          + " rast=$" + Integer.toHexString(vbeam)
+          + " cyc=" + vicCycle
+          + " vc=" + vc + " vmli=" + vmli
+          + " rc=" + rc + " vcbase=" + vcBase
+          + " idle=" + (gfxVisible ? 0 : 1)
+          + " bad=" + (badLine ? 1 : 0)
+          + " abl=" + (displayEnabled ? 1 : 0)
+          + " ys=" + vScroll);
     }
 
     switch (vicCycle) {

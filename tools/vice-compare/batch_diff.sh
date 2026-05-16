@@ -19,7 +19,10 @@ test_extra_flags() {
 }
 
 # Reference variants. Sentinel "_" = canonical (no suffix).
-VARIANTS=("_" "-8565" "-8565early" "-8565late" "-ntsc" "-ntscold")
+# PAL-only by design: JaC64 emulates 6569/8565 PAL. NTSC refs (-ntsc /
+# -ntscold) are excluded — they're for the NTSC test PRG variants and
+# would distort PAL totals.
+VARIANTS=("_" "-8565" "-8565early" "-8565late")
 
 default_tests=(
     screenpos colorsplit rmwtest modesplit vicii_reg_timing
