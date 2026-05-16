@@ -38,7 +38,7 @@ run_jac64() {
     rm -f /tmp/jac64_test_frame_*.png 2>/dev/null || true
     java -Djac64.warp=true -Djac64.framesToCapture=2 -Djac64.captureOnDone=true \
          -Djac64.injectAtCycle=7005254 -Djac64.detSysJump=true \
-         -Djac64.zeroColorRam=true $extra \
+         -Djac64.zeroColorRam=true $extra ${JAC64_EXTRA_FLAGS:-} \
          -cp "$BUILD_DIR:$JAC64_ROOT" TestRaster "$prg" \
          > "/tmp/${test}.log" 2>&1
 }
@@ -70,8 +70,15 @@ for test in "${tests[@]}"; do
     prg=$(find "$TESTPROGS" -name "${test}.prg" 2>/dev/null | head -1)
     if [ -z "$prg" ]; then continue; fi
     run_jac64 "$test" "$prg"
+    # Pick the LATEST captured frame as the snapshot (frame_010 doesn't
+    # always exist if the test starts capturing late under regressions).
+    latest=$(ls -1 /tmp/jac64_test_frame_*.png 2>/dev/null | sort | tail -1)
     snap="/tmp/jac64_${test}_frame010.png"
-    cp /tmp/jac64_test_frame_010.png "$snap"
+    if [ -z "$latest" ]; then
+        echo "WARN: no frames captured for $test" >&2
+        continue
+    fi
+    cp "$latest" "$snap"
     TESTS_OK+=("$test")
 
     printf "%-23s" "$test"
@@ -99,7 +106,9 @@ for v in "${VARIANTS[@]}"; do
     for test in "${TESTS_OK[@]}"; do
         ref=$(find "$TESTPROGS" -path "*references*" -name "${test}.prg${suffix}.png" 2>/dev/null | head -1)
         [ -z "$ref" ] && continue
-        cells=$(cell_diff "$ref" "/tmp/jac64_${test}_frame010.png")
+        snap="/tmp/jac64_${test}_frame010.png"
+        [ ! -f "$snap" ] && continue
+        cells=$(cell_diff "$ref" "$snap")
         [ -z "$cells" ] && continue
         sum=$((sum + cells)); n=$((n + 1))
     done

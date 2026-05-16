@@ -965,6 +965,59 @@ public class C64Screen extends ExtChip implements Observer {
         && (vbeam & 0x7) == scroll;
   }
 
+  // Phase K iter#10: VICE-faithful per-cycle state machine port.
+  // Mirrors viciisc/vicii-cycle.c:583-640 (DEN latch, check_badline,
+  // update_vc at cyc 14, update_rc at cyc 58). When VICE_BADLINE_FSM
+  // is on, this runs EVERY cycle from clock() top, and the legacy
+  // updates at case 0 / case 13 / case 57 are SKIPPED.
+  //
+  // NOT YET WIRED — flag check still gates legacy paths. Iter#11
+  // will flip the wiring.
+  private static final boolean VICE_BADLINE_FSM =
+      Boolean.getBoolean("jac64.viceBadlineFsm");
+
+  private void updateVicStateVice(int vicCycle) {
+    // VICE vicii-cycle.c:593-602 — DEN latch at FIRST_DMA_LINE (48).
+    if (vbeam == 0x30 && !displayEnabled) {
+      displayEnabled = (control1 & 0x10) != 0;
+    }
+
+    // VICE vicii-cycle.c:605-607 — check_badline every cycle while
+    // allow_bad_lines. The badline condition is `(line & 7) == ysmooth`
+    // AND we're in the DMA range (48..247 per VICE FIRST/LAST_DMA_LINE).
+    if (displayEnabled) {
+      boolean newBad = (vbeam & 7) == vScroll && vbeam >= 0x30 && vbeam <= 0xf7;
+      if (newBad && !badLine) {
+        gfxVisible = true; // exit idle_state
+      }
+      badLine = newBad;
+    } else {
+      badLine = false;
+    }
+
+    // VICE vicii-cycle.c:619-625 — update_vc at VICII_PAL_CYCLE(14) =
+    // internal raster_cycle 13.
+    //   vicii.vc = vicii.vcbase; vicii.vmli = 0; if bad_line: rc = 0;
+    if (vicCycle == 13) {
+      vc = vcBase;
+      vmli = 0;
+      if (badLine) rc = 0;
+    }
+
+    // VICE vicii-cycle.c:629-640 — update_rc at VICII_PAL_CYCLE(58) =
+    // internal raster_cycle 57.
+    if (vicCycle == 57) {
+      if (rc == 7) {
+        gfxVisible = false; // enter idle_state
+        vcBase = vc;
+      }
+      if (gfxVisible || badLine) {
+        rc = (rc + 1) & 7;
+        gfxVisible = true;
+      }
+    }
+  }
+
   private void resetBadLineFetchWindow() {
     badLineFetchStartColumn = 0;
     badLineDummyColumns = 0;
@@ -2522,35 +2575,42 @@ public class C64Screen extends ExtChip implements Observer {
       }
     }
 
-    // VICE viciisc/vicii-cycle.c:581 — check_badline runs every vicii_cycle
-    // when allow_bad_lines is set. JaC64 used to evaluate badLine only at
-    // cycle 0 + on $D011 writes (writer-side state machine). For demos
-    // that write $D011 mid-line (FLI, soft-scrollers), the writer-side
-    // path produced one-charrow timing skew vs VICE. Move re-evaluation
-    // here so any mid-line vScroll change is re-derived at the next VIC
-    // cycle, exactly mirroring VICE.
-    //
-    // case 0 still does its own initial badLine = isBadLine(vScroll),
-    // resetBadLineFetchWindow, line-start setup. We only handle the
-    // mid-line transition cases here (vicCycle != 0).
-    if (vicCycle != 0) {
-      boolean newBadLine = isBadLine(vScroll);
-      if (newBadLine != badLine) {
-        boolean wasVisibleNow = gfxVisible;
-        if (newBadLine) {
-          badLine = true;
-          if (!badLineStartedThisLine) {
-            badLineStartedThisLine = true;
-            handleBadLineStart(vicCycle, wasVisibleNow);
-          } else {
-            setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-REARM");
-          }
-        } else {
-          if (vicCycle < BADLINE_FETCH_CYCLE) {
-            badLine = false;
-            handleBadLineStop(vicCycle, wasVisibleNow);
-          } else {
+    if (VICE_BADLINE_FSM) {
+      // Phase K iter#10: unified VICE-faithful per-cycle state.
+      // Replaces the mid-line badLine re-eval below AND the legacy
+      // updates at case 0 / case 13 / case 57 (each gated by the flag).
+      updateVicStateVice(vicCycle);
+    } else {
+      // VICE viciisc/vicii-cycle.c:581 — check_badline runs every vicii_cycle
+      // when allow_bad_lines is set. JaC64 used to evaluate badLine only at
+      // cycle 0 + on $D011 writes (writer-side state machine). For demos
+      // that write $D011 mid-line (FLI, soft-scrollers), the writer-side
+      // path produced one-charrow timing skew vs VICE. Move re-evaluation
+      // here so any mid-line vScroll change is re-derived at the next VIC
+      // cycle, exactly mirroring VICE.
+      //
+      // case 0 still does its own initial badLine = isBadLine(vScroll),
+      // resetBadLineFetchWindow, line-start setup. We only handle the
+      // mid-line transition cases here (vicCycle != 0).
+      if (vicCycle != 0) {
+        boolean newBadLine = isBadLine(vScroll);
+        if (newBadLine != badLine) {
+          boolean wasVisibleNow = gfxVisible;
+          if (newBadLine) {
             badLine = true;
+            if (!badLineStartedThisLine) {
+              badLineStartedThisLine = true;
+              handleBadLineStart(vicCycle, wasVisibleNow);
+            } else {
+              setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-REARM");
+            }
+          } else {
+            if (vicCycle < BADLINE_FETCH_CYCLE) {
+              badLine = false;
+              handleBadLineStop(vicCycle, wasVisibleNow);
+            } else {
+              badLine = true;
+            }
           }
         }
       }
@@ -2617,7 +2677,10 @@ public class C64Screen extends ExtChip implements Observer {
 
       // Check if display should be enabled...
       if (vbeam == 0x30) {
-        displayEnabled = (control1 & 0x10) != 0;
+        if (!VICE_BADLINE_FSM) {
+          displayEnabled = (control1 & 0x10) != 0;
+        }
+        // Border-state edge update still needed regardless of FSM mode.
         if (displayEnabled) {
           borderState &= ~0x04;
         } else {
@@ -2625,7 +2688,9 @@ public class C64Screen extends ExtChip implements Observer {
         }
       }
 
-      badLine = isBadLine(vScroll);
+      if (!VICE_BADLINE_FSM) {
+        badLine = isBadLine(vScroll);
+      }
       resetBadLineFetchWindow();
       // Reset the per-line idempotency guard for handleBadLineStart.
       badLineStartedThisLine = badLine;
@@ -2794,9 +2859,12 @@ public class C64Screen extends ExtChip implements Observer {
       finishCycleVice(mpos);
       mpos += 8;
 
-      // Set vc, reset vmli...
-      vc = vcBase;
-      vmli = 0;
+      // Set vc, reset vmli... (gated under !VICE_BADLINE_FSM — the
+      // unified FSM does this in updateVicStateVice at vicCycle==14).
+      if (!VICE_BADLINE_FSM) {
+        vc = vcBase;
+        vmli = 0;
+      }
       // Reset VICE-style gfx pipeline shift register at line start so the
       // first column's pre-XSCROLL pixels emit from a clean state. Re-seed
       // mode pipes from current registers — VICE's draw_graphics8 runs
@@ -3028,22 +3096,27 @@ public class C64Screen extends ExtChip implements Observer {
       mpos += 8;
 
 
-      if (rc == 7) {
-        vcBase = vc;
-        gfxVisible = false;
-        if (BAD_LINE_DEBUG) {
-          monitor.info("#### RC7 ==> vc = " + vc + " at " + vbeam +
-              " vicCycle = " + vicCycle);
-          if (vc == 1000) {
-            monitor.info("--------------- last line ----------------");
+      if (!VICE_BADLINE_FSM) {
+        if (rc == 7) {
+          vcBase = vc;
+          gfxVisible = false;
+          if (BAD_LINE_DEBUG) {
+            monitor.info("#### RC7 ==> vc = " + vc + " at " + vbeam +
+                " vicCycle = " + vicCycle);
+            if (vc == 1000) {
+              monitor.info("--------------- last line ----------------");
+            }
           }
         }
-      }
 
-      if (badLine || gfxVisible) {
-        rc = (rc + 1) & 7;
-        gfxVisible = true;
+        if (badLine || gfxVisible) {
+          rc = (rc + 1) & 7;
+          gfxVisible = true;
+        }
       }
+      // (VICE_BADLINE_FSM path: rc/idle/vcbase update happens in
+      // updateVicStateVice at vicCycle==58, which is "case 57" here
+      // since JaC64 dispatcher is 1 ahead of VICE; need to verify.)
 
       if (sprites[0].painting) {
         sprites[0].readSpriteData();
