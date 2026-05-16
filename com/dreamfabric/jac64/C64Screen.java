@@ -3763,13 +3763,17 @@ public class C64Screen extends ExtChip implements Observer {
     // exactly as the legacy paths would have done (condition derived
     // from notVisible/visible-gfx branches below).
     if (useViceFullPipeline) {
-      if (gfxVisible && !paintBorder && !vBorderOnly()) vc++;
+      // iter#12: VICE vicii_fetch_graphics vc++ condition is
+      // `fetch_g cycle && !idle_state`. Drop !paintBorder &&
+      // !vBorderOnly() gates that produced 0-cell vc on screenpos
+      // mid-line badline trick.
+      if (gfxVisible) vc++;
       vmli++;
       return;
     }
     final int drawVmli = viceRenderDelay ? Math.max(0, vmli - 1) : vmli;
     if (notVisible) {
-      if (gfxVisible && !paintBorder && !vBorderOnly()) {
+      if (gfxVisible) {
         vc++;
       }
       vmli++;
