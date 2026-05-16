@@ -881,7 +881,10 @@ public class C64Screen extends ExtChip implements Observer {
     boolean prevMain = mainBorder;
     boolean prevV = vBorder;
     checkVBorderTopBottom();
-    vBorder = setVBorder;
+    // Phase K iter#7: vBorder commit moved to case 1 (= VICE viciisc
+    // raster_cycle==1). Don't re-latch here at cyc 17/18 — VICE only
+    // commits once per line. Mid-line $D011 writes update setVBorder
+    // but the new value doesn't apply until NEXT line's cyc 1.
     if (!vBorder) {
       mainBorder = false;
     }
@@ -2627,6 +2630,13 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 1: // Sprite data - sprite 3
+      // VICE viciisc/vicii-cycle.c:545-551: vicii.vborder = vicii.set_vborder
+      // at raster_cycle == 1. JaC64 was only doing this at checkHBorderLeft
+      // (cyc 16/17), which kept vBorder asserted ~15 cycles too long at the
+      // top-border→gfx-visible transition. The bug surfaced clearly in
+      // screenpos where rast=51 cyc=1 shows VICE vb=0 but JaC64 vb=1.
+      checkVBorderTopBottom();
+      vBorder = setVBorder;
       // VICE fetches SprPtr(3) at PAL cyc 1 Phi1 — that maps to our
       // "case 0 end". When jac64.spriteFetchAligned is on, SPR3-7
       // fetches moved to cases 0/2/4/6/8 (one VIC cycle earlier)
