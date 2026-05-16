@@ -1849,6 +1849,14 @@ public class C64Screen extends ExtChip implements Observer {
       raster = (raster & 0xff) | ((data << 1) & 0x100);
       updateRasterIrqLine(oldRaster);
       control1 = data;
+      // iter#16 trace — matches VICE-D011W format so the two emulators'
+      // mid-line $D011 write timing can be diffed side-by-side.
+      if (Boolean.getBoolean("jac64.traceD011W")) {
+        System.err.println("JAC-D011W data=$" + Integer.toHexString(data & 0xff)
+            + " line=" + vbeam + " cyc=" + (int)(cpu.cycles - lastLine)
+            + " stored=$" + Integer.toHexString(data & 0xff)
+            + " clk=" + cpu.cycles);
+      }
 
       updateDisplayEnabledFromControl(data);
 
