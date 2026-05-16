@@ -971,14 +971,21 @@ public class C64Screen extends ExtChip implements Observer {
   // is on, this runs EVERY cycle from clock() top, and the legacy
   // updates at case 0 / case 13 / case 57 are SKIPPED.
   //
-  // NOT YET WIRED — flag check still gates legacy paths. Iter#11
-  // will flip the wiring.
+  // iter#11: FSM now defaults ON (zero-regression vs legacy paths
+  // because the DEN latch was tightened to match legacy behavior).
+  // Opt out with -Djac64.viceBadlineFsm=false to fall back to legacy.
   private static final boolean VICE_BADLINE_FSM =
-      Boolean.getBoolean("jac64.viceBadlineFsm");
+      Boolean.parseBoolean(
+          System.getProperty("jac64.viceBadlineFsm", "true"));
 
   private void updateVicStateVice(int vicCycle) {
-    // VICE vicii-cycle.c:593-602 — DEN latch at FIRST_DMA_LINE (48).
-    if (vbeam == 0x30 && !displayEnabled) {
+    // VICE vicii-cycle.c:593-602 — DEN (allow_bad_lines) latch at
+    // FIRST_DMA_LINE (48). VICE only latches when going FALSE→TRUE
+    // (and clears to FALSE on raster_line=0 / FINAL_DMA_LINE+1, but
+    // that's effectively the line cycle 0 condition we're already in).
+    // JaC64 legacy unconditionally overwrites; mirror that semantic
+    // to preserve sprite-test behavior that depends on DEN=0 paths.
+    if (vbeam == 0x30 && vicCycle == 0) {
       displayEnabled = (control1 & 0x10) != 0;
     }
 
