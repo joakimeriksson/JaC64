@@ -1011,6 +1011,15 @@ public class C64Screen extends ExtChip implements Observer {
       if (badLine) rc = 0;
     }
 
+    // VICE vicii_fetch_graphics vc++: runs at FetchG cycles (raster_cycle
+    // 15..54 per chip-model.c) when !idle_state (= gfxVisible). Moved
+    // from drawGraphics. vmli stays in drawGraphics for now — moving
+    // it caused +2450-cell regressions because legacy paths read vmli
+    // mid-cycle assuming drawGraphics has incremented it.
+    if (vicCycle >= 15 && vicCycle <= 54 && gfxVisible) {
+      vc = (vc + 1) & 0x3ff;
+    }
+
     // VICE vicii-cycle.c:629-640 — update_rc at VICII_PAL_CYCLE(58) =
     // internal raster_cycle 57.
     if (vicCycle == 57) {
@@ -3763,19 +3772,14 @@ public class C64Screen extends ExtChip implements Observer {
     // exactly as the legacy paths would have done (condition derived
     // from notVisible/visible-gfx branches below).
     if (useViceFullPipeline) {
-      // iter#12: VICE vicii_fetch_graphics vc++ condition is
-      // `fetch_g cycle && !idle_state`. Drop !paintBorder &&
-      // !vBorderOnly() gates that produced 0-cell vc on screenpos
-      // mid-line badline trick.
-      if (gfxVisible) vc++;
+      // iter#13: vc++ moved to updateVicStateVice (FetchG cycles
+      // 15..54). vmli++ stays here because legacy paths consume vmli
+      // mid-cycle expecting drawGraphics to have advanced it.
       vmli++;
       return;
     }
     final int drawVmli = viceRenderDelay ? Math.max(0, vmli - 1) : vmli;
     if (notVisible) {
-      if (gfxVisible) {
-        vc++;
-      }
       vmli++;
       return;
     }
