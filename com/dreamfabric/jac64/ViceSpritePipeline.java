@@ -58,6 +58,46 @@ public final class ViceSpritePipeline {
   private static final int TRACE_SPR_LINE_HI =
       Integer.getInteger("jac64.traceSpriteLineHi", 0x1ff);
 
+  // Per-pixel SP-LATCH trace: mirrors VICE's draw_sprites trace.
+  // Enable with -Djac64.traceSpLatch=true, optional file via
+  // -Djac64.traceSpLatchFile (default /tmp/jac64_splatch.trace),
+  // raster window via TRACE_SPR_LINE_LO/HI.
+  private static final boolean TRACE_SP_LATCH =
+      Boolean.getBoolean("jac64.traceSpLatch");
+  private static java.io.PrintStream spLatchOut = null;
+  public long traceClk = 0;
+  private void spLatchTrace(int i, int xpos) {
+    if (!TRACE_SP_LATCH) return;
+    if (traceLine < TRACE_SPR_LINE_LO || traceLine > TRACE_SPR_LINE_HI) return;
+    if (spLatchOut == null) {
+      String p = System.getProperty("jac64.traceSpLatchFile", "/tmp/jac64_splatch.trace");
+      try {
+        spLatchOut = new java.io.PrintStream(
+            new java.io.FileOutputStream(p), true);
+      } catch (Exception e) { spLatchOut = System.err; }
+    }
+    StringBuilder sb = new StringBuilder(160);
+    sb.append("SP-LATCH clk=").append(traceClk)
+      .append(" rast=$").append(Integer.toHexString(traceLine))
+      .append(" cyc=").append(traceCyc).append(" pix=").append(i)
+      .append(" xpos=").append(xpos)
+      .append(" actv=$").append(Integer.toHexString(spriteActiveBits & 0xff))
+      .append(" pend=$").append(Integer.toHexString(spritePendingBits & 0xff))
+      .append(" halt=$").append(Integer.toHexString(spriteHaltBits & 0xff))
+      .append(" mcb=$").append(Integer.toHexString(spriteMcBits & 0xff))
+      .append(" prib=$").append(Integer.toHexString(spritePriBits & 0xff))
+      .append(" expxb=$").append(Integer.toHexString(spriteExpxBits & 0xff))
+      .append(" mcF=$").append(Integer.toHexString(sbufMcFlops & 0xff))
+      .append(" expxF=$").append(Integer.toHexString(sbufExpxFlops & 0xff))
+      .append(" sbuf=");
+    for (int s = 0; s < 8; s++) {
+      if (s > 0) sb.append(',');
+      sb.append('$').append(Integer.toHexString(sbufReg[s] & 0xffffff));
+    }
+    sb.append(" out=").append(outColorCode[i]).append(" spr=").append(outSprite[i]);
+    spLatchOut.println(sb.toString());
+  }
+
   /** Set by caller before drawCycle8 — current raster line / cycle. */
   public int traceLine = 0;
   public int traceCyc = 0;
@@ -188,18 +228,18 @@ public final class ViceSpritePipeline {
 
     // pixel 0
     triggerSprites(xpos + 0, candidateBits);
-    drawSprites(0);
+    drawSprites(0); spLatchTrace(0, xpos + 0);
     // pixel 1
     triggerSprites(xpos + 1, candidateBits);
-    drawSprites(1);
+    drawSprites(1); spLatchTrace(1, xpos + 1);
     // pixel 2: halt for DMA1/DMA2 cycle
     spriteActiveBits &= ~dmaCycle2;
     triggerSprites(xpos + 2, candidateBits);
-    drawSprites(2);
+    drawSprites(2); spLatchTrace(2, xpos + 2);
     // pixel 3: set halt for DMA0 (ptr) cycle
     spriteHaltBits |= dmaCycle0;
     triggerSprites(xpos + 3, candidateBits);
-    drawSprites(3);
+    drawSprites(3); spLatchTrace(3, xpos + 3);
     // pixel 4: latch display bits, load shift register
     if (checkSprDisp) {
       spritePendingBits = spriteDisplayBits;
@@ -213,20 +253,20 @@ public final class ViceSpritePipeline {
       sbufReg[spriteDmaNum] = currentSpriteData[spriteDmaNum] & 0xffffff;
     }
     triggerSprites(xpos + 4, candidateBits);
-    drawSprites(4);
+    drawSprites(4); spLatchTrace(4, xpos + 4);
     // pixel 5
     triggerSprites(xpos + 5, candidateBits);
-    drawSprites(5);
+    drawSprites(5); spLatchTrace(5, xpos + 5);
     // pixel 6: 8565 model latches priority/expandX/mc here (no color latency)
     updateSpriteMcBits8565();
     spritePriBits = reg1bPipe & 0xff;
     spriteExpxBits = reg1dPipe & 0xff;
     triggerSprites(xpos + 6, candidateBits);
-    drawSprites(6);
+    drawSprites(6); spLatchTrace(6, xpos + 6);
     // pixel 7: release halt for DMA1/DMA2
     spriteHaltBits &= ~dmaCycle2;
     triggerSprites(xpos + 7, candidateBits);
-    drawSprites(7);
+    drawSprites(7); spLatchTrace(7, xpos + 7);
 
     // pipe x-positions for next cycle
     for (int s = 0; s < 8; s++) {

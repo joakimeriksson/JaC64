@@ -4089,6 +4089,7 @@ public class C64Screen extends ExtChip implements Observer {
       System.arraycopy(sprPipeSpriteX, 0, viceSprPipe.currentSpriteX, 0, 8);
       viceSprPipe.traceLine = vbeam;
       viceSprPipe.traceCyc = vicCycle;
+      viceSprPipe.traceClk = cpu.cycles;
       viceSprPipe.drawCycle8(currentRasterX);
     } else {
       // Legacy current-cycle path (pre-cycle_flags_pipe behaviour).
@@ -4119,6 +4120,7 @@ public class C64Screen extends ExtChip implements Observer {
       viceSprPipe.reg1dPipe = memory[0xd01d + IO_OFFSET] & 0xff;
       viceSprPipe.traceLine = vbeam;
       viceSprPipe.traceCyc = vicCycle;
+      viceSprPipe.traceClk = cpu.cycles;
       viceSprPipe.drawCycle8(currentRasterX);
     }
 
