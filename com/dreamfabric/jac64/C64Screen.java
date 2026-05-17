@@ -397,8 +397,14 @@ public class C64Screen extends ExtChip implements Observer {
   private int sprPipeReg1d = 0;
   private final int[] sprPipeSpriteX = new int[8];
   private int sprPipeRasterX = 0;
+  // VICE viciisc/vicii-draw-cycle.c:703 — vicii_draw_cycle passes
+  // cycle_flags_pipe (= PREVIOUS cycle's flags) to draw_sprites8.
+  // JaC64 vicCycle N ≡ VICE raster_cycle N+1, so using the pipe matches
+  // VICE's actual per-cycle flag visibility. Default ON for VICE
+  // faithfulness; off costs ~25 cells across the suite but reads
+  // current cycle's flags directly.
   private final boolean useCycleFlagsPipe =
-      Boolean.parseBoolean(System.getProperty("jac64.cycleFlagsPipe", "false"));
+      Boolean.parseBoolean(System.getProperty("jac64.cycleFlagsPipe", "true"));
 
   /** VICE-compatible raster_x given the current VIC cycle within a line. */
   private int rasterX(int vicCycle) {
