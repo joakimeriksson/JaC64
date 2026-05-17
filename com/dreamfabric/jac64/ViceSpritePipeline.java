@@ -257,13 +257,19 @@ public final class ViceSpritePipeline {
     // pixel 5
     triggerSprites(xpos + 5, candidateBits);
     drawSprites(5); spLatchTrace(5, xpos + 5);
-    // pixel 6: 8565 model latches priority/expandX/mc here (no color latency)
-    updateSpriteMcBits8565();
+    // pixel 6: matches VICE viciisc/vicii-draw-cycle.c. 8565 (no color
+    // latency) updates mc-bits here; 6569 (color latency) does it at pix 7.
+    if (!colorLatency) {
+      updateSpriteMcBits8565();
+    }
     spritePriBits = reg1bPipe & 0xff;
     spriteExpxBits = reg1dPipe & 0xff;
     triggerSprites(xpos + 6, candidateBits);
     drawSprites(6); spLatchTrace(6, xpos + 6);
-    // pixel 7: release halt for DMA1/DMA2
+    // pixel 7: 6569 mc-bits update, then release halt for DMA1/DMA2.
+    if (colorLatency) {
+      updateSpriteMcBits6569();
+    }
     spriteHaltBits &= ~dmaCycle2;
     triggerSprites(xpos + 7, candidateBits);
     drawSprites(7); spLatchTrace(7, xpos + 7);
@@ -449,7 +455,7 @@ public final class ViceSpritePipeline {
   }
 
   /**
-   * Port of update_sprite_mc_bits_8565 (vicii-draw-cycle.c:442-449).
+   * Port of update_sprite_mc_bits_8565 (vicii-draw-cycle.c:499-506).
    * Called at pixel 6 for 8565 (no color latency).
    */
   private void updateSpriteMcBits8565() {
@@ -458,4 +464,18 @@ public final class ViceSpritePipeline {
     sbufMcFlops ^= toggled & (~sbufExpxFlops & 0xff);
     spriteMcBits = nextMcBits;
   }
+
+  /**
+   * Port of update_sprite_mc_bits_6569 (vicii-draw-cycle.c:490-497).
+   * Called at pixel 7 for 6569 (color latency).
+   */
+  private void updateSpriteMcBits6569() {
+    int nextMcBits = reg1cPipe & 0xff;
+    int toggled = nextMcBits ^ spriteMcBits;
+    sbufMcFlops &= ~toggled & 0xff;
+    spriteMcBits = nextMcBits;
+  }
+
+  /** True = 6569 (color_latency=1), false = 8565 (color_latency=0). */
+  public boolean colorLatency = true;
 }
