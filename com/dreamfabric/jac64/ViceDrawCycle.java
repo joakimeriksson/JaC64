@@ -305,7 +305,10 @@ public final class ViceDrawCycle {
       dbufOffset = 0;
     }
     int offsBefore = dbufOffset;  // for trace emission
-    drawGraphics8(cycleFlagsPipe);
+    // BUGFIX: VICE passes the current cycle's flags directly. The legacy
+    // cycleFlagsPipe introduced a spurious 1-cycle delay that pushed the
+    // first g-fetch byte into gbufReg one cycle after VICE on every line.
+    drawGraphics8(cycleFlags);
     drawSprites8();
     drawBorder8();
     drawColors8();
@@ -416,6 +419,41 @@ public final class ViceDrawCycle {
   // draw_graphics(i) — port of vicii-draw-cycle.c:146
   // ===========================================================
 
+  // iter#17: per-pixel PX-LATCH trace for diffing mode-pipe state
+  // against VICE. Format matches VICE patch in vicii-draw-cycle.c.
+  // Gated by -Djac64.tracePxLatch=true. Trace window via
+  // -Djac64.tracePxLatchStart / -Djac64.tracePxLatchEnd (clk).
+  private static final boolean TRACE_PX_LATCH =
+      Boolean.getBoolean("jac64.tracePxLatch");
+  private static final long TRACE_PX_LATCH_START =
+      Long.getLong("jac64.tracePxLatchStart", 0L);
+  private static final long TRACE_PX_LATCH_END =
+      Long.getLong("jac64.tracePxLatchEnd", Long.MAX_VALUE);
+  private static java.io.PrintStream pxLatchOut = null;
+  private void pxLatchTrace(int i) {
+    if (!TRACE_PX_LATCH) return;
+    if (traceClk < TRACE_PX_LATCH_START || traceClk > TRACE_PX_LATCH_END) return;
+    if (pxLatchOut == null) {
+      String p = System.getProperty("jac64.tracePxLatchFile", "/tmp/jac64_pxlatch.trace");
+      try {
+        pxLatchOut = new java.io.PrintStream(
+            new java.io.FileOutputStream(p), true /* autoflush */);
+      } catch (Exception e) { pxLatchOut = System.err; }
+    }
+    int emitted = renderBuffer[i];
+    pxLatchOut.println("PX-LATCH clk=" + traceClk
+        + " rast=$" + Integer.toHexString(traceRasterLine)
+        + " cyc=" + rasterCycle + " pix=" + i
+        + " regs11=$" + Integer.toHexString(regs0x11 & 0xff)
+        + " regs16=$" + Integer.toHexString(regs0x16 & 0xff)
+        + " vmode11=$" + Integer.toHexString(vmode11Pipe & 0xff)
+        + " vmode16=$" + Integer.toHexString(vmode16Pipe & 0xff)
+        + " vmode16p2=$" + Integer.toHexString(vmode16Pipe2 & 0xff)
+        + " gbufReg=$" + Integer.toHexString(gbufReg & 0xff)
+        + " mcFlop=" + gbufMcFlop
+        + " emitted=$" + Integer.toHexString(emitted & 0xff));
+  }
+
   private void drawGraphics(int i) {
     // Load new gbuf/vbuf/cbuf values at offset == xscroll
     if (i == xscrollPipe) {
@@ -472,31 +510,31 @@ public final class ViceDrawCycle {
   private void drawGraphics8(int cycleFlags) {
     boolean visEn = (cycleFlags & VIS_EN_M) != 0;
 
-    drawGraphics(0);
-    drawGraphics(1);
-    drawGraphics(2);
-    drawGraphics(3);
+    drawGraphics(0);  pxLatchTrace(0);
+    drawGraphics(1);  pxLatchTrace(1);
+    drawGraphics(2);  pxLatchTrace(2);
+    drawGraphics(3);  pxLatchTrace(3);
 
     // pixel 4: latch MCM bit, rising-edge BMM/ECM for 6569
     vmode16Pipe = (regs0x16 & 0x10) >> 2;
     if (colorLatency) {
       vmode11Pipe |= (regs0x11 & 0x60) >> 2;
     }
-    drawGraphics(4);
-    drawGraphics(5);
+    drawGraphics(4);  pxLatchTrace(4);
+    drawGraphics(5);  pxLatchTrace(5);
 
     // pixel 6: falling-edge BMM/ECM for 6569
     if (colorLatency) {
       vmode11Pipe &= (regs0x11 & 0x60) >> 2;
     }
-    drawGraphics(6);
+    drawGraphics(6);  pxLatchTrace(6);
 
     // pixel 7: MCM 0→1 transition resets mc_flop
     if (vmode16Pipe != 0 && vmode16Pipe2 == 0) {
       gbufMcFlop = 0;
     }
     vmode16Pipe2 = vmode16Pipe;
-    drawGraphics(7);
+    drawGraphics(7);  pxLatchTrace(7);
 
     if (!colorLatency) {
       vmode11Pipe = (regs0x11 & 0x60) >> 2;
