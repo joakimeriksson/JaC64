@@ -2503,7 +2503,12 @@ public class C64Screen extends ExtChip implements Observer {
     // missing state-machine transitions on cases 0-12 / 61-62 (sprite
     // ptr/dma + idle pre-line cycles). Advance the per-cycle state
     // here so halt/active/pending bits track VICE 1:1.
-    if (useViceSprPipe) {
+    //
+    // viceShaped path advances the pipeline from Phase 5b (right after
+    // ViceDrawCycle.drawCyclePart1) so priBuffer is fresh — skip this
+    // legacy pre-dispatcher call to avoid double-advance.
+    if (useViceSprPipe
+        && !Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"))) {
       advanceSpritePipeline(vicCycle);
     }
 
@@ -3279,17 +3284,12 @@ public class C64Screen extends ExtChip implements Observer {
           gByte = memory[charMemoryIndex + (vByte << 3) + rc] & 0xff;
         }
       }
-      // Phase C: paint base derived from VICE trace.
-      //   VICE cycle 14 emits at dbuf[104] = visible x=0.
-      //   JaC64 pipeline cycle 14 should also paint visible x=0.
-      //   paintBase = vPos*SC_WIDTH + (vicCycle-14)*8 = base + (N-12)*8 - 16
-      //   ⇒ shift = -16.
-      // Empirically (9-test sweep): shift=-16 totals 6481, shift=-8
-      // totals 6309 (TOTAL slightly worse). But shift=-16 byte-perfects
-      // greydot (2491→65) and videomode (226→12, 268→27), exposing
-      // sprite-pipeline phase bug at shift=-16 that shift=-8 was hiding
-      // (ss-* tests regress). The sprite phase bug is tracked separately.
-      int shift = Integer.getInteger("jac64.viceShift", -16);
+      // Phase C: paint base aligned with rasterX (and therefore with the
+      // sprite pipeline xpos). Once viceShaped Phase 1 landed, shift=-8
+      // wins -1427 cells canon / -866 cells 8565 / -415 cells 8565early
+      // vs the legacy shift=-16 that needed a 1-cycle sprite-output delay
+      // to compensate. shift=-16 remains accessible for opt-out.
+      int shift = Integer.getInteger("jac64.viceShift", -8);
       if (vicCycle >= 12 && vicCycle <= 60 && !notVisible
           && vPos >= 0 && vPos < SC_HEIGHT) {
         viceCyclePaintBase = vPos * SC_WIDTH + (vicCycle - 12) * 8 + shift;
@@ -3329,21 +3329,36 @@ public class C64Screen extends ExtChip implements Observer {
       if (dmliForCycle < 0) dmliForCycle = 0;
       if (dmliForCycle > 39) dmliForCycle = 39;
       viceDrawCycle.setDmli(dmliForCycle);
-      // Phase D-sprite: feed sprite output from ViceSpritePipeline.
-      // Empirically (Phase A trace + cell-diff on ss-hires-color at
-      // shift=-16): sprite color transitions land 8 px (1 cycle) EARLIER
-      // than VICE. Use PREVIOUS cycle's sprite output so the overlay
-      // pipes through pixel_buffer with the right phase to match VICE.
-      if (useViceSprPipe) {
-        viceDrawCycle.setSpriteOutput(prevSprColorCode, prevSprIndex, prevSprFgWin);
-        // Snapshot this cycle's output for use NEXT cycle.
-        System.arraycopy(viceSprPipe.outColorCode, 0, prevSprColorCode, 0, 8);
-        System.arraycopy(viceSprPipe.outSprite, 0, prevSprIndex, 0, 8);
-        System.arraycopy(viceSprPipe.outForegroundWin, 0, prevSprFgWin, 0, 8);
+      // Phase 1 VICE-shaped split (default ON; opt out with
+      // -Djac64.viceShaped=false). Order mirrors vicii_draw_cycle:
+      //   draw_graphics8 (Part1) -> draw_sprites8 (advance sprite pipe,
+      //   use fresh priBuffer) -> setSpriteOutput current cycle -> Part2
+      //   (composite + border + colors).
+      if (Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"))) {
+        viceDrawCycle.drawCyclePart1();
+        if (useViceSprPipe) {
+          viceDrawCycle.copyPriBufferInto(viceSprPipe.priBuffer);
+          advanceSpritePipeline(vicCycle);
+          viceDrawCycle.setSpriteOutput(viceSprPipe.outColorCode,
+              viceSprPipe.outSprite, viceSprPipe.outForegroundWin);
+        } else {
+          viceDrawCycle.clearSpriteOutput();
+        }
+        viceDrawCycle.drawCyclePart2();
       } else {
-        viceDrawCycle.clearSpriteOutput();
+        // Legacy Phase D-sprite: 1-cycle sprite output delay.
+        // Compensates for an 8-px-early gfx phase offset in viceDrawCycle;
+        // see project_sprite_xpos_offset.md for the analysis.
+        if (useViceSprPipe) {
+          viceDrawCycle.setSpriteOutput(prevSprColorCode, prevSprIndex, prevSprFgWin);
+          System.arraycopy(viceSprPipe.outColorCode, 0, prevSprColorCode, 0, 8);
+          System.arraycopy(viceSprPipe.outSprite, 0, prevSprIndex, 0, 8);
+          System.arraycopy(viceSprPipe.outForegroundWin, 0, prevSprFgWin, 0, 8);
+        } else {
+          viceDrawCycle.clearSpriteOutput();
+        }
+        viceDrawCycle.drawCycle();
       }
-      viceDrawCycle.drawCycle();
     }
 
     // Per-cycle VIC trace — emit one line summarizing this cycle.
@@ -4046,17 +4061,20 @@ public class C64Screen extends ExtChip implements Observer {
    */
   private final void advanceSpritePipeline(int vicCycle) {
     // priBuffer carries graphics foreground-priority pixels for the
-    // CURRENT cycle. (Not in cycle_flags_pipe scope — it's separately
-    // produced by draw_graphics8 in VICE and consumed inside the same
-    // draw_sprites8 call.)
-    int screenStart = xPos - 8;
-    for (int i = 0; i < 8; i++) {
-      int pixelX = screenStart + i;
-      boolean fg = false;
-      if (pixelX >= 0 && pixelX < collissionMask.length) {
-        fg = (collissionMask[pixelX] & 0x100) != 0;
+    // CURRENT cycle. In viceShaped mode the caller has already populated
+    // viceSprPipe.priBuffer from ViceDrawCycle.copyPriBufferInto() (the
+    // VICE-faithful path: draw_graphics8 -> draw_sprites8 in one cycle).
+    // Legacy path reads PREVIOUS-cycle bits from collissionMask.
+    if (!Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"))) {
+      int screenStart = xPos - 8;
+      for (int i = 0; i < 8; i++) {
+        int pixelX = screenStart + i;
+        boolean fg = false;
+        if (pixelX >= 0 && pixelX < collissionMask.length) {
+          fg = (collissionMask[pixelX] & 0x100) != 0;
+        }
+        viceSprPipe.priBuffer[i] = fg;
       }
-      viceSprPipe.priBuffer[i] = fg;
     }
 
     // STEP 1 — consume PREVIOUS cycle's flag snapshot (cycle_flags_pipe).

@@ -316,6 +316,31 @@ public final class ViceDrawCycle {
     cycleFlagsPipe = cycleFlags;
   }
 
+  // VICE-shaped split: the caller runs Part1 (graphics) first, then
+  // advances the sprite pipeline (which reads the fresh priBuffer below),
+  // then calls Part2 (sprite composite + border + colors) with the
+  // current-cycle sprite output. Matches vicii_draw_cycle order exactly.
+  private int splitOffsBefore;
+  public void drawCyclePart1() {
+    if (rasterCycle == 1) {
+      dbufOffset = 0;
+    }
+    splitOffsBefore = dbufOffset;
+    drawGraphics8(cycleFlags);
+  }
+  public void drawCyclePart2() {
+    drawSprites8();
+    drawBorder8();
+    drawColors8();
+    if (traceDraw) emitTrace(splitOffsBefore);
+    cycleFlagsPipe = cycleFlags;
+  }
+
+  /** Copy current-cycle gfx priority bits into dst (8 booleans, true = foreground). */
+  public void copyPriBufferInto(boolean[] dst) {
+    for (int i = 0; i < 8; i++) dst[i] = priBuffer[i] != 0;
+  }
+
   // ===========================================================
   // TRACE (Phase A) — emit EV-DrawCycle matching VICE's patch in
   // vicii-draw-cycle.c. Gated by -Djac64.viceDrawTrace + clk window.
