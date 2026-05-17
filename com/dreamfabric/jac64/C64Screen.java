@@ -374,6 +374,14 @@ public class C64Screen extends ExtChip implements Observer {
   private final boolean useViceSprPipe =
       Boolean.parseBoolean(System.getProperty("jac64.viceSprPipe", "true"));
 
+  // Phase 1: VICE-shaped per-cycle draw order
+  //   draw_graphics8 -> draw_sprites8 -> composite -> border -> colors
+  // (mirrors vicii_draw_cycle). False restores legacy 1-cycle sprite
+  // output delay + shift=-16 compensations. Cached so per-cycle path
+  // hits a final-field read instead of System.getProperty().
+  private static final boolean VICE_SHAPED =
+      Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"));
+
   // VICE viciisc/vicii-draw-cycle.c:703 cycle_flags_pipe: draw_sprites8
   // and draw_graphics8 at cycle N consume flags from cycle N-1 (the pipe
   // value snapshotted at end of previous vicii_cycle()). JaC64 used to
@@ -2508,7 +2516,7 @@ public class C64Screen extends ExtChip implements Observer {
     // ViceDrawCycle.drawCyclePart1) so priBuffer is fresh — skip this
     // legacy pre-dispatcher call to avoid double-advance.
     if (useViceSprPipe
-        && !Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"))) {
+        && !VICE_SHAPED) {
       advanceSpritePipeline(vicCycle);
     }
 
@@ -3334,7 +3342,7 @@ public class C64Screen extends ExtChip implements Observer {
       //   draw_graphics8 (Part1) -> draw_sprites8 (advance sprite pipe,
       //   use fresh priBuffer) -> setSpriteOutput current cycle -> Part2
       //   (composite + border + colors).
-      if (Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"))) {
+      if (VICE_SHAPED) {
         viceDrawCycle.drawCyclePart1();
         if (useViceSprPipe) {
           viceDrawCycle.copyPriBufferInto(viceSprPipe.priBuffer);
@@ -4065,7 +4073,7 @@ public class C64Screen extends ExtChip implements Observer {
     // viceSprPipe.priBuffer from ViceDrawCycle.copyPriBufferInto() (the
     // VICE-faithful path: draw_graphics8 -> draw_sprites8 in one cycle).
     // Legacy path reads PREVIOUS-cycle bits from collissionMask.
-    if (!Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"))) {
+    if (!VICE_SHAPED) {
       int screenStart = xPos - 8;
       for (int i = 0; i < 8; i++) {
         int pixelX = screenStart + i;
