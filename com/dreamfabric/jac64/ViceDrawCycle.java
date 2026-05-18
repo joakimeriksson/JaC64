@@ -152,10 +152,16 @@ public final class ViceDrawCycle {
       0x0031281c  // cyc 63
   };
 
-  /** Look up cycle_flags for a given vicCycle (1..63). */
+  /**
+   * Look up cycle_flags for the given JaC64 vicCycle (0..62).
+   * JaC64 vicCycle N corresponds to VICE raster_cycle N+1, so table[N]
+   * (= PAL "cyc N+1" entry) returns the matching flags. The legacy
+   * `vicCycle - 1` indexing dropped vicCycle=0 to zero flags entirely,
+   * masking off VICE raster_cycle 1's sprite ptr/dma indicators.
+   */
   public static int cycleFlagsFor(int vicCycle) {
-    if (vicCycle < 1 || vicCycle > 63) return 0;
-    return PAL_6569_CYCLE_TABLE[vicCycle - 1];
+    if (vicCycle < 0 || vicCycle > 62) return 0;
+    return PAL_6569_CYCLE_TABLE[vicCycle];
   }
 
   // ===========================================================
