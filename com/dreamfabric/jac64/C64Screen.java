@@ -3353,6 +3353,12 @@ public class C64Screen extends ExtChip implements Observer {
         if (useViceSprPipe) {
           viceDrawCycle.copyPriBufferInto(viceSprPipe.priBuffer);
           advanceSpritePipeline(vicCycle);
+          // Fold THIS cycle's sprite collisions into the global mirrors
+          // (matches VICE vicii-draw-cycle.c:478-486 which accumulates
+          // directly inside draw_sprites). drawSpritesViceCycle skips
+          // its OR-in when VICE_SHAPED so we don't double-accumulate.
+          sprCol   |= viceSprPipe.spriteSpriteCollThisCycle;
+          sprBgCol |= viceSprPipe.spriteBgCollThisCycle;
           viceDrawCycle.setSpriteOutput(viceSprPipe.outColorCode,
               viceSprPipe.outSprite, viceSprPipe.outForegroundWin);
         } else {
@@ -4220,12 +4226,15 @@ public class C64Screen extends ExtChip implements Observer {
       int pixelX = screenStart + i;
 
       // Apply per-pixel sprite-sprite & sprite-bg collisions to global
-      // registers. These trigger IRQ on 0→non-zero edge (VICE end-of-
-      // cycle behavior is captured by sprColCanFire in caller flow).
-      int ssColl = viceSprPipe.outSpriteSpriteColl[i];
-      int sbColl = viceSprPipe.outSpriteBgColl[i];
-      if (ssColl != 0) sprCol |= ssColl;
-      if (sbColl != 0) sprBgCol |= sbColl;
+      // registers. In VICE_SHAPED mode this OR is done in Phase 5b
+      // right after advanceSpritePipeline (matches VICE's draw_sprites
+      // in-cycle accumulation). Legacy path keeps the per-pixel OR.
+      if (!VICE_SHAPED) {
+        int ssColl = viceSprPipe.outSpriteSpriteColl[i];
+        int sbColl = viceSprPipe.outSpriteBgColl[i];
+        if (ssColl != 0) sprCol |= ssColl;
+        if (sbColl != 0) sprBgCol |= sbColl;
+      }
 
       int code = viceSprPipe.outColorCode[i];
       int s = viceSprPipe.outSprite[i];
@@ -4234,8 +4243,13 @@ public class C64Screen extends ExtChip implements Observer {
       if (pixelX < 0 || pixelX >= collissionMask.length) continue;
 
       // Update collissionMask so foreground-priority bit 0x100 stays
-      // intact (already set by graphics) while OR'ing in this sprite's bit.
-      collissionMask[pixelX] |= (1 << s);
+      // intact (already set by graphics) while OR'ing in this sprite's
+      // bit. In VICE_SHAPED mode the legacy collissionMask is no longer
+      // consumed by the sprite pipeline (priBuffer comes straight from
+      // ViceDrawCycle.copyPriBufferInto) so skip the write.
+      if (!VICE_SHAPED) {
+        collissionMask[pixelX] |= (1 << s);
+      }
 
       // Render only if pixel is non-transparent and not behind foreground.
       // Phase B: when pipeline is on, skip the legacy mem[] paint —

@@ -146,6 +146,15 @@ public final class ViceSpritePipeline {
   /** Mask of sprites that produced a non-zero pixel this 8-pixel cycle. */
   private int collisionThisCycle = 0;
 
+  // VICE accumulates sprite_sprite_collisions / sprite_background_collisions
+  // directly inside draw_sprites (vicii-draw-cycle.c:478-484), making them
+  // visible in THE SAME cycle the collision occurs. Mirror that here: OR
+  // into these fields per pixel; caller reads at end of drawCycle8 and
+  // folds into the global $D01E/$D01F mirrors. Reset at top of each
+  // drawCycle8 so they only carry THIS cycle's collisions.
+  public int spriteSpriteCollThisCycle = 0;
+  public int spriteBgCollThisCycle = 0;
+
   // Output of the 8-pixel cycle: per-pixel sprite color index (0 = transparent)
   // and the sprite that "won" priority (-1 if none).
   // Color index: 1 = COL_D025 (MC0), 2 = COL_D027+s (sprite color), 3 = COL_D026 (MC1).
@@ -225,6 +234,8 @@ public final class ViceSpritePipeline {
 
     int candidateBits = getTriggerCandidates(xpos);
     collisionThisCycle = 0;
+    spriteSpriteCollThisCycle = 0;
+    spriteBgCollThisCycle = 0;
 
     // pixel 0
     triggerSprites(xpos + 0, candidateBits);
@@ -441,14 +452,16 @@ public final class ViceSpritePipeline {
         outSprite[i] = as;
       }
       // Per-pixel sprite-sprite collision: 2+ sprites at this pixel.
-      // Port of VICE vicii-draw-cycle.c:427-429.
+      // Port of VICE vicii-draw-cycle.c:484-486.
       if ((collisionMask & (collisionMask - 1)) != 0) {
         outSpriteSpriteColl[i] = collisionMask;
+        spriteSpriteCollThisCycle |= collisionMask;
       }
       // Per-pixel sprite-bg collision: any sprite over foreground.
-      // Port of VICE vicii-draw-cycle.c:421-423.
+      // Port of VICE vicii-draw-cycle.c:478-480.
       if (pixelPri) {
         outSpriteBgColl[i] = collisionMask;
+        spriteBgCollThisCycle |= collisionMask;
       }
       collisionThisCycle |= collisionMask;
     }
