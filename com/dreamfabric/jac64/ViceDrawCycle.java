@@ -599,12 +599,21 @@ public final class ViceDrawCycle {
   public void setDmli(int v) { this.dmli = v; }
 
   /**
-   * Phase 9: sync the border state machine with C64Screen's
-   * borderStatePrev (= last-cycle main_border bit). VICE keeps
-   * borderState live in vicii.main_border; we don't track it
-   * standalone — sync each cycle to keep transitions in lockstep.
+   * Legacy setter — VICE's file-static `border_state` is updated INSIDE
+   * `draw_border8` (at the end of the transition logic) and persists
+   * across cycles. C64Screen used to overwrite it each cycle from
+   * `borderStatePrev`, which clobbered the transition state and caused
+   * JaC64 to paint content 1 cycle earlier than VICE on the left-border
+   * close (and similarly on right-border open). With
+   * `-Djac64.viceInternalBorderState=true` (default), the field is
+   * managed internally by drawBorder8 only — matching VICE.
    */
-  public void setBorderState(int s) { this.borderState = s & 0x01; }
+  public void setBorderState(int s) {
+    if (Boolean.parseBoolean(System.getProperty("jac64.viceInternalBorderState", "true"))) {
+      return; // ignore external overrides; drawBorder8 owns the state
+    }
+    this.borderState = s & 0x01;
+  }
 
   // ===========================================================
   // draw_border8 — port of vicii-draw-cycle.c:574

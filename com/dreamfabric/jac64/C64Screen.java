@@ -901,6 +901,13 @@ public class C64Screen extends ExtChip implements Observer {
     }
     if (vbeam == startLine && den == 1) {
       setVBorder = false;
+      // VICE viciisc/vicii-cycle.c:167-174 check_vborder_top: when
+      // line==startLine and DEN=1, BOTH vborder and set_vborder are
+      // cleared immediately (no deferral to cyc=1). Matches VICE
+      // when DEN gets set mid-line; previously JaC64 only cleared
+      // setVBorder and deferred the commit to the NEXT line's cyc=1
+      // (which would miss because vbeam!=startLine by then).
+      vBorder = false;
     }
     if (TRACE_VIC_CYCLE && prev != setVBorder
         && cpu.cycles >= TRACE_VIC_CYCLE_START
