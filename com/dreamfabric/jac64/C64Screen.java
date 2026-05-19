@@ -382,6 +382,10 @@ public class C64Screen extends ExtChip implements Observer {
   private static final boolean VICE_SHAPED =
       Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"));
 
+  // Sprite xpos offset (see drawCycle8 call site below).
+  private static final int SPR_XPOS_OFFSET =
+      Integer.getInteger("jac64.sprXposOffset", 0);
+
   // VICE viciisc/vicii-draw-cycle.c:703 cycle_flags_pipe: draw_sprites8
   // and draw_graphics8 at cycle N consume flags from cycle N-1 (the pipe
   // value snapshotted at end of previous vicii_cycle()). JaC64 used to
@@ -4128,7 +4132,14 @@ public class C64Screen extends ExtChip implements Observer {
       viceSprPipe.traceLine = vbeam;
       viceSprPipe.traceCyc = vicCycle;
       viceSprPipe.traceClk = cpu.cycles;
-      viceSprPipe.drawCycle8(currentRasterX);
+      // VICE quantizes draw_sprites8 xpos to 8-px boundaries via
+      // cycle_get_xpos(cycle_flags_pipe), which yields Phi1(N)-quantized
+      // for raster_cycle N. JaC64's rasterX(N) = (N-17)*8+32 produces
+      // Phi1(N+1)-quantized — one cycle off. The offset closes that gap.
+      // Default 0 (legacy) so the shift=-8 default keeps working;
+      // override to -8 in combo with -Djac64.viceShift=-16 for the
+      // strictly-VICE-aligned alternative.
+      viceSprPipe.drawCycle8(currentRasterX + SPR_XPOS_OFFSET);
     } else {
       // Legacy current-cycle path (pre-cycle_flags_pipe behaviour).
       viceSprPipe.checkSprDisp = (vicCycle == 57);
@@ -4159,7 +4170,14 @@ public class C64Screen extends ExtChip implements Observer {
       viceSprPipe.traceLine = vbeam;
       viceSprPipe.traceCyc = vicCycle;
       viceSprPipe.traceClk = cpu.cycles;
-      viceSprPipe.drawCycle8(currentRasterX);
+      // VICE quantizes draw_sprites8 xpos to 8-px boundaries via
+      // cycle_get_xpos(cycle_flags_pipe), which yields Phi1(N)-quantized
+      // for raster_cycle N. JaC64's rasterX(N) = (N-17)*8+32 produces
+      // Phi1(N+1)-quantized — one cycle off. The offset closes that gap.
+      // Default 0 (legacy) so the shift=-8 default keeps working;
+      // override to -8 in combo with -Djac64.viceShift=-16 for the
+      // strictly-VICE-aligned alternative.
+      viceSprPipe.drawCycle8(currentRasterX + SPR_XPOS_OFFSET);
     }
 
     // STEP 2 — compute THIS cycle's flags + snapshot for next call.
