@@ -702,6 +702,13 @@ public class C64Screen extends ExtChip implements Observer {
   // pixel 0 of that cycle substituted by light grey (color 15). Mirrors
   // applyD021CurrentCycleColor but matches the sprite's old color.
   private void applySpriteColorCurrentCycle(int oldColor, int newColor) {
+    // Phase 1+ viceShaped pipeline: drawColors8 already commits cregs
+    // for $D02X writes with VICE's 1-cycle delay, so the legacy
+    // retroactive mem[] rewrite competes with the pipeline. Opt out by
+    // default with -Djac64.legacySpriteColorRetroPaint=false (default).
+    if (!Boolean.parseBoolean(System.getProperty("jac64.legacySpriteColorRetroPaint", "false"))) {
+      return;
+    }
     int vicCycle = (int) (cpu.cycles - lastLine);
     // Widened from 16..55 to 14..57 (Phi2 paint cycles + adjacent) per
     // 2026-05-13 refactor: $D027-$D02E sprite color writes can land
@@ -726,6 +733,12 @@ public class C64Screen extends ExtChip implements Observer {
   // Same VICE pipe-delay alignment rationale. Substitutes oldBorderColor
   // → newBorderColor in prev cycle's mem slot.
   private void applyD020CurrentCycleColor(int oldColor, int newColor) {
+    // Phase 1+ viceShaped pipeline handles $D020 via cregs[]. Opt out
+    // of the legacy retroactive mem[] rewrite by default; restore with
+    // -Djac64.legacyBorderRetroPaint=true.
+    if (!Boolean.parseBoolean(System.getProperty("jac64.legacyBorderRetroPaint", "false"))) {
+      return;
+    }
     int vicCycle = (int) (cpu.cycles - lastLine);
     if (vicCycle < 14 || vicCycle > 57 || notVisible) {
       return;
@@ -742,6 +755,13 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   private void applyD021CurrentCycleColor(int oldColor, int newColor) {
+    // Phase 1+ viceShaped pipeline handles $D021 via cregs[]. Opt out
+    // of the legacy retroactive mem[] rewrite by default; restore with
+    // -Djac64.legacyD021RetroPaint=true. (Already gated by !COLOR_DELAY
+    // at the call site too; this is belt-and-suspenders.)
+    if (!Boolean.parseBoolean(System.getProperty("jac64.legacyD021RetroPaint", "false"))) {
+      return;
+    }
     int vicCycle = (int) (cpu.cycles - lastLine);
     if (vicCycle < 14 || vicCycle > 57 || notVisible) {
       return;
