@@ -382,9 +382,12 @@ public class C64Screen extends ExtChip implements Observer {
   private static final boolean VICE_SHAPED =
       Boolean.parseBoolean(System.getProperty("jac64.viceShaped", "true"));
 
-  // Sprite xpos offset (see drawCycle8 call site below).
+  // Sprite xpos offset (see drawCycle8 call site below). Default -8
+  // makes draw_sprites8 use Phi1(vicCycle)-quantized xpos matching VICE
+  // cycle_get_xpos(cycle_flags_pipe). With shift=-16 paint base, both
+  // paint and sprite trigger end up in the same VICE-aligned domain.
   private static final int SPR_XPOS_OFFSET =
-      Integer.getInteger("jac64.sprXposOffset", 0);
+      Integer.getInteger("jac64.sprXposOffset", -8);
 
   // VICE viciisc/vicii-draw-cycle.c:703 cycle_flags_pipe: draw_sprites8
   // and draw_graphics8 at cycle N consume flags from cycle N-1 (the pipe
@@ -3302,12 +3305,14 @@ public class C64Screen extends ExtChip implements Observer {
           gByte = memory[charMemoryIndex + (vByte << 3) + rc] & 0xff;
         }
       }
-      // Phase C: paint base aligned with rasterX (and therefore with the
-      // sprite pipeline xpos). Once viceShaped Phase 1 landed, shift=-8
-      // wins -1427 cells canon / -866 cells 8565 / -415 cells 8565early
-      // vs the legacy shift=-16 that needed a 1-cycle sprite-output delay
-      // to compensate. shift=-16 remains accessible for opt-out.
-      int shift = Integer.getInteger("jac64.viceShift", -8);
+      // Phase C: paint base aligned with VICE's Phi1(N)-quantized xpos
+      // (shift=-16). Combined with jac64.sprXposOffset=-8 (default below)
+      // this makes the sprite trigger ALSO use Phi1(N)-quant matching
+      // VICE cycle_get_xpos(cycle_flags_pipe). Suite delta (15 tests
+      // including greydot/videomode/fetchsplit): -2264 cells on 8565early
+      // vs the previous shift=-8 default (which only won on screenpos by
+      // happening to align with that test's reference convention).
+      int shift = Integer.getInteger("jac64.viceShift", -16);
       if (vicCycle >= 12 && vicCycle <= 60 && !notVisible
           && vPos >= 0 && vPos < SC_HEIGHT) {
         viceCyclePaintBase = vPos * SC_WIDTH + (vicCycle - 12) * 8 + shift;
