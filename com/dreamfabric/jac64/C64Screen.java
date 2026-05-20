@@ -1257,6 +1257,7 @@ public class C64Screen extends ExtChip implements Observer {
       Boolean.getBoolean("jac64.traceD01b");
   private static java.io.PrintStream traceD01bOut = null;
   private static java.io.PrintStream traceSprColOut = null;
+  private static java.io.PrintStream traceSprXOut = null;
   private static final long TRACE_VIC_CYCLE_START =
       Long.getLong("jac64.traceVicCycleStart", 0L);
   private static final long TRACE_VIC_CYCLE_END =
@@ -1883,6 +1884,19 @@ public class C64Screen extends ExtChip implements Observer {
       sprites[sprite].x &= 0x100;
       sprites[sprite].x += data;
       queueSpriteXLsb(sprite, data);
+      if (Boolean.getBoolean("jac64.traceSprX")) {
+        if (traceSprXOut == null) {
+          String p = System.getProperty("jac64.traceSprXFile", "/tmp/jac64_sprx.trace");
+          try {
+            traceSprXOut = new java.io.PrintStream(new java.io.FileOutputStream(p), true);
+          } catch (Exception e) { traceSprXOut = System.err; }
+        }
+        traceSprXOut.println("EV-WrSprX clk=" + cpu.cycles + " rast=$"
+            + Integer.toHexString(vbeam) + " cyc=" + (cpu.cycles - lastLine)
+            + " reg=$" + Integer.toHexString(address & 0xff)
+            + " val=$" + Integer.toHexString(data & 0xff)
+            + " pc=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
+      }
       break;
     case 0xd001:
     case 0xd003:
