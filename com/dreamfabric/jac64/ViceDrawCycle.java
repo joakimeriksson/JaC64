@@ -653,15 +653,22 @@ public final class ViceDrawCycle {
   // ===========================================================
 
   private void drawColors8() {
-    // VICE update_cregs (vicii-draw-cycle.c:618-623):
-    //   last_color_reg = vicii.last_color_reg;
-    //   last_color_value = vicii.last_color_value;
-    //   vicii.last_color_reg = 0xff;
-    thisCycleLastReg = pendingFromCpu;
-    thisCycleLastValue = pendingFromCpuValue;
-    pendingFromCpu = 0xff;
+    // VICE's update_cregs/commit order (vicii-draw-cycle.c:730-799):
+    //   1. AT START of draw_colors8: commit cregs[last_color_reg] from
+    //      the PREVIOUS cycle's snapshot (file-static last_color_reg).
+    //   2. Render pixels using current cregs.
+    //   3. AT END of draw_colors8: update_cregs() snapshots
+    //      vicii.last_color_reg/value into file-static for NEXT cycle,
+    //      then resets vicii.last_color_reg = 0xff.
+    //
+    // Effect: a CPU write at cyc N takes effect on the RENDER at cyc N+1
+    // (1-cycle pipe delay). Previously JaC64 committed pendingFromCpu in
+    // SAME cycle's drawColors8, causing mid-line $D021/$D027 transitions
+    // to appear 1 char too early vs VICE.
+    //
+    // Opt-out: -Djac64.cregsCommitPipe=false (restores immediate commit).
 
-    // Commit (vicii-draw-cycle.c:669-671).
+    // Step 1: commit from previous snapshot (= VICE's commit step).
     if (thisCycleLastReg != 0xff) {
       cregs[thisCycleLastReg] = thisCycleLastValue;
     }
@@ -686,6 +693,22 @@ public final class ViceDrawCycle {
       drawColors8565(7);
     }
     dbufOffset += 8;
+
+    // Step 3: snapshot pendingFromCpu for NEXT cycle's commit.
+    // (VICE's update_cregs at line 799, AFTER draw_colors_8565 calls.)
+    if (Boolean.parseBoolean(System.getProperty("jac64.cregsCommitPipe", "true"))) {
+      thisCycleLastReg = pendingFromCpu;
+      thisCycleLastValue = pendingFromCpuValue;
+      pendingFromCpu = 0xff;
+    } else {
+      // Legacy immediate-commit (pre-fix behavior).
+      thisCycleLastReg = pendingFromCpu;
+      thisCycleLastValue = pendingFromCpuValue;
+      pendingFromCpu = 0xff;
+      if (thisCycleLastReg != 0xff) {
+        cregs[thisCycleLastReg] = thisCycleLastValue;
+      }
+    }
   }
 
   // 6569 PAL: 1-pixel pipe-delayed resolution

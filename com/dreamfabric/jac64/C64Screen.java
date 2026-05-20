@@ -1256,6 +1256,7 @@ public class C64Screen extends ExtChip implements Observer {
   private static final boolean TRACE_D01B =
       Boolean.getBoolean("jac64.traceD01b");
   private static java.io.PrintStream traceD01bOut = null;
+  private static java.io.PrintStream traceSprColOut = null;
   private static final long TRACE_VIC_CYCLE_START =
       Long.getLong("jac64.traceVicCycleStart", 0L);
   private static final long TRACE_VIC_CYCLE_END =
@@ -2269,6 +2270,19 @@ public class C64Screen extends ExtChip implements Observer {
       } else {
         sprites[spriteNum].color[2] = newSprColor;
         sprites[spriteNum].col = data & 15;
+      }
+      if (Boolean.getBoolean("jac64.traceSprCol")) {
+        if (traceSprColOut == null) {
+          String p = System.getProperty("jac64.traceSprColFile", "/tmp/jac64_sprcol.trace");
+          try {
+            traceSprColOut = new java.io.PrintStream(new java.io.FileOutputStream(p), true);
+          } catch (Exception e) { traceSprColOut = System.err; }
+        }
+        traceSprColOut.println("EV-WrSprCol clk=" + cpu.cycles + " rast=$"
+            + Integer.toHexString(vbeam) + " cyc=" + (cpu.cycles - lastLine)
+            + " reg=$" + Integer.toHexString(address & 0xff)
+            + " val=$" + Integer.toHexString(data & 0xff)
+            + " pc=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
       }
       break;
     }
