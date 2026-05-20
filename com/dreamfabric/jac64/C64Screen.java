@@ -1028,8 +1028,13 @@ public class C64Screen extends ExtChip implements Observer {
 
   private void updateVicStateVice(int vicCycle) {
     if (Boolean.getBoolean("jac64.traceBadFsm")
-        && vbeam >= 48 && vbeam <= 52 && (vicCycle == 13 || vicCycle == 57)
-        && cpu.cycles >= 7040000 && cpu.cycles <= 7041000) {
+        && Integer.getInteger("jac64.traceBadFsmRastLo", 48) <= vbeam
+        && vbeam <= Integer.getInteger("jac64.traceBadFsmRastHi", 52)
+        && (vicCycle == 13 || vicCycle == 57
+            || (vicCycle >= Integer.getInteger("jac64.traceBadFsmCycLo", 13)
+                && vicCycle <= Integer.getInteger("jac64.traceBadFsmCycHi", 57)))
+        && cpu.cycles >= Long.getLong("jac64.traceBadFsmClkLo", 7040000L)
+        && cpu.cycles <= Long.getLong("jac64.traceBadFsmClkHi", 7041000L)) {
       System.err.println("BADFSM-PRE clk=" + cpu.cycles + " vbeam=" + vbeam + " cyc=" + vicCycle
           + " vc=" + vc + " vmli=" + vmli + " rc=" + rc + " vcBase=" + vcBase
           + " badLine=" + badLine + " gfxVisible=" + gfxVisible
