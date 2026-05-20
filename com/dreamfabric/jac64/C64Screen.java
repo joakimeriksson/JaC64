@@ -1027,6 +1027,15 @@ public class C64Screen extends ExtChip implements Observer {
           System.getProperty("jac64.viceBadlineFsm", "true"));
 
   private void updateVicStateVice(int vicCycle) {
+    if (Boolean.getBoolean("jac64.traceBadFsm")
+        && vbeam >= 48 && vbeam <= 52 && (vicCycle == 13 || vicCycle == 57)
+        && cpu.cycles >= 7040000 && cpu.cycles <= 7041000) {
+      System.err.println("BADFSM-PRE clk=" + cpu.cycles + " vbeam=" + vbeam + " cyc=" + vicCycle
+          + " vc=" + vc + " vmli=" + vmli + " rc=" + rc + " vcBase=" + vcBase
+          + " badLine=" + badLine + " gfxVisible=" + gfxVisible
+          + " displayEnabled=" + displayEnabled + " vScroll=" + vScroll
+          + " control1=$" + Integer.toHexString(control1));
+    }
     // VICE vicii-cycle.c:593-602 — DEN (allow_bad_lines) latch at
     // FIRST_DMA_LINE (48). VICE only latches when going FALSE→TRUE
     // (and clears to FALSE on raster_line=0 / FINAL_DMA_LINE+1, but
@@ -1035,6 +1044,18 @@ public class C64Screen extends ExtChip implements Observer {
     // to preserve sprite-test behavior that depends on DEN=0 paths.
     if (vbeam == 0x30 && vicCycle == 0) {
       displayEnabled = (control1 & 0x10) != 0;
+    }
+
+    // VICE vicii_fetch_graphics vc++: runs at FetchG cycles (raster_cycle
+    // 15..54 per chip-model.c) when !idle_state. VICE's Phi1 fetch runs
+    // BEFORE check_badline within vicii_cycle (vicii-cycle.c:428 vs 604),
+    // so vc++ uses the idle_state from END of the PREVIOUS cycle. Doing
+    // vc++ AFTER check_badline (the legacy JaC64 order) made JaC64
+    // increment vc one cycle earlier than VICE, accumulating off-by-one
+    // vcBase/rc state by the time the screenpos test reaches its first
+    // visible line (line 51).
+    if (vicCycle >= 15 && vicCycle <= 54 && gfxVisible) {
+      vc = (vc + 1) & 0x3ff;
     }
 
     // VICE vicii-cycle.c:605-607 — check_badline every cycle while
@@ -1057,15 +1078,6 @@ public class C64Screen extends ExtChip implements Observer {
       vc = vcBase;
       vmli = 0;
       if (badLine) rc = 0;
-    }
-
-    // VICE vicii_fetch_graphics vc++: runs at FetchG cycles (raster_cycle
-    // 15..54 per chip-model.c) when !idle_state (= gfxVisible). Moved
-    // from drawGraphics. vmli stays in drawGraphics for now — moving
-    // it caused +2450-cell regressions because legacy paths read vmli
-    // mid-cycle assuming drawGraphics has incremented it.
-    if (vicCycle >= 15 && vicCycle <= 54 && gfxVisible) {
-      vc = (vc + 1) & 0x3ff;
     }
 
     // VICE vicii-cycle.c:629-640 — update_rc at VICII_PAL_CYCLE(58) =
