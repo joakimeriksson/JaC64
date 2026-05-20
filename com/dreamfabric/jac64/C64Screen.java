@@ -1253,6 +1253,9 @@ public class C64Screen extends ExtChip implements Observer {
   // (vicii-chip-model.c:111). See docs/vic-ii/CYCLE_TRACE.md.
   private static final boolean TRACE_VIC_CYCLE =
       Boolean.getBoolean("jac64.traceVicCycle");
+  private static final boolean TRACE_D01B =
+      Boolean.getBoolean("jac64.traceD01b");
+  private static java.io.PrintStream traceD01bOut = null;
   private static final long TRACE_VIC_CYCLE_START =
       Long.getLong("jac64.traceVicCycleStart", 0L);
   private static final long TRACE_VIC_CYCLE_END =
@@ -2086,6 +2089,18 @@ public class C64Screen extends ExtChip implements Observer {
       for (int i = 0, m = 1, n = 8; i < n; i++, m = m << 1) {
         sprites[i].priority = (data & m) != 0;
       }
+      if (TRACE_D01B) {
+        if (traceD01bOut == null) {
+          String p = System.getProperty("jac64.traceD01bFile", "/tmp/jac64_d01b.trace");
+          try {
+            traceD01bOut = new java.io.PrintStream(new java.io.FileOutputStream(p), true);
+          } catch (Exception e) { traceD01bOut = System.err; }
+        }
+        traceD01bOut.println("EV-WrD01B clk=" + cpu.cycles + " rast=$"
+            + Integer.toHexString(vbeam) + " cyc=" + (cpu.cycles - lastLine)
+            + " val=$" + Integer.toHexString(data & 0xff)
+            + " pc=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
+      }
       break;
     case 0xd01c: {
       int oldMul = sprMul;
@@ -2168,6 +2183,18 @@ public class C64Screen extends ExtChip implements Observer {
             + " dCyc=" + deltaInLine);
         lastD021Cycles = cpu.cycles;
         lastD021InLine = inLine;
+      }
+      if (TRACE_D01B) {  // reuse same flag for D021 trace
+        if (traceD01bOut == null) {
+          String p = System.getProperty("jac64.traceD01bFile", "/tmp/jac64_d01b.trace");
+          try {
+            traceD01bOut = new java.io.PrintStream(new java.io.FileOutputStream(p), true);
+          } catch (Exception e) { traceD01bOut = System.err; }
+        }
+        traceD01bOut.println("EV-WrD021 clk=" + cpu.cycles + " rast=$"
+            + Integer.toHexString(vbeam) + " cyc=" + (cpu.cycles - lastLine)
+            + " val=$" + Integer.toHexString(data & 0xff)
+            + " pc=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
       }
       break;
     case 0xd022:
