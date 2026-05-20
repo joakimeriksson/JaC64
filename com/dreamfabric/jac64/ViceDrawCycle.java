@@ -734,16 +734,45 @@ public final class ViceDrawCycle {
   // gates to write-cycles only.
   private void drawColors8565(int i) {
     int code = pixelBuffer[i];
+    boolean greyDot = false;
     if (i == 0 && code == thisCycleLastReg && code >= 0x20 && code <= 0x2e) {
       pixelBuffer[i] = 0x0f;  // grey-dot
+      greyDot = true;
     } else if (code >= 0x20 && code <= 0x2e) {
       pixelBuffer[i] = cregs[code];
+    }
+    if (greyDotTrace != null && i == 0 && cycleClk >= GREYDOT_TRACE_LO
+        && cycleClk <= GREYDOT_TRACE_HI) {
+      greyDotTrace.println("GREYDOT clk=" + cycleClk
+          + " rast=$" + Integer.toHexString(cycleVbeam)
+          + " cyc=" + cycleVicCycle
+          + " code=$" + Integer.toHexString(code & 0xff)
+          + " lastReg=$" + Integer.toHexString(thisCycleLastReg & 0xff)
+          + " fired=" + greyDot);
     }
     emittedColors[i] = pixelBuffer[i];
     if (sink != null) {
       sink.writePixel(dbufOffset + i, pixelBuffer[i]);
     }
     pixelBuffer[i] = renderBuffer[i];
+  }
+
+  // Greydot diagnostic trace (Plan A 2026-05-17).
+  public long cycleClk;
+  public int cycleVbeam;
+  public int cycleVicCycle;
+  private static java.io.PrintStream greyDotTrace = null;
+  private static final long GREYDOT_TRACE_LO =
+      Long.getLong("jac64.greyDotTraceLo", 0L);
+  private static final long GREYDOT_TRACE_HI =
+      Long.getLong("jac64.greyDotTraceHi", Long.MAX_VALUE);
+  static {
+    if (Boolean.getBoolean("jac64.greyDotTrace")) {
+      String p = System.getProperty("jac64.greyDotTraceFile", "/tmp/jac64_greydot.trace");
+      try {
+        greyDotTrace = new java.io.PrintStream(new java.io.FileOutputStream(p), true);
+      } catch (Exception e) { greyDotTrace = System.err; }
+    }
   }
 
   // ===========================================================

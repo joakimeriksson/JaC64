@@ -3467,6 +3467,9 @@ public class C64Screen extends ExtChip implements Observer {
       //   use fresh priBuffer) -> setSpriteOutput current cycle -> Part2
       //   (composite + border + colors).
       if (VICE_SHAPED) {
+        viceDrawCycle.cycleClk = cpu.cycles;
+        viceDrawCycle.cycleVbeam = vbeam;
+        viceDrawCycle.cycleVicCycle = vicCycle;
         viceDrawCycle.drawCyclePart1();
         if (useViceSprPipe) {
           viceDrawCycle.copyPriBufferInto(viceSprPipe.priBuffer);
