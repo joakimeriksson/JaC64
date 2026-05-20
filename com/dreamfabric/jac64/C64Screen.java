@@ -3405,7 +3405,19 @@ public class C64Screen extends ExtChip implements Observer {
       // borderStatePrev (captured at end of prev cycle).
       viceDrawCycle.setBorderState(borderStatePrev ? 1 : 0);
       viceDrawCycle.setIdleState(!gfxVisible);
-      viceDrawCycle.setGbuf(gByte);
+      // VICE viciisc/vicii-fetch.c: vicii_fetch_idle_gfx() reads from
+      // $3FFF when in idle_state. This routes content pixels through
+      // COL_CBUF → cregs[0] = 0 = BLACK (ss-pri test relies on this:
+      // its rast1 $D011=$1b write misses the FIRST_DMA_LINE DEN latch,
+      // so abl=0 throughout the frame and bg renders BLACK not $D021).
+      // Opt-out: -Djac64.idleGfxFetch=false.
+      boolean idleFetch = !gfxVisible
+          && Boolean.parseBoolean(System.getProperty("jac64.idleGfxFetch", "true"));
+      if (idleFetch) {
+        viceDrawCycle.setGbuf(memory[0x3fff] & 0xff);
+      } else {
+        viceDrawCycle.setGbuf(gByte);
+      }
       viceDrawCycle.setRegs0x11(control1);
       viceDrawCycle.setRegs0x16(control2);
       viceDrawCycle.setVbufCbuf(vicCharCache, vicColCache);
