@@ -547,6 +547,21 @@ public class TestRaster {
                             System.err.println("WARN: failed to load dump: " + e);
                         }
                     }
+                    {
+                        int[] mem = cpu.getMemory();
+                        String dump = System.getProperty("jac64.dumpMem");
+                        if (dump != null) {
+                            String[] parts = dump.split(",");
+                            int addr = Integer.decode(parts[0]);
+                            int len = parts.length > 1 ? Integer.parseInt(parts[1]) : 16;
+                            StringBuilder sb = new StringBuilder();
+                            sb.append("DUMP @ SYS-jump $").append(Integer.toHexString(addr)).append(":");
+                            for (int i = 0; i < len; i++) {
+                                sb.append(" ").append(String.format("%02x", mem[(addr + i) & 0xFFFF]));
+                            }
+                            System.out.println(sb.toString());
+                        }
+                    }
                     cpu.jumpToSubroutine(sysAddress);
                     cpu.setPause(false);
                 } else {

@@ -193,9 +193,26 @@ public class CPU extends MOS6510Core {
     return val;
   }
 
+  private static final int TRAP_READ_ADR = Integer.getInteger("jac64.trapReadAdr", -1);
+  private static final long TRAP_READ_CLK_LO = Long.getLong("jac64.trapReadClkLo", 0L);
+  private static final long TRAP_READ_CLK_HI = Long.getLong("jac64.trapReadClkHi", Long.MAX_VALUE);
+
   // Pure memory read at a given clock value, no side effects on cycles or
   // VIC scheduling. Mirrors VICE's LOAD/access-at-clk pattern.
   private int readMemoryAt(int adr, long forCycles) {
+    if (TRAP_READ_ADR >= 0 && adr == TRAP_READ_ADR
+        && forCycles >= TRAP_READ_CLK_LO && forCycles <= TRAP_READ_CLK_HI) {
+      int val = readMemoryAtNoTrap(adr, forCycles);
+      System.err.println("TRAP-RD adr=$" + Integer.toHexString(adr)
+          + " val=$" + Integer.toHexString(val & 0xff)
+          + " clk=" + forCycles
+          + " pc=$" + Integer.toHexString(pc & 0xffff));
+      return val;
+    }
+    return readMemoryAtNoTrap(adr, forCycles);
+  }
+
+  private int readMemoryAtNoTrap(int adr, long forCycles) {
     if ((romFlag & adr) == romFlag) {
       return memory[rindex = adr | 0x10000];
     } else if ((adr & 0xf000) == 0xd000) {
