@@ -606,6 +606,7 @@ public class TestRaster {
             int d020 = readIo(0xd020) & 0x0f;
             int d7ff = cpu.getMemory()[0xd7ff] & 0xff;
             System.out.println("  Frame " + i + " captured (t=" + i + "s)"
+                + " clk=" + cpu.cycles
                 + " $D020=$" + Integer.toHexString(d020)
                 + " $D7FF=$" + Integer.toHexString(d7ff));
             if (dumpScreen) {

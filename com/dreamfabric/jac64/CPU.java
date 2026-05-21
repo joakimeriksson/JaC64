@@ -73,6 +73,7 @@ public class CPU extends MOS6510Core {
   public CPU(IMonitor m, String cb, Loader loader) {
     super(m, cb);
     memory = new int[0x20000];
+    initRamPattern();
     this.loader = loader;
     if (EMULATE_1541) {
       IMonitor d = new DefaultIMon(); // new Debugger();
@@ -285,6 +286,17 @@ public class CPU extends MOS6510Core {
             + " val=$" + Integer.toHexString(data & 0xff)
             + " clk=" + cycles
             + " pc=$" + Integer.toHexString(pc & 0xffff));
+      }
+      int trapAdr = Integer.getInteger("jac64.trapWriteAdr", -1);
+      if (trapAdr >= 0 && adr == trapAdr) {
+        long lo = Long.getLong("jac64.trapWriteClkLo", 0L);
+        long hi = Long.getLong("jac64.trapWriteClkHi", Long.MAX_VALUE);
+        if (cycles >= lo && cycles <= hi) {
+          System.err.println("TRAP-WR adr=$" + Integer.toHexString(adr)
+              + " val=$" + Integer.toHexString(data & 0xff)
+              + " clk=" + cycles
+              + " pc=$" + Integer.toHexString(pc & 0xffff));
+        }
       }
     }
   }
@@ -512,6 +524,23 @@ public class CPU extends MOS6510Core {
       if (tries == 0) {
         System.out.println("Buffer still full: " + memory[198]);
       }
+    }
+  }
+
+  // Port of VICE viciisc/ram.c mainramparam default:
+  //   start_value = 0xFF, value_invert = 128.
+  // → 128 bytes $FF, 128 bytes $00, repeating. memory[$3FFF] = $00 at boot.
+  // Aligns JaC64's initial RAM state with VICE x64sc so BASIC's
+  // RAM-size detection writes the same markers in the same places.
+  // Suite-neutral (verified 8565early total unchanged with flag on/off);
+  // worth keeping for general VICE-faithfulness.
+  // Opt out with -Djac64.viceRamInit=false to restore zero-init.
+  private void initRamPattern() {
+    if (!Boolean.parseBoolean(System.getProperty("jac64.viceRamInit", "true"))) {
+      return;
+    }
+    for (int i = 0; i < 0x10000; i++) {
+      memory[i] = ((i >> 7) & 1) == 0 ? 0xFF : 0x00;
     }
   }
 
