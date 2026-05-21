@@ -530,20 +530,30 @@ public class CPU extends MOS6510Core {
     }
   }
 
-  // Port of VICE viciisc/ram.c mainramparam default:
-  //   start_value = 0xFF, value_invert = 128.
-  // → 128 bytes $FF, 128 bytes $00, repeating. memory[$3FFF] = $00 at boot.
-  // Aligns JaC64's initial RAM state with VICE x64sc so BASIC's
-  // RAM-size detection writes the same markers in the same places.
-  // Suite-neutral (verified 8565early total unchanged with flag on/off);
-  // worth keeping for general VICE-faithfulness.
-  // Opt out with -Djac64.viceRamInit=false to restore zero-init.
+  // Port of VICE C64-specific RAM init pattern (src/ram.c:170-178):
+  //   start_value = 0, value_invert = 4, value_offset = 2,
+  //   pattern_invert = 16384, pattern_invert_value = 255.
+  // Formula per ram_init_with_pattern() (src/ram.c:297-335):
+  //   j = (((offset + value_offset) / value_invert) & 1) ? 0xFF : 0x00
+  //   k = ((offset / pattern_invert) & 1) ? pattern_invert_value : 0x00
+  //   value = start_value ^ j ^ k
+  // → 8-byte repeating pattern (00 00 FF FF FF FF 00 00) for the first
+  //   16384 bytes, inverted (FF FF 00 00 00 00 FF FF) for the next 16384.
+  // Confirmed against actual VICE x64sc dump.
+  // Opt out with -Djac64.viceRamInit=false.
   private void initRamPattern() {
     if (!Boolean.parseBoolean(System.getProperty("jac64.viceRamInit", "true"))) {
       return;
     }
+    final int START_VALUE = 0;
+    final int VALUE_INVERT = 4;
+    final int VALUE_OFFSET = 2;
+    final int PATTERN_INVERT = 16384;
+    final int PATTERN_INVERT_VALUE = 0xFF;
     for (int i = 0; i < 0x10000; i++) {
-      memory[i] = ((i >> 7) & 1) == 0 ? 0xFF : 0x00;
+      int j = ((((i + VALUE_OFFSET) / VALUE_INVERT) & 1) != 0) ? 0xFF : 0x00;
+      int k = (((i / PATTERN_INVERT) & 1) != 0) ? PATTERN_INVERT_VALUE : 0x00;
+      memory[i] = START_VALUE ^ j ^ k;
     }
   }
 
