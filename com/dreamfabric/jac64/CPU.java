@@ -207,23 +207,26 @@ public class CPU extends MOS6510Core {
         return memory[rindex = adr];
       }
     } else if (adr == 0x0001) {
-      // CPU port read with pullup semantics (matches VICE
-      // c64/c64pla.c:55 + c64memsc.c:zero_read).
-      // Bit 4 (CASSETTE_SENSE) and bits 6-7 are INPUT pins on the
-      // standard C64; when DDR ($0000) bit is 0 they read external.
-      // Pullups on bits 4-7 force them HIGH when nothing is driving.
-      // Without this, KERNAL's IRQ handler at $EA61-$EA65 (LDA $01;
-      // AND #$10; BEQ ...) takes the wrong branch in JaC64 and the
-      // entire boot/autostart timing diverges from VICE.
-      // VICE's `pport.data_read = (data | ~dir) & (data_out | pullup)`
-      // — for our purposes (no cassette button pressed): for each bit
-      // where DDR=0 (input), the bit reads 1 unless explicitly cleared.
+      // CPU port read with VICE-faithful pullup mask.
+      // VICE c64/c64memsc.c:235 → c64pla.c:55:
+      //   pport.data_read = (data | ~dir) & (data_out | pullup)
+      //   pullup = 0x17 on standard C64 (bits 0,1,2,4 pulled up).
+      // Bits 3,5,6,7 are NOT pulled up — for input bits at those
+      // positions, the read returns data_out (latched previously-
+      // driven value), which is 0 from a cold-boot floating-input.
+      // Previously this code used pullup=0xFF, which forced bits 6,7
+      // to read HIGH and caused Krestage 3's frame-rate INC $01 to
+      // produce $F8 instead of $38 → ROM bank config drift → demo
+      // state diverged from VICE over time (visible by clk 50M as
+      // garbled scene rendering).
       int ddr = memory[0] & 0xff;
       int data = memory[1] & 0xff;
       // For OUTPUT bits (DDR=1): return the data bit value as written.
-      // For INPUT bits (DDR=0): return 1 (pullup default). The cassette
-      // button is not pressed in the headless TestRaster harness.
-      int result = (data & ddr) | (~ddr & 0xff);
+      // For INPUT bits (DDR=0): return the pullup mask bit (0x17 default,
+      // matches VICE c64/c64mem.c:222). No data_out latching modeled —
+      // headless harness has no tape sense / motor signals.
+      final int PULLUP = 0x17;
+      int result = (data & ddr) | (~ddr & PULLUP);
       rindex = adr;
       return result;
     } else {
