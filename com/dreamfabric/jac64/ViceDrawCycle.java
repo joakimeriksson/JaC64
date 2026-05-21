@@ -141,7 +141,7 @@ public final class ViceDrawCycle {
       0x00668500, // cyc 52
       0x00678500, // cyc 53
       0x00688500, // cyc 54
-      0x02290401, // cyc 55
+      0x02690401, // cyc 55 (added VIS_EN per chip-model Phi1(56) Vis(39))
       0x522a0001, // cyc 56
       0x602b0003, // cyc 57
       0x04ac0603, // cyc 58
