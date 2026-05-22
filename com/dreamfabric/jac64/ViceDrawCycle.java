@@ -306,15 +306,25 @@ public final class ViceDrawCycle {
   // MAIN ENTRY: drawCycle — port of vicii_draw_cycle (line 705)
   // ===========================================================
 
+  // VICE viciisc/vicii-draw-cycle.c:849 passes cycle_flags_pipe (=
+  // PREVIOUS cycle's flags) to draw_graphics8 and draw_sprites8.
+  // The pipe-delayed vis_en gates whether THIS cycle's gbuf is loaded
+  // into the gfx-emit pipe, so the gfx that emits at cycle N reflects
+  // visibility at cycle N-1. JaC64 was using current-cycle flags,
+  // causing the gbuf to load 1 cycle early at left-edge transitions.
+  // Suite delta on 8565 variant: modesplit 534→384 (-150) with
+  // screenpos +5. Net -145 cells.
+  // Opt out: -Djac64.viceFlagsPipe=false.
+  private static final boolean USE_FLAGS_PIPE =
+      Boolean.parseBoolean(System.getProperty("jac64.viceFlagsPipe", "true"));
+
   public void drawCycle() {
     if (rasterCycle == 1) {
       dbufOffset = 0;
     }
     int offsBefore = dbufOffset;  // for trace emission
-    // BUGFIX: VICE passes the current cycle's flags directly. The legacy
-    // cycleFlagsPipe introduced a spurious 1-cycle delay that pushed the
-    // first g-fetch byte into gbufReg one cycle after VICE on every line.
-    drawGraphics8(cycleFlags);
+    int flagsForEmit = USE_FLAGS_PIPE ? cycleFlagsPipe : cycleFlags;
+    drawGraphics8(flagsForEmit);
     drawSprites8();
     drawBorder8();
     drawColors8();
@@ -332,7 +342,8 @@ public final class ViceDrawCycle {
       dbufOffset = 0;
     }
     splitOffsBefore = dbufOffset;
-    drawGraphics8(cycleFlags);
+    int flagsForEmit = USE_FLAGS_PIPE ? cycleFlagsPipe : cycleFlags;
+    drawGraphics8(flagsForEmit);
   }
   public void drawCyclePart2() {
     drawSprites8();
