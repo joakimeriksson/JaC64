@@ -3428,12 +3428,17 @@ public class C64Screen extends ExtChip implements Observer {
       // color_latency: true = 6569 PAL (1-pixel pipe via pixel_buffer
       // ring, no grey-dot); false = 8565 PAL HMOS (immediate cregs
       // commit + grey-dot at pixel 0).
-      // Default ON (6569) because the 1-pixel pipe matches many tests.
-      // Override to false via -Djac64.colorLatency=false to use 8565
-      // path which matches *-8565early.png references better on
-      // mid-line $D02X transitions (after cregs pipe fix).
-      viceDrawCycle.setColorLatency(
-          Boolean.parseBoolean(System.getProperty("jac64.colorLatency", "true")));
+      // Default OFF (8565) — matches current VICE x64sc (MOS8565 default
+      // chip model). On 8-test suite vs `-8565` refs: 1387 cells with
+      // false vs 2830 with true (-1443 cells). The older `-8565early`
+      // refs predate VICE's grey-dot fixup; see
+      // `project_greydot_ref_outdated.md` in memory for the analysis.
+      // Override to true via -Djac64.colorLatency=true for legacy
+      // 6569-style behaviour.
+      boolean colorLatencyFlag = Boolean.parseBoolean(
+          System.getProperty("jac64.colorLatency", "false"));
+      viceDrawCycle.setColorLatency(colorLatencyFlag);
+      viceSprPipe.colorLatency = colorLatencyFlag;
       boolean mainBorderNow = paintBorder || borderClosed() || vBorderOnly();
       viceDrawCycle.setMainBorder(mainBorderNow);
       viceDrawCycle.setVborder(vBorder ? 1 : 0);

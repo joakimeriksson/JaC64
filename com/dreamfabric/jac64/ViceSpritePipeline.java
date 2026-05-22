@@ -489,6 +489,8 @@ public final class ViceSpritePipeline {
     spriteMcBits = nextMcBits;
   }
 
-  /** True = 6569 (color_latency=1), false = 8565 (color_latency=0). */
-  public boolean colorLatency = true;
+  /** True = 6569 (color_latency=1), false = 8565 (color_latency=0).
+   *  Default false matches current VICE x64sc (MOS8565). C64Screen
+   *  syncs this from -Djac64.colorLatency at per-cycle hand-off. */
+  public boolean colorLatency = false;
 }
