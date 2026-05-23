@@ -1,5 +1,48 @@
+diff --git a/vice/src/6510core.c b/vice/src/6510core.c
+index c12238d..10eb093 100644
+--- a/vice/src/6510core.c
++++ b/vice/src/6510core.c
+@@ -471,6 +471,27 @@ do {                                                                   \
+                     TRACE_IRQ(CLK - IRQ_CYCLES + 2);                                           \
+                     interrupt_ack_irq(CPU_INT_STATUS);                                         \
+                     handler_vector = 0xfffe;                                                   \
++                    /* JaC64 trace — IRQ entry timing. */                                      \
++                    if (CALLER == e_comp_space) {                                              \
++                        static FILE *jac64_irq = NULL;                                         \
++                        static int jac64_irq_init = 0;                                         \
++                        if (!jac64_irq_init) {                                                 \
++                            jac64_irq_init = 1;                                                \
++                            const char *p = getenv("JAC64_TRACE_FILE_IRQ");                    \
++                            fprintf(stderr, "JAC64 IRQ trace init: env=%s\n",                  \
++                                p ? p : "(null)");                                             \
++                            if (p) jac64_irq = fopen(p, "w");                                  \
++                            if (p && !jac64_irq) fprintf(stderr,                               \
++                                "JAC64 IRQ trace: failed to open %s\n", p);                    \
++                        }                                                                      \
++                        if (jac64_irq) {                                                       \
++                            fprintf(jac64_irq,                                                 \
++                                "EV-IrqService clk=%llu pc_pushed=$%x\n",                      \
++                                (unsigned long long)(CLK - IRQ_CYCLES + 2),                    \
++                                (unsigned)reg_pc);                                             \
++                            fflush(jac64_irq);                                                 \
++                        }                                                                      \
++                    }                                                                          \
+                 }                                                                              \
+                 addr = LOAD_ADDR(handler_vector);                                              \
+                 CHECK_PROFILE_INTERRUPT(addr, handler_vector);                                 \
+@@ -3374,6 +3395,10 @@ trap_skipped:
+                 break;
+ 
+             case 0xe6:          /* INC $nn */
++                if (getenv("JAC64_TRAP_INC_ZP")) {
++                    fprintf(stderr, "INC-OP-e6 zp=$%02x clk=%llu pc=$%x\n",
++                        (unsigned)p1, (unsigned long long)CLK, (unsigned)reg_pc);
++                }
+                 INC(p1, 2, LOAD_ZERO, STORE_ABS, DUMMY_STORE_ABS_RMW);
+                 break;
+ 
 diff --git a/vice/src/6510dtvcore.c b/vice/src/6510dtvcore.c
-index d00e6ba..e40dd63 100644
+index d00e6ba..34c3cc5 100644
 --- a/vice/src/6510dtvcore.c
 +++ b/vice/src/6510dtvcore.c
 @@ -389,6 +389,25 @@
@@ -28,17 +71,24 @@ index d00e6ba..e40dd63 100644
                  TRACE_IRQ();                                                   \
                  if (monitor_mask[CALLER] & (MI_STEP)) {                        \
                      monitor_check_icount_interrupt();                          \
-@@ -1801,6 +1820,9 @@ static const uint8_t fetch_tab[] = {
+@@ -1801,6 +1820,16 @@ static const uint8_t fetch_tab[] = {
           */
          {
              static uint8_t lastop;
-+            /* JaC64 PC cycle trace: capture pre-instruction state */
++            /* JaC64 PC cycle trace: capture pre-instruction state.
++             * CRITICAL: capture clk AND raster state together, BEFORE
++             * FETCH_OPCODE runs CLK_INCs that would advance raster_cycle.
++             */
++            extern unsigned int vicii_get_raster_line(void);
++            extern unsigned int vicii_get_raster_cycle(void);
 +            CLOCK jac64_pre_clk = CLK;
 +            unsigned int jac64_pre_pc = reg_pc;
++            unsigned int jac64_pre_rast = vicii_get_raster_line();
++            unsigned int jac64_pre_cyc = vicii_get_raster_cycle();
              FETCH_OPCODE(opcode);
              if (!CPU_IS_JAMMED) {
                  /* remember current opcode */
-@@ -1809,6 +1831,25 @@ static const uint8_t fetch_tab[] = {
+@@ -1809,6 +1838,66 @@ static const uint8_t fetch_tab[] = {
                  /* set opcode that made the cpu jam */
                  SET_OPCODE(lastop);
              }
@@ -51,21 +101,154 @@ index d00e6ba..e40dd63 100644
 +                    const char *path = getenv("JAC64_PC_TRACE_FILE");
 +                    if (path) jac64_pc_trace = fopen(path, "w");
 +                }
-+                if (jac64_pc_trace) {
++                if (jac64_pc_trace && CALLER == e_comp_space) {
++                    /* Phase J: full CPU state per instruction for diff
++                     * against JaC64. I=N is monotonic instruction
++                     * sequence number; aligning by I=N matches the
++                     * same logical instruction regardless of clk drift.
++                     * Gated by CALLER==e_comp_space so drive CPU
++                     * (without vicii) doesn't trip this path. */
++                    static unsigned long long jac64_instr_counter = 0;
++                    extern int maincpu_ba_low_flags_get(void);
 +                    fprintf(jac64_pc_trace,
-+                        "PC=$%x op=$%x clk=%llu\n",
++                        "I=%llu PC=$%x op=$%x clk=%llu "
++                        "A=$%x X=$%x Y=$%x SP=$%x P=$%x "
++                        "rast=%u cyc=%u ba=%u\n",
++                        jac64_instr_counter++,
 +                        jac64_pre_pc & 0xffff,
 +                        lastop & 0xff,
-+                        (unsigned long long)jac64_pre_clk);
-+                    /* Note: we log entry; cycles consumed = next entry's clk - this clk */
++                        (unsigned long long)jac64_pre_clk,
++                        reg_a_read & 0xff, reg_x & 0xff, reg_y & 0xff,
++                        reg_sp & 0xff, LOCAL_STATUS() & 0xff,
++                        jac64_pre_rast,
++                        jac64_pre_cyc,
++                        maincpu_ba_low_flags_get() ? 1u : 0u);
 +                    fflush(jac64_pc_trace);
++                }
++                /* Phase K iter#5: dump screen+color RAM at SYS-entry to
++                 * the test program. Triggers on first occurrence of
++                 * PC=$0815 (canonical entry point for VICE-testprogs).
++                 * Writes 0x800 bytes: 0x400 screen RAM ($0400-$07FF)
++                 * followed by 0x400 color RAM ($D800-$DBFF, only low 4
++                 * bits are valid per real hardware). JaC64 replicates
++                 * this pattern in TestRaster.
++                 */
++                if (CALLER == e_comp_space
++                        && (jac64_pre_pc & 0xffff) == 0x0815) {
++                    static int dumped = 0;
++                    if (!dumped) {
++                        const char *dpath = getenv("JAC64_SCREEN_DUMP_FILE");
++                        if (dpath) {
++                            extern uint8_t mem_ram[];
++                            extern uint8_t *mem_color_ram_cpu;
++                            FILE *df = fopen(dpath, "wb");
++                            if (df) {
++                                fwrite(&mem_ram[0x0400], 1, 0x0400, df);
++                                fwrite(mem_color_ram_cpu, 1, 0x0400, df);
++                                fclose(df);
++                            }
++                        }
++                        dumped = 1;
++                    }
 +                }
 +            }
          }
  
  #ifdef FEATURE_CPUMEMHISTORY
+@@ -2708,6 +2797,10 @@ trap_skipped:
+                 break;
+ 
+             case 0xe6:          /* INC $nn */
++                if (getenv("JAC64_TRAP_INC_ZP")) {
++                    fprintf(stderr, "INC-OP-e6 zp=$%02x clk=%llu pc=$%x\n",
++                        (unsigned)p1, (unsigned long long)CLK, (unsigned)reg_pc);
++                }
+                 INC(2, GET_ZERO, SET_ZERO_RMW);
+                 break;
+ 
+diff --git a/vice/src/c64/c64cpusc.c b/vice/src/c64/c64cpusc.c
+index 5971a3c..a0131a7 100644
+--- a/vice/src/c64/c64cpusc.c
++++ b/vice/src/c64/c64cpusc.c
+@@ -44,6 +44,12 @@ CLOCK maincpu_clk_limit = 0L;
+ /* Mask: BA low */
+ int maincpu_ba_low_flags = 0;
+ 
++/* Phase J trace accessor — used by 6510dtvcore.c per-instruction trace. */
++int maincpu_ba_low_flags_get(void)
++{
++    return maincpu_ba_low_flags;
++}
++
+ #define CLK_INC()                                  \
+     interrupt_delay();                             \
+     maincpu_clk++;                                 \
+diff --git a/vice/src/c64/c64mem.c b/vice/src/c64/c64mem.c
+index 31f4f3e..aad74af 100644
+--- a/vice/src/c64/c64mem.c
++++ b/vice/src/c64/c64mem.c
+@@ -361,6 +361,29 @@ void zero_store_dma(uint16_t addr, uint8_t value)
+     } else {
+         mem_ram[addr] = value;
+     }
++    {
++        static int trap_init = 0;
++        static int trap_adr = -1;
++        static unsigned long long trap_lo = 0;
++        static unsigned long long trap_hi = ~(unsigned long long)0;
++        if (!trap_init) {
++            trap_init = 1;
++            const char *a = getenv("JAC64_TRAP_WRITE_ADR");
++            if (a) trap_adr = (int)strtol(a, NULL, 0);
++            const char *lo = getenv("JAC64_TRAP_WRITE_CLK_LO");
++            const char *hi = getenv("JAC64_TRAP_WRITE_CLK_HI");
++            if (lo) trap_lo = strtoull(lo, NULL, 0);
++            if (hi) trap_hi = strtoull(hi, NULL, 0);
++        }
++        if (trap_adr >= 0 && (int)addr == trap_adr
++            && (unsigned long long)maincpu_clk >= trap_lo
++            && (unsigned long long)maincpu_clk <= trap_hi) {
++            extern unsigned int reg_pc;
++            fprintf(stderr, "TRAP-WR-ZP adr=$%x val=$%x clk=%llu pc=$%x\n",
++                (unsigned)addr, (unsigned)value,
++                (unsigned long long)maincpu_clk, (unsigned)reg_pc);
++        }
++    }
+ }
+ 
+ #define FALLOFF_RANDOM (C64_CPU6510_DATA_PORT_FALL_OFF_CYCLES / 5)
+@@ -519,6 +542,29 @@ uint8_t ram_read(uint16_t addr)
+ void ram_store(uint16_t addr, uint8_t value)
+ {
+     mem_ram[addr] = value;
++    {
++        static int trap_init = 0;
++        static int trap_adr = -1;
++        static unsigned long long trap_lo = 0;
++        static unsigned long long trap_hi = ~(unsigned long long)0;
++        if (!trap_init) {
++            trap_init = 1;
++            const char *a = getenv("JAC64_TRAP_WRITE_ADR");
++            if (a) trap_adr = (int)strtol(a, NULL, 0);
++            const char *lo = getenv("JAC64_TRAP_WRITE_CLK_LO");
++            const char *hi = getenv("JAC64_TRAP_WRITE_CLK_HI");
++            if (lo) trap_lo = strtoull(lo, NULL, 0);
++            if (hi) trap_hi = strtoull(hi, NULL, 0);
++        }
++        if (trap_adr >= 0 && (int)addr == trap_adr
++            && (unsigned long long)maincpu_clk >= trap_lo
++            && (unsigned long long)maincpu_clk <= trap_hi) {
++            extern unsigned int reg_pc;
++            fprintf(stderr, "TRAP-WR adr=$%x val=$%x clk=%llu pc=$%x\n",
++                (unsigned)addr, (unsigned)value,
++                (unsigned long long)maincpu_clk, (unsigned)reg_pc);
++        }
++    }
+ }
+ 
+ void ram_hi_store(uint16_t addr, uint8_t value)
 diff --git a/vice/src/c64/c64memsc.c b/vice/src/c64/c64memsc.c
-index d08f990..91659fb 100644
+index d08f990..876a1ae 100644
 --- a/vice/src/c64/c64memsc.c
 +++ b/vice/src/c64/c64memsc.c
 @@ -31,6 +31,7 @@
@@ -76,7 +259,172 @@ index d08f990..91659fb 100644
  
  #include "alarm.h"
  #include "c64.h"
-@@ -599,6 +600,54 @@ void colorram_store(uint16_t addr, uint8_t value)
+@@ -247,15 +248,40 @@ uint8_t zero_read_dma(uint16_t addr)
+ {
+     addr &= 0xff;
+ 
++    uint8_t val;
+     if (c64_256k_enabled) {
+-        return c64_256k_ram_segment0_read(addr);
++        val = c64_256k_ram_segment0_read(addr);
+     } else {
+         if (plus256k_enabled) {
+-            return plus256k_ram_low_read(addr);
++            val = plus256k_ram_low_read(addr);
+         } else {
+-            return mem_ram[addr & 0xff];
++            val = mem_ram[addr & 0xff];
+         }
+     }
++    {
++        static int trap_init = 0;
++        static int trap_adr = -1;
++        static unsigned long long trap_lo = 0;
++        static unsigned long long trap_hi = ~(unsigned long long)0;
++        if (!trap_init) {
++            trap_init = 1;
++            const char *a = getenv("JAC64_TRAP_READ_ADR");
++            if (a) trap_adr = (int)strtol(a, NULL, 0);
++            const char *lo = getenv("JAC64_TRAP_READ_CLK_LO");
++            const char *hi = getenv("JAC64_TRAP_READ_CLK_HI");
++            if (lo) trap_lo = strtoull(lo, NULL, 0);
++            if (hi) trap_hi = strtoull(hi, NULL, 0);
++        }
++        if (trap_adr >= 0 && (int)addr == trap_adr
++            && (unsigned long long)maincpu_clk >= trap_lo
++            && (unsigned long long)maincpu_clk <= trap_hi) {
++            extern unsigned int reg_pc;
++            fprintf(stderr, "TRAP-RD-ZP adr=$%x val=$%x clk=%llu pc=$%x\n",
++                (unsigned)addr, (unsigned)val,
++                (unsigned long long)maincpu_clk, (unsigned)reg_pc);
++        }
++    }
++    return val;
+ }
+ 
+ /* reads zeropage, 0/1 comes from CPU port */
+@@ -361,6 +387,29 @@ void zero_store_dma(uint16_t addr, uint8_t value)
+     } else {
+         mem_ram[addr] = value;
+     }
++    {
++        static int trap_init = 0;
++        static int trap_adr = -1;
++        static unsigned long long trap_lo = 0;
++        static unsigned long long trap_hi = ~(unsigned long long)0;
++        if (!trap_init) {
++            trap_init = 1;
++            const char *a = getenv("JAC64_TRAP_WRITE_ADR");
++            if (a) trap_adr = (int)strtol(a, NULL, 0);
++            const char *lo = getenv("JAC64_TRAP_WRITE_CLK_LO");
++            const char *hi = getenv("JAC64_TRAP_WRITE_CLK_HI");
++            if (lo) trap_lo = strtoull(lo, NULL, 0);
++            if (hi) trap_hi = strtoull(hi, NULL, 0);
++        }
++        if (trap_adr >= 0 && (int)addr == trap_adr
++            && (unsigned long long)maincpu_clk >= trap_lo
++            && (unsigned long long)maincpu_clk <= trap_hi) {
++            extern unsigned int reg_pc;
++            fprintf(stderr, "TRAP-WR-ZP adr=$%x val=$%x clk=%llu pc=$%x\n",
++                (unsigned)addr, (unsigned)value,
++                (unsigned long long)maincpu_clk, (unsigned)reg_pc);
++        }
++    }
+ }
+ 
+ #define FALLOFF_RANDOM (C64_CPU6510_DATA_PORT_FALL_OFF_CYCLES / 5)
+@@ -369,6 +418,14 @@ void zero_store_dma(uint16_t addr, uint8_t value)
+ /* store zeropage, 0/1 goes to CPU port */
+ void zero_store(uint16_t addr, uint8_t value)
+ {
++    if (getenv("JAC64_TRAP_PORT_WRITES")) {
++        unsigned long long clk = (unsigned long long)maincpu_clk;
++        if ((addr & 0xff) == 1 && clk >= 3000000 && clk <= 3100000) {
++            extern unsigned int reg_pc;
++            fprintf(stderr, "ZS-ENTRY addr=$%x val=$%02x clk=%llu pc=$%x pport.data=$%02x\n",
++                (unsigned)(addr&0xff), (unsigned)value, clk, (unsigned)reg_pc, (unsigned)pport.data);
++        }
++    }
+     addr &= 0xff;
+ 
+     switch ((uint8_t)addr) {
+@@ -440,6 +497,11 @@ void zero_store(uint16_t addr, uint8_t value)
+             }
+             break;
+         case 1:
++            if (getenv("JAC64_TRAP_PORT_WRITES")) {
++                extern unsigned int reg_pc;
++                fprintf(stderr, "PORT-WR $01 value=$%02x clk=%llu pc=$%x pport.data_before=$%02x\n",
++                    (unsigned)value, (unsigned long long)maincpu_clk, (unsigned)reg_pc, (unsigned)pport.data);
++            }
+             /* printf("zero_store %02x %02x: ddr:%02x data:%02x\n", addr, value, pport.dir, pport.data); */
+             if (vbank == 0) {
+                 if (c64_256k_enabled) {
+@@ -516,14 +578,63 @@ uint8_t ram_read(uint16_t addr)
+     return mem_ram[addr];
+ }
+ 
++extern void mem_jac64_dump_at_clk(void);
++
+ void ram_store(uint16_t addr, uint8_t value)
+ {
++    mem_jac64_dump_at_clk();
+     mem_ram[addr] = value;
++    {
++        static int trap_init = 0;
++        static int trap_adr = -1;
++        static unsigned long long trap_lo = 0;
++        static unsigned long long trap_hi = ~(unsigned long long)0;
++        if (!trap_init) {
++            trap_init = 1;
++            const char *a = getenv("JAC64_TRAP_WRITE_ADR");
++            if (a) trap_adr = (int)strtol(a, NULL, 0);
++            const char *lo = getenv("JAC64_TRAP_WRITE_CLK_LO");
++            const char *hi = getenv("JAC64_TRAP_WRITE_CLK_HI");
++            if (lo) trap_lo = strtoull(lo, NULL, 0);
++            if (hi) trap_hi = strtoull(hi, NULL, 0);
++        }
++        if (trap_adr >= 0 && (int)addr == trap_adr
++            && (unsigned long long)maincpu_clk >= trap_lo
++            && (unsigned long long)maincpu_clk <= trap_hi) {
++            extern unsigned int reg_pc;
++            fprintf(stderr, "TRAP-WR adr=$%x val=$%x clk=%llu pc=$%x\n",
++                (unsigned)addr, (unsigned)value,
++                (unsigned long long)maincpu_clk, (unsigned)reg_pc);
++        }
++    }
+ }
+ 
+ void ram_hi_store(uint16_t addr, uint8_t value)
+ {
+     mem_ram[addr] = value;
++    {
++        static int trap_init = 0;
++        static int trap_adr = -1;
++        static unsigned long long trap_lo = 0;
++        static unsigned long long trap_hi = ~(unsigned long long)0;
++        if (!trap_init) {
++            trap_init = 1;
++            const char *a = getenv("JAC64_TRAP_WRITE_ADR");
++            if (a) trap_adr = (int)strtol(a, NULL, 0);
++            const char *lo = getenv("JAC64_TRAP_WRITE_CLK_LO");
++            const char *hi = getenv("JAC64_TRAP_WRITE_CLK_HI");
++            if (lo) trap_lo = strtoull(lo, NULL, 0);
++            if (hi) trap_hi = strtoull(hi, NULL, 0);
++        }
++        if (trap_adr >= 0 && (int)addr == trap_adr
++            && (unsigned long long)maincpu_clk >= trap_lo
++            && (unsigned long long)maincpu_clk <= trap_hi) {
++            extern unsigned int reg_pc;
++            fprintf(stderr, "TRAP-WR-HI adr=$%x val=$%x clk=%llu pc=$%x\n",
++                (unsigned)addr, (unsigned)value,
++                (unsigned long long)maincpu_clk, (unsigned)reg_pc);
++        }
++    }
+ }
+ 
+ /* unconnected memory space */
+@@ -599,6 +710,54 @@ void colorram_store(uint16_t addr, uint8_t value)
      mem_color_ram[addr & 0x3ff] = value & 0xf;
  }
  
@@ -131,11 +479,185 @@ index d08f990..91659fb 100644
  uint8_t colorram_read(uint16_t addr)
  {
      return mem_color_ram[addr & 0x3ff] | (vicii_read_phi1() & 0xf0);
+@@ -950,6 +1109,18 @@ void mem_powerup(void)
+ {
+     ram_init(mem_ram, 0x10000);
+     vicii_init_colorram(mem_color_ram);
++    if (getenv("JAC64_DUMP_RAM")) {
++        // Dump first 64 bytes at $B400 to see actual pattern
++        for (int i = 0; i < 64; i += 16) {
++            fprintf(stderr, "RAM[$%04x]:", 0xb400 + i);
++            for (int j = 0; j < 16; j++) fprintf(stderr, " %02x", mem_ram[0xb400 + i + j]);
++            fprintf(stderr, "\n");
++        }
++        // Also dump $00-$0F
++        fprintf(stderr, "RAM[$0000]:");
++        for (int j = 0; j < 16; j++) fprintf(stderr, " %02x", mem_ram[j]);
++        fprintf(stderr, "\n");
++    }
+ }
+ 
+ /* ------------------------------------------------------------------------- */
+@@ -1021,6 +1192,34 @@ void mem_inject(uint32_t addr, uint8_t value)
+     if (!memory_hacks_ram_inject(addr, value)) {
+         mem_ram[addr & 0xffff] = value;
+     }
++    if (getenv("JAC64_TRAP_INJECT_DUMP") && (addr & 0xffff) >= 0xb4d0 && (addr & 0xffff) <= 0xb4f0) {
++        fprintf(stderr, "INJECT addr=$%x val=$%x clk=%llu\n",
++            (unsigned)addr, (unsigned)value, (unsigned long long)maincpu_clk);
++    }
++}
++
++/* One-shot RAM dump at specific clk, used to chase Krestage 3 divergence. */
++void mem_jac64_dump_at_clk(void)
++{
++    static int done = 0;
++    if (done) return;
++    const char *clk_str = getenv("JAC64_DUMP_AT_CLK");
++    if (!clk_str) return;
++    unsigned long long target = strtoull(clk_str, NULL, 0);
++    if ((unsigned long long)maincpu_clk < target) return;
++    done = 1;
++    fprintf(stderr, "DUMP-AT-CLK clk=%llu pport.data=$%02x dir=$%02x mem_cfg=%d\n",
++        (unsigned long long)maincpu_clk, pport.data, pport.dir, mem_get_current_bank_config());
++    /* search for demo INC $01 (e6 01) signature */
++    for (int a = 0x0800; a < 0x10000; a++) {
++        if (mem_ram[a] == 0xe6 && mem_ram[a+1] == 0x01
++            && mem_ram[a+2] == 0xba && mem_ram[a+3] == 0xbd) {
++            fprintf(stderr, "DEMO-INC found at mem_ram[$%04x]\n", a);
++        }
++    }
++    fprintf(stderr, "mem_ram[$800..$80F]=");
++    for (int i = 0; i < 16; i++) fprintf(stderr, "%02x ", mem_ram[0x800 + i]);
++    fprintf(stderr, "\n");
+ }
+ 
+ /* In banked memory architectures this will always write to the bank that
+diff --git a/vice/src/mainc64cpu.c b/vice/src/mainc64cpu.c
+index 357b274..89701e3 100644
+--- a/vice/src/mainc64cpu.c
++++ b/vice/src/mainc64cpu.c
+@@ -260,12 +260,27 @@ inline static void memmap_mem_update(unsigned int addr, int write, int dummy)
+ 
+ static void memmap_mem_store(unsigned int addr, unsigned int value)
+ {
++    if (getenv("JAC64_TRAP_PORT_WRITES")) {
++        unsigned long long clk = (unsigned long long)maincpu_clk;
++        if ((addr & 0xffff) == 1 && clk < 3070000) {
++            extern unsigned int reg_pc;
++            fprintf(stderr, "MEMMAP-STORE-$01 val=$%02x clk=%llu pc=$%x\n",
++                (unsigned)value, clk, (unsigned)reg_pc);
++        }
++    }
+     memmap_mem_update(addr, 1, 0);
+     (*_mem_write_tab_ptr[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value));
+ }
+ 
+ static void memmap_mem_store_dummy(unsigned int addr, unsigned int value)
+ {
++    if (getenv("JAC64_TRAP_PORT_WRITES")) {
++        unsigned long long clk = (unsigned long long)maincpu_clk;
++        if (clk >= 3063200 && clk <= 3063240 && (addr & 0xff) <= 1) {
++            fprintf(stderr, "MEMMAP-DUMMY addr=$%x val=$%02x clk=%llu\n",
++                (unsigned)addr, (unsigned)value, clk);
++        }
++    }
+     memmap_mem_update(addr, 1, 1);
+     (*_mem_write_tab_ptr_dummy[(addr) >> 8])((uint16_t)(addr), (uint8_t)(value));
+ }
+diff --git a/vice/src/viciisc/vicii-chip-model.c b/vice/src/viciisc/vicii-chip-model.c
+index ed2080d..13e18ca 100644
+--- a/vice/src/viciisc/vicii-chip-model.c
++++ b/vice/src/viciisc/vicii-chip-model.c
+@@ -26,6 +26,9 @@
+ 
+ #include "vice.h"
+ 
++#include <stdio.h>
++#include <stdlib.h>
++
+ #include "log.h"
+ #include "types.h"
+ #include "vicii.h"
+@@ -841,4 +844,22 @@ void vicii_chip_model_init(void)
+             break;
+     }
+     vicii_color_update_palette(vicii.raster.canvas);
++
++    /* JaC64 Phase F1: dump cycle_table for Java port. Lazy-init from
++     * $JAC64_DUMP_CYCLE_TABLE. */
++    {
++        const char *path = getenv("JAC64_DUMP_CYCLE_TABLE");
++        if (path) {
++            FILE *f = fopen(path, "w");
++            if (f) {
++                int i;
++                fprintf(f, "// PAL 6569 cycle_table[63] dumped from VICE init\n");
++                for (i = 0; i < 63; i++) {
++                    fprintf(f, "0x%08x, // cyc %d\n",
++                            vicii.cycle_table[i], i + 1);
++                }
++                fclose(f);
++            }
++        }
++    }
+ }
 diff --git a/vice/src/viciisc/vicii-cycle.c b/vice/src/viciisc/vicii-cycle.c
-index f20270d..b0c4f7b 100644
+index f20270d..4ac52e1 100644
 --- a/vice/src/viciisc/vicii-cycle.c
 +++ b/vice/src/viciisc/vicii-cycle.c
-@@ -427,6 +427,28 @@ int vicii_cycle(void)
+@@ -31,6 +31,8 @@
+ 
+ #include "vice.h"
+ 
++#include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ #include "debug.h"
+@@ -185,17 +187,41 @@ static inline void check_hborder(unsigned int cycle_flags)
+ {
+     int csel = vicii.regs[0x16] & 0x08;
+ 
++    /* JaC64 trace patch */
++    static FILE *jac64_brd = NULL;
++    static int jac64_brd_init = 0;
++    if (!jac64_brd_init) {
++        jac64_brd_init = 1;
++        const char *path = getenv("JAC64_TRACE_FILE_BORDER");
++        if (path) jac64_brd = fopen(path, "w");
++    }
++
+     /* Left border ends at cycles 17 (csel=1) or 18 (csel=0) on PAL. */
+     if (cycle_is_check_border_l(cycle_flags, csel)) {
++        unsigned prev_main = vicii.main_border, prev_v = vicii.vborder;
+         check_vborder_bottom(vicii.raster_line);
+         vicii.vborder = vicii.set_vborder;
+         if (vicii.vborder == 0) {
+             vicii.main_border = 0;
+         }
++        if (jac64_brd) {
++            fprintf(jac64_brd, "EV-ChkBrdL clk=%llu rast=$%x cyc=%u csel=%d setVB=%d vB:%u->%u mainB:%u->%u\n",
++                (unsigned long long)maincpu_clk, vicii.raster_line, vicii.raster_cycle,
++                csel ? 1 : 0, vicii.set_vborder,
++                prev_v, vicii.vborder, prev_main, vicii.main_border);
++            fflush(jac64_brd);
++        }
+     }
+     /* Right border starts at cycles 56 (csel=0) or 57 (csel=1) on PAL. */
+     if (cycle_is_check_border_r(cycle_flags, csel)) {
++        unsigned prev_main = vicii.main_border;
+         vicii.main_border = 1;
++        if (jac64_brd) {
++            fprintf(jac64_brd, "EV-ChkBrdR clk=%llu rast=$%x cyc=%u csel=%d mainB:%u->%u\n",
++                (unsigned long long)maincpu_clk, vicii.raster_line, vicii.raster_cycle,
++                csel ? 1 : 0, prev_main, vicii.main_border);
++            fflush(jac64_brd);
++        }
+     }
+ }
+ 
+@@ -427,6 +453,28 @@ int vicii_cycle(void)
      /* Trigger collision IRQs */
      if (can_sprite_sprite && vicii.sprite_sprite_collisions) {
          vicii_irq_sscoll_set();
@@ -164,7 +686,7 @@ index f20270d..b0c4f7b 100644
      }
      if (can_sprite_background && vicii.sprite_background_collisions) {
          vicii_irq_sbcoll_set();
-@@ -456,7 +478,28 @@ int vicii_cycle(void)
+@@ -456,7 +504,28 @@ int vicii_cycle(void)
          }
      } else {
          if (vicii.raster_cycle == VICII_PAL_CYCLE(1)) {
@@ -193,7 +715,53 @@ index f20270d..b0c4f7b 100644
          }
      }
  
-@@ -577,6 +620,29 @@ int vicii_cycle(void)
+@@ -522,7 +591,14 @@ int vicii_cycle(void)
+ 
+     /* Check DEN bit on first DMA line */
+     if ((vicii.raster_line == VICII_FIRST_DMA_LINE) && !vicii.allow_bad_lines) {
++        int prev = vicii.allow_bad_lines;
+         vicii.allow_bad_lines = (vicii.regs[0x11] & 0x10) ? 1 : 0;
++        if (prev != vicii.allow_bad_lines && getenv("JAC64_TRACE_VICE")) {
++            fprintf(stderr, "VICE-DEN-LATCH line=%d cyc=%d D011=%x abl=%d clk=%llu\n",
++                (int)vicii.raster_line, (int)vicii.raster_cycle,
++                vicii.regs[0x11], vicii.allow_bad_lines,
++                (unsigned long long)maincpu_clk);
++        }
+     }
+ 
+     /* Check badline condition, trigger fetches */
+@@ -563,6 +639,30 @@ int vicii_cycle(void)
+         }
+     }
+ 
++    /* JaC64 state trace: emit per-cycle vc/vmli/rc/vcbase/idle/bad state.
++     * Gated by JAC64_TRACE_FILE_STATE env var. Used to compare internal
++     * VIC state at matching VIC cycles vs JaC64. */
++    {
++        static FILE *jac64_state = NULL;
++        static int state_init = 0;
++        if (!state_init) {
++            state_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE_STATE");
++            if (path) jac64_state = fopen(path, "w");
++        }
++        if (jac64_state) {
++            fprintf(jac64_state,
++                "EV-State clk=%llu rast=$%x cyc=%u "
++                "vc=%u vmli=%u rc=%u vcbase=%u idle=%u bad=%u abl=%u ys=%u\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line, vicii.raster_cycle,
++                vicii.vc, vicii.vmli, vicii.rc, vicii.vcbase,
++                vicii.idle_state, vicii.bad_line, vicii.allow_bad_lines,
++                vicii.ysmooth);
++            fflush(jac64_state);
++        }
++    }
++
+     /******
+      *
+      * BA logic
+@@ -577,6 +677,29 @@ int vicii_cycle(void)
      /* Check BA for Sprite Phi2 fetch */
      ba_low |= vicii_check_sprite_ba(vicii.cycle_flags);
  
@@ -223,8 +791,341 @@ index f20270d..b0c4f7b 100644
      /* if ba_low transitioning from non-active to active, always count
         3 cycles before allowing any Phi2 accesses. */
      if (ba_low) {
+diff --git a/vice/src/viciisc/vicii-draw-cycle.c b/vice/src/viciisc/vicii-draw-cycle.c
+index b830213..cb31c50 100644
+--- a/vice/src/viciisc/vicii-draw-cycle.c
++++ b/vice/src/viciisc/vicii-draw-cycle.c
+@@ -26,10 +26,13 @@
+ 
+ #include "vice.h"
+ 
++#include <stdio.h>
++#include <stdlib.h>
+ #include <string.h>
+ 
+ #include "types.h"
+ #include "snapshot.h"
++#include "maincpu.h"
+ #include "vicii-chip-model.h"
+ #include "vicii-draw-cycle.h"
+ #include "viciitypes.h"
+@@ -224,6 +227,29 @@ static DRAW_INLINE void draw_graphics(int i)
+     pri_buffer[i] = pixel_pri;
+ }
+ 
++/* Forward decls for px_latch_trace — all file-scope statics above. */
++static void px_latch_trace(int i)
++{
++    static FILE *out = NULL;
++    static int init = 0;
++    if (!init) {
++        init = 1;
++        const char *path = getenv("JAC64_TRACE_FILE_PXLATCH");
++        if (path) out = fopen(path, "w");
++    }
++    if (!out) return;
++    fprintf(out,
++        "PX-LATCH clk=%llu rast=$%x cyc=%u pix=%d "
++        "regs11=$%x regs16=$%x vmode11=$%x vmode16=$%x vmode16p2=$%x "
++        "gbufReg=$%x mcFlop=%u emitted=$%x\n",
++        (unsigned long long)maincpu_clk,
++        vicii.raster_line, vicii.raster_cycle, i,
++        vicii.regs[0x11] & 0xff, vicii.regs[0x16] & 0xff,
++        vmode11_pipe & 0xff, vmode16_pipe & 0xff, vmode16_pipe2 & 0xff,
++        gbuf_reg & 0xff, gbuf_mc_flop & 0xff,
++        render_buffer[i] & 0xff);
++}
++
+ static DRAW_INLINE void draw_graphics8(unsigned int cycle_flags)
+ {
+     int vis_en;
+@@ -232,34 +258,34 @@ static DRAW_INLINE void draw_graphics8(unsigned int cycle_flags)
+ 
+     /* render pixels */
+     /* pixel 0 */
+-    draw_graphics(0);
++    draw_graphics(0); px_latch_trace(0);
+     /* pixel 1 */
+-    draw_graphics(1);
++    draw_graphics(1); px_latch_trace(1);
+     /* pixel 2 */
+-    draw_graphics(2);
++    draw_graphics(2); px_latch_trace(2);
+     /* pixel 3 */
+-    draw_graphics(3);
++    draw_graphics(3); px_latch_trace(3);
+     /* pixel 4 */
+     vmode16_pipe = ( vicii.regs[0x16] & 0x10 ) >> 2;
+     if (vicii.color_latency) {
+         /* handle rising edge of internal signal */
+         vmode11_pipe |= ( vicii.regs[0x11] & 0x60 ) >> 2;
+     }
+-    draw_graphics(4);
++    draw_graphics(4); px_latch_trace(4);
+     /* pixel 5 */
+-    draw_graphics(5);
++    draw_graphics(5); px_latch_trace(5);
+     /* pixel 6 */
+     if (vicii.color_latency) {
+         /* handle falling edge of internal signal */
+         vmode11_pipe &= ( vicii.regs[0x11] & 0x60 ) >> 2;
+     }
+-    draw_graphics(6);
++    draw_graphics(6); px_latch_trace(6);
+     /* pixel 7 */
+     if (vmode16_pipe && !vmode16_pipe2) {
+         gbuf_mc_flop = 0;
+     }
+     vmode16_pipe2 = vmode16_pipe;
+-    draw_graphics(7);
++    draw_graphics(7); px_latch_trace(7);
+ 
+     if (!vicii.color_latency) {
+         vmode11_pipe = ( vicii.regs[0x11] & 0x60 ) >> 2;
+@@ -334,6 +360,12 @@ static DRAW_INLINE void trigger_sprites(int xpos, uint8_t candidate_bits)
+                 sbuf_expx_flops |= m;
+                 sbuf_mc_flops |= m;
+                 sprite_active_bits |= m;
++                if (s == 0 && getenv("JAC64_TRACE_VICE")) {
++                    fprintf(stderr, "VICE-TRIG line=%d cyc=%d xpos=%d sbufReg=$%x active=$%x pending=$%x halt=$%x data=$%x x_pipe=%d\n",
++                        (int)vicii.raster_line, (int)vicii.raster_cycle, xpos,
++                        (unsigned)sbuf_reg[s], sprite_active_bits, sprite_pending_bits, sprite_halt_bits,
++                        (unsigned)vicii.sprite[s].data, sprite_x_pipe[s]);
++                }
+             }
+         }
+     }
+@@ -398,6 +430,31 @@ static DRAW_INLINE void draw_sprites(int i)
+         }
+     }
+ 
++    /* JaC64 trace patch: shows sprite 0 sbuf_reg shift progression to
++       verify the cycle-exact pipeline matches VICE 1:1.
++       Env: JAC64_TRACE_VICE=1 to enable.
++       Optional JAC64_TRACE_LINE_LO / _HI to gate range. */
++    {
++        static int trace_init = 0;
++        static int trace_on = 0;
++        static int trace_lo = 0;
++        static int trace_hi = 0x1ff;
++        if (!trace_init) {
++            trace_init = 1;
++            trace_on = getenv("JAC64_TRACE_VICE") != NULL;
++            const char *lo = getenv("JAC64_TRACE_LINE_LO");
++            const char *hi = getenv("JAC64_TRACE_LINE_HI");
++            if (lo) trace_lo = atoi(lo);
++            if (hi) trace_hi = atoi(hi);
++        }
++        if (trace_on && (collision_mask & 1)
++            && (int)vicii.raster_line >= trace_lo
++            && (int)vicii.raster_line <= trace_hi) {
++            fprintf(stderr, "VICE-DRAW-S0 line=%d cyc=%d pix=%d sbufReg=$%x px=$%x\n",
++                (int)vicii.raster_line, (int)vicii.raster_cycle, i,
++                (unsigned)sbuf_reg[0], sbuf_pixel_reg[0]);
++        }
++    }
+     if (collision_mask) {
+         uint8_t pixel_pri = pri_buffer[i];
+         int as = active_sprite;
+@@ -466,6 +523,45 @@ static DRAW_INLINE void update_sprite_xpos(void)
+ 
+ 
+ 
++/* SP-LATCH trace: per-pixel sprite pipeline state, matching JaC64's format.
++   Gated by env JAC64_TRACE_FILE_SPLATCH. */
++static void sp_latch_trace(int i, int xpos)
++{
++    static FILE *out = NULL;
++    static int init = 0;
++    int s;
++    if (!init) {
++        init = 1;
++        const char *path = getenv("JAC64_TRACE_FILE_SPLATCH");
++        if (path) out = fopen(path, "w");
++    }
++    if (!out) return;
++    fprintf(out, "SP-LATCH clk=%llu rast=$%x cyc=%u pix=%d xpos=%d "
++        "actv=$%x pend=$%x halt=$%x mcb=$%x prib=$%x expxb=$%x "
++        "mcF=$%x expxF=$%x sbuf=",
++        (unsigned long long)maincpu_clk,
++        vicii.raster_line, vicii.raster_cycle, i, xpos,
++        sprite_active_bits & 0xff, sprite_pending_bits & 0xff,
++        sprite_halt_bits & 0xff, sprite_mc_bits & 0xff,
++        sprite_pri_bits & 0xff, sprite_expx_bits & 0xff,
++        sbuf_mc_flops & 0xff, sbuf_expx_flops & 0xff);
++    for (s = 0; s < 8; s++) {
++        if (s > 0) fputc(',', out);
++        fprintf(out, "$%x", (unsigned)(sbuf_reg[s] & 0xffffff));
++    }
++    /* JaC64 emits color code 1/2/3 and winning sprite; VICE renders to
++       render_buffer with COL_D025/COL_D027+s/COL_D026 codes. To compare,
++       extract: if render_buffer[i] is COL_D025 -> 1, COL_D026 -> 3,
++       COL_D027..COL_D02E -> 2 (and that sprite index). */
++    int out_code = 0;
++    int out_spr = -1;
++    uint8_t rb = render_buffer[i];
++    if (rb == COL_D025) { out_code = 1; }
++    else if (rb == COL_D026) { out_code = 3; }
++    else if (rb >= COL_D027 && rb <= COL_D02E) { out_code = 2; out_spr = rb - COL_D027; }
++    fprintf(out, " out=%d spr=%d\n", out_code, out_spr);
++}
++
+ static DRAW_INLINE void draw_sprites8(unsigned int cycle_flags)
+ {
+     uint8_t candidate_bits;
+@@ -489,28 +585,28 @@ static DRAW_INLINE void draw_sprites8(unsigned int cycle_flags)
+     /* process and render sprites */
+     /* pixel 0 */
+     trigger_sprites(xpos + 0, candidate_bits);
+-    draw_sprites(0);
++    draw_sprites(0); sp_latch_trace(0, xpos + 0);
+     /* pixel 1 */
+     trigger_sprites(xpos + 1, candidate_bits);
+-    draw_sprites(1);
++    draw_sprites(1); sp_latch_trace(1, xpos + 1);
+     /* pixel 2 */
+     sprite_active_bits &= ~dma_cycle_2;
+     trigger_sprites(xpos + 2, candidate_bits);
+-    draw_sprites(2);
++    draw_sprites(2); sp_latch_trace(2, xpos + 2);
+     /* pixel 3 */
+     sprite_halt_bits |= dma_cycle_0;
+     trigger_sprites(xpos + 3, candidate_bits);
+-    draw_sprites(3);
++    draw_sprites(3); sp_latch_trace(3, xpos + 3);
+     /* pixel 4 */
+     if (spr_en) {
+         sprite_pending_bits = vicii.sprite_display_bits;
+     }
+     update_sprite_data(cycle_flags);
+     trigger_sprites(xpos + 4, candidate_bits);
+-    draw_sprites(4);
++    draw_sprites(4); sp_latch_trace(4, xpos + 4);
+     /* pixel 5 */
+     trigger_sprites(xpos + 5, candidate_bits);
+-    draw_sprites(5);
++    draw_sprites(5); sp_latch_trace(5, xpos + 5);
+     /* pixel 6 */
+     if (!vicii.color_latency) {
+         update_sprite_mc_bits_8565();
+@@ -518,14 +614,14 @@ static DRAW_INLINE void draw_sprites8(unsigned int cycle_flags)
+     sprite_pri_bits = vicii.regs[0x1b];
+     sprite_expx_bits = vicii.regs[0x1d];
+     trigger_sprites(xpos + 6, candidate_bits);
+-    draw_sprites(6);
++    draw_sprites(6); sp_latch_trace(6, xpos + 6);
+     /* pixel 7 */
+     if (vicii.color_latency) {
+         update_sprite_mc_bits_6569();
+     }
+     sprite_halt_bits &= ~dma_cycle_2;
+     trigger_sprites(xpos + 7, candidate_bits);
+-    draw_sprites(7);
++    draw_sprites(7); sp_latch_trace(7, xpos + 7);
+ 
+     /* pipe xpos */
+     update_sprite_xpos();
+@@ -606,6 +702,8 @@ static DRAW_INLINE void draw_colors_6569(int offs, int i)
+ static DRAW_INLINE void draw_colors_8565(int offs, int i)
+ {
+     int lookup_index;
++    int fired = 0;
++    int saved_code = pixel_buffer[i];
+ 
+     lookup_index = i;
+     /* resolve any unresolved colors */
+@@ -613,10 +711,33 @@ static DRAW_INLINE void draw_colors_8565(int offs, int i)
+     /* special case for grey dot handling */
+     if (i == 0 && pixel_buffer[lookup_index] == last_color_reg) {
+         pixel_buffer[lookup_index] = 0x0f;
++        fired = 1;
+     } else {
+         pixel_buffer[lookup_index] = cregs[pixel_buffer[lookup_index]];
+     }
+ 
++    /* JaC64 grey-dot trace */
++    if (i == 0) {
++        static FILE *jac64_gd = NULL;
++        static int gd_init = 0;
++        if (!gd_init) {
++            gd_init = 1;
++            const char *p = getenv("JAC64_TRACE_FILE_GREYDOT");
++            if (p) jac64_gd = fopen(p, "w");
++        }
++        if (jac64_gd) {
++            fprintf(jac64_gd,
++                "GREYDOT clk=%llu rast=$%x cyc=%u code=$%02x lastReg=$%02x fired=%s\n",
++                (unsigned long long)maincpu_clk,
++                (unsigned)vicii.raster_line,
++                (unsigned)vicii.raster_cycle,
++                (unsigned)(saved_code & 0xff),
++                (unsigned)(last_color_reg & 0xff),
++                fired ? "true" : "false");
++            fflush(jac64_gd);
++        }
++    }
++
+     /* draw pixel to buffer */
+     vicii.dbuf[offs + i] = pixel_buffer[i];
+ 
+@@ -657,6 +778,55 @@ static DRAW_INLINE void draw_colors8(void)
+         draw_colors_8565(offs, 6);
+         draw_colors_8565(offs, 7);
+     }
++    /* JaC64 trace hook — emit one EV-DrawCycle per cycle with the
++     * just-rendered 8 dbuf pixels + key state. Lazy-init from
++     * $JAC64_TRACE_FILE_DRAW; fully no-op when var unset. */
++    {
++        static FILE *jac64_draw = NULL;
++        static int jac64_draw_init = 0;
++        static unsigned long long jac64_draw_clk_lo = 0;
++        static unsigned long long jac64_draw_clk_hi = ~(unsigned long long)0;
++        if (!jac64_draw_init) {
++            jac64_draw_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE_DRAW");
++            if (path) jac64_draw = fopen(path, "w");
++            const char *lo = getenv("JAC64_TRACE_DRAW_CLK_LO");
++            const char *hi = getenv("JAC64_TRACE_DRAW_CLK_HI");
++            if (lo) jac64_draw_clk_lo = strtoull(lo, NULL, 0);
++            if (hi) jac64_draw_clk_hi = strtoull(hi, NULL, 0);
++        }
++        if (jac64_draw
++            && (unsigned long long)maincpu_clk >= jac64_draw_clk_lo
++            && (unsigned long long)maincpu_clk <= jac64_draw_clk_hi) {
++            fprintf(jac64_draw,
++                "EV-DrawCycle clk=%llu rast=$%x cyc=%u offs=%d "
++                "cregs21=$%x last=$%x gbuf=$%x vbuf=$%x cbuf=$%x "
++                "mb=%u vb=%u "
++                "px=%x.%x.%x.%x.%x.%x.%x.%x "
++                "rb=%x.%x.%x.%x.%x.%x.%x.%x\n",
++                (unsigned long long)maincpu_clk,
++                (unsigned)vicii.raster_line,
++                (unsigned)vicii.raster_cycle,
++                offs,
++                (unsigned)cregs[0x21],
++                (unsigned)last_color_reg,
++                (unsigned)vicii.gbuf,
++                (unsigned)vbuf_reg,
++                (unsigned)cbuf_reg,
++                (unsigned)vicii.main_border,
++                (unsigned)vicii.vborder,
++                vicii.dbuf[offs+0] & 0xf, vicii.dbuf[offs+1] & 0xf,
++                vicii.dbuf[offs+2] & 0xf, vicii.dbuf[offs+3] & 0xf,
++                vicii.dbuf[offs+4] & 0xf, vicii.dbuf[offs+5] & 0xf,
++                vicii.dbuf[offs+6] & 0xf, vicii.dbuf[offs+7] & 0xf,
++                render_buffer[0] & 0xff, render_buffer[1] & 0xff,
++                render_buffer[2] & 0xff, render_buffer[3] & 0xff,
++                render_buffer[4] & 0xff, render_buffer[5] & 0xff,
++                render_buffer[6] & 0xff, render_buffer[7] & 0xff);
++            fflush(jac64_draw);
++        }
++    }
++
+     vicii.dbuf_offset += 8;
+ 
+     update_cregs();
 diff --git a/vice/src/viciisc/vicii-irq.c b/vice/src/viciisc/vicii-irq.c
-index a01a3b1..e54ca13 100644
+index a01a3b1..79c98cd 100644
 --- a/vice/src/viciisc/vicii-irq.c
 +++ b/vice/src/viciisc/vicii-irq.c
 @@ -117,6 +117,27 @@ void vicii_irq_raster_trigger(void)
@@ -255,8 +1156,24 @@ index a01a3b1..e54ca13 100644
      }
  }
  
+@@ -124,3 +145,15 @@ void vicii_irq_init(void)
+ {
+     vicii.int_num = interrupt_cpu_status_int_new(maincpu_int_status, "VICII");
+ }
++
++/* Phase J trace accessors — used by 6510dtvcore.c per-instruction
++ * trace from the main CPU path. */
++unsigned int vicii_get_raster_line(void)
++{
++    return vicii.raster_line;
++}
++
++unsigned int vicii_get_raster_cycle(void)
++{
++    return vicii.raster_cycle;
++}
 diff --git a/vice/src/viciisc/vicii-mem.c b/vice/src/viciisc/vicii-mem.c
-index e513732..c7fa1d7 100644
+index e513732..cbd9430 100644
 --- a/vice/src/viciisc/vicii-mem.c
 +++ b/vice/src/viciisc/vicii-mem.c
 @@ -43,6 +43,7 @@
@@ -267,7 +1184,70 @@ index e513732..c7fa1d7 100644
  
  
  /* Unused bits in VIC-II registers: these are always 1 when read.  */
-@@ -226,10 +227,33 @@ inline static void d018_store(const uint8_t value)
+@@ -93,6 +94,28 @@ inline static void store_sprite_x_position_lsb(const uint16_t addr, uint8_t valu
+ {
+     int n;
+ 
++    /* JaC64 trace patch */
++    {
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE_SPRX");
++            if (path) jac64_trace = fopen(path, "w");
++        }
++        if (jac64_trace) {
++            fprintf(jac64_trace,
++                "EV-WrSprX clk=%llu rast=$%x cyc=%u reg=$%02x val=$%02x pc=$%04x\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                (unsigned)addr,
++                value,
++                reg_pc);
++            fflush(jac64_trace);
++        }
++    }
++
+     if (value == vicii.regs[addr]) {
+         return;
+     }
+@@ -148,6 +171,33 @@ inline static void d011_store(uint8_t value)
+     VICII_DEBUG_REGISTER(("$D011 tricks at cycle %d, line $%04X, "
+                           "value $%02X", vicii.raster_cycle, vicii.raster_line, value));
+ 
++    if (getenv("JAC64_TRACE_VICE")) {
++        fprintf(stderr, "VICE-D011W data=$%x line=%d cyc=%d stored=$%x clk=%llu\n",
++            value & 0xff, (int)vicii.raster_line, (int)vicii.raster_cycle,
++            value & 0xff, (unsigned long long)maincpu_clk);
++    }
++
++    /* JaC64 trace patch */
++    {
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE_D011");
++            if (path) jac64_trace = fopen(path, "w");
++        }
++        if (jac64_trace) {
++            fprintf(jac64_trace,
++                "EV-WrD011 clk=%llu rast=$%x cyc=%u val=$%02x pc=$%04x\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                value,
++                reg_pc);
++            fflush(jac64_trace);
++        }
++    }
++
+     vicii.ysmooth = value & 0x7;
+ 
+     vicii.regs[0x11] = value;
+@@ -226,10 +276,33 @@ inline static void d018_store(const uint8_t value)
  
  inline static void d019_store(const uint8_t value)
  {
@@ -301,8 +1281,110 @@ index e513732..c7fa1d7 100644
  }
  
  inline static void d01a_store(const uint8_t value)
-@@ -274,10 +298,15 @@ inline static void color_reg_store(uint16_t addr, uint8_t value)
+@@ -245,9 +318,51 @@ inline static void d01b_store(const uint8_t value)
+ {
+     VICII_DEBUG_REGISTER(("Sprite priority register: $%02X", value));
+ 
++    /* JaC64 trace patch */
++    {
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE_D01B");
++            if (path) jac64_trace = fopen(path, "w");
++        }
++        if (jac64_trace) {
++            fprintf(jac64_trace,
++                "EV-WrD01B clk=%llu rast=$%x cyc=%u val=$%02x pc=$%04x\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                value,
++                reg_pc);
++            fflush(jac64_trace);
++        }
++    }
++
+     vicii.regs[0x1b] = value;
+ }
+ 
++inline static void jac64_trace_d021(uint8_t value)
++{
++    static FILE *jac64_trace = NULL;
++    static int trace_init = 0;
++    if (!trace_init) {
++        trace_init = 1;
++        const char *path = getenv("JAC64_TRACE_FILE_D021");
++        if (path) jac64_trace = fopen(path, "w");
++    }
++    if (jac64_trace) {
++        fprintf(jac64_trace,
++            "EV-WrD021 clk=%llu rast=$%x cyc=%u val=$%02x pc=$%04x\n",
++            (unsigned long long)maincpu_clk,
++            vicii.raster_line,
++            vicii.raster_cycle,
++            value,
++            reg_pc);
++        fflush(jac64_trace);
++    }
++}
++
+ inline static void d01c_store(const uint8_t value)
+ {
+     VICII_DEBUG_REGISTER(("Sprite Multicolor Enable register: $%02X", value));
+@@ -259,6 +374,26 @@ inline static void d01d_store(const uint8_t value)
+ {
+     VICII_DEBUG_REGISTER(("Sprite X Expand register: $%02X", value));
+ 
++    /* JaC64 trace patch */
++    {
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE_D01D");
++            if (path) jac64_trace = fopen(path, "w");
++        }
++        if (jac64_trace) {
++            fprintf(jac64_trace,
++                "EV-WrD01D clk=%llu rast=$%x cyc=%u val=$%x old=$%x\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                value & 0xff,
++                vicii.regs[0x1d] & 0xff);
++            fflush(jac64_trace);
++        }
++    }
+     vicii.regs[0x1d] = value;
+ }
+ 
+@@ -272,12 +407,38 @@ inline static void color_reg_store(uint16_t addr, uint8_t value)
+     vicii.regs[addr] = value;
+     vicii.last_color_reg = (uint8_t)(addr);
      vicii.last_color_value = value;
++
++    /* JaC64 Phase G investigation — trace CPU $D02X write timing. */
++    {
++        static FILE *jac64_wcr = NULL;
++        static int jac64_wcr_init = 0;
++        if (!jac64_wcr_init) {
++            jac64_wcr_init = 1;
++            const char *p = getenv("JAC64_TRACE_FILE_WRCOL");
++            if (p) jac64_wcr = fopen(p, "w");
++        }
++        if (jac64_wcr) {
++            fprintf(jac64_wcr,
++                "EV-WrColorReg clk=%llu rast=$%x cyc=%u reg=$%x val=$%x\n",
++                (unsigned long long)maincpu_clk,
++                (unsigned)vicii.raster_line,
++                (unsigned)vicii.raster_cycle,
++                (unsigned)addr,
++                (unsigned)value);
++            fflush(jac64_wcr);
++        }
++    }
  }
  
 +extern void jac64_dump_screen_ram_on_signal(uint8_t value);
@@ -317,7 +1399,65 @@ index e513732..c7fa1d7 100644
      value &= 0x0f;
  
      color_reg_store(0x20, value);
-@@ -501,20 +530,65 @@ inline static unsigned int read_raster_y(void)
+@@ -288,6 +449,28 @@ inline static void d021_store(uint8_t value)
+     VICII_DEBUG_REGISTER(("Background #0 color register: $%02X", value));
+ 
+     value &= 0x0f;
++    jac64_trace_d021(value);
++
++    /* One-shot screen RAM dump triggered by environment variable */
++    {
++        static int dumped = 0;
++        extern uint8_t mem_ram[];
++        extern uint8_t *mem_color_ram_cpu;
++        if (!dumped) {
++            const char *path = getenv("JAC64_SCREEN_DUMP_NOW");
++            if (path && (unsigned long long)maincpu_clk > 4000000ULL) {
++                FILE *fp = fopen(path, "wb");
++                if (fp) {
++                    size_t w1 = fwrite(&mem_ram[0x0400], 1, 0x400, fp);
++                    size_t w2 = fwrite(mem_color_ram_cpu, 1, 0x400, fp);
++                    fclose(fp);
++                    dumped = 1;
++                    fprintf(stderr, "Dumped screen+color RAM to %s at clk=%llu (w1=%zu w2=%zu)\n",
++                        path, (unsigned long long)maincpu_clk, w1, w2);
++                }
++            }
++        }
++    }
+ 
+     color_reg_store(0x21, value);
+ }
+@@ -327,6 +510,28 @@ inline static void sprite_color_store(uint16_t addr, uint8_t value)
+     VICII_DEBUG_REGISTER(("Sprite #%d color register: $%02X",
+                           addr - 0x27, value));
+ 
++    /* JaC64 trace patch */
++    {
++        static FILE *jac64_trace = NULL;
++        static int trace_init = 0;
++        if (!trace_init) {
++            trace_init = 1;
++            const char *path = getenv("JAC64_TRACE_FILE_SPRCOLOR");
++            if (path) jac64_trace = fopen(path, "w");
++        }
++        if (jac64_trace) {
++            fprintf(jac64_trace,
++                "EV-WrSprCol clk=%llu rast=$%x cyc=%u reg=$%02x val=$%02x pc=$%04x\n",
++                (unsigned long long)maincpu_clk,
++                vicii.raster_line,
++                vicii.raster_cycle,
++                (unsigned)addr,
++                value,
++                reg_pc);
++            fflush(jac64_trace);
++        }
++    }
++
+     color_reg_store(addr, value);
+ }
+ 
+@@ -501,20 +706,65 @@ inline static unsigned int read_raster_y(void)
  inline static uint8_t d01112_read(uint16_t addr)
  {
      unsigned int tmp = read_raster_y();
@@ -386,7 +1526,7 @@ index e513732..c7fa1d7 100644
  }
  
  inline static uint8_t d01e_read(void)
-@@ -531,6 +605,26 @@ inline static uint8_t d01e_read(void)
+@@ -531,6 +781,26 @@ inline static uint8_t d01e_read(void)
      VICII_DEBUG_REGISTER(("Sprite-sprite collision mask: $%02X",
                            vicii.regs[0x1e]));
  
