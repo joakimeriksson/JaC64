@@ -43,16 +43,40 @@ def find_title_y(im):
 
 
 def bitmap_byte(arr, y, col, x0, char_w=8):
-    """Encode 8 pixels of a char cell as fg/bg bits, normalizing to bg-darkness.
-    bg = darkest pixel in the cell (= dominant background).
-    fg = anything significantly brighter."""
+    """Encode 8 pixels of a char cell as a pattern of color-clusters.
+    Each pixel gets a 0..N cluster id based on PROXIMITY in RGB space to
+    the cell's color centroids. Bypasses palette-brightness sensitivity:
+    two cells with the same shape but different palettes still hash to
+    the same byte.
+
+    Returns an integer encoding: bits 0..7 are pixel 7..0's cluster id
+    modulo 2 (= bg/fg binary), matching legacy behaviour for 2-color
+    cells. Multi-color cells encode the FIRST unique-color transition
+    pattern."""
     cell = arr[y, x0 + col*char_w:x0 + (col+1)*char_w]
-    # Compute brightness of each pixel
-    brights = cell.astype(int).sum(axis=1)
-    bg_b = brights.min()
+    # Find unique color clusters in this cell (within ~15 RGB units)
+    cell_arr = cell.astype(int)
+    cluster_ids = []
+    centroids = []
+    for px in range(char_w):
+        p = cell_arr[px]
+        best = -1
+        for i, c in enumerate(centroids):
+            if abs(p[0]-c[0]) + abs(p[1]-c[1]) + abs(p[2]-c[2]) < 60:
+                best = i
+                break
+        if best < 0:
+            best = len(centroids)
+            centroids.append(p)
+        cluster_ids.append(best)
+    # bg = most-common cluster (= dominant background)
+    counts = {}
+    for cid in cluster_ids:
+        counts[cid] = counts.get(cid, 0) + 1
+    bg_cluster = max(counts.keys(), key=lambda k: counts[k])
     byte = 0
     for px in range(char_w):
-        if brights[px] - bg_b > 80:  # significantly brighter = fg
+        if cluster_ids[px] != bg_cluster:
             byte |= 1 << (7 - px)
     return byte
 
