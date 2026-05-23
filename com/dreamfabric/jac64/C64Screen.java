@@ -3392,13 +3392,27 @@ public class C64Screen extends ExtChip implements Observer {
     // mem[] and start replacing legacy paint.
     if (useViceFullPipeline) {
       // g-byte: replicate drawGraphicsVice's fetch logic.
+      // VICE viciisc/vicii-fetch.c:234 vicii_fetch_graphics():
+      //   color_latency=true (6569):  addr uses (regs[0x11] | (reg11_delay & 0x20))
+      //                                with extra 6569-fetch-magic for RAM→ROM transitions
+      //   color_latency=false (8565): addr uses ONLY reg11_delay (previous cycle)
+      // Matching this fixes modesplit cyc 31 gbuf-fetch off-by-1 vs VICE.
       int gByte = 0;
       if (vmli < 40 && !notVisible) {
         int vByte = vicCharCache[vmli] & 0xff;
-        int d011Fetch = control1 | (control1FetchDelay & 0x20);
+        boolean colorLatency = Boolean.parseBoolean(
+            System.getProperty("jac64.colorLatency", "false"));
+        int d011Fetch;
+        if (colorLatency) {
+          // 6569 path: combine current BMM bit with delayed others
+          d011Fetch = control1 | (control1FetchDelay & 0x20);
+        } else {
+          // 8565 path: use only previous-cycle $D011 for the fetch
+          d011Fetch = control1FetchDelay;
+        }
         if ((d011Fetch & 0x20) != 0) {
           gByte = memory[vicBase + (vc & 0x3ff) * 8 + rc] & 0xff;
-        } else if ((control1 & 0x40) != 0) {
+        } else if ((d011Fetch & 0x40) != 0) {
           gByte = memory[charMemoryIndex + ((vByte & 0x3f) << 3) + rc] & 0xff;
         } else {
           gByte = memory[charMemoryIndex + (vByte << 3) + rc] & 0xff;
