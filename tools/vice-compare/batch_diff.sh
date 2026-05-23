@@ -11,6 +11,24 @@ BUILD_DIR="${JAC64_BUILD:-/tmp/jac64-build}"
 TESTPROGS="${VICE_TESTPROGS:-/Users/joakimeriksson/work/VICE-testprogs}"
 JAC64_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
+# Auto-build into BUILD_DIR unless caller set JAC64_SKIP_BUILD=1.
+# Without this, stale .class files at /tmp/jac64-build silently shadow
+# any source changes — wasted a 30-min bisect on 2026-05-23 chasing a
+# "regression" that was just an unbuilt commit. javac is fast enough
+# (~3s) that always-building is cheaper than the debugging cost when it
+# silently doesn't.
+if [ -z "$JAC64_SKIP_BUILD" ]; then
+    if ! javac -encoding UTF-8 -d "$BUILD_DIR" -cp "$JAC64_ROOT" \
+            "$JAC64_ROOT"/com/dreamfabric/jac64/*.java \
+            "$JAC64_ROOT"/com/dreamfabric/c64utils/*.java \
+            "$JAC64_ROOT"/resid/*.java \
+            "$JAC64_ROOT"/TestRaster.java 2>/tmp/jac64_build.log; then
+        echo "BUILD FAILED — see /tmp/jac64_build.log" >&2
+        tail -5 /tmp/jac64_build.log >&2
+        exit 1
+    fi
+fi
+
 test_extra_flags() {
     case "$1" in
         colorsplit) echo "-Djac64.zeroScreenRam=true" ;;
