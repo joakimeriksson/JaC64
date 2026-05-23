@@ -397,6 +397,9 @@ public final class ViceDrawCycle {
       .append(" gbuf=$").append(Integer.toHexString(gbuf))
       .append(" vbuf=$").append(Integer.toHexString(vbufReg))
       .append(" cbuf=$").append(Integer.toHexString(cbufReg))
+      .append(" dmli=").append(dmli)
+      .append(" vp0=$").append(Integer.toHexString(vbufPipe0Reg))
+      .append(" vp1=$").append(Integer.toHexString(vbufPipe1Reg))
       .append(" mb=").append(mainBorder ? 1 : 0)
       .append(" vb=").append(vborder)
       .append(" px=");
