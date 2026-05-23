@@ -3484,12 +3484,17 @@ public class C64Screen extends ExtChip implements Observer {
       viceDrawCycle.setRegs0x11(control1);
       viceDrawCycle.setRegs0x16(control2);
       viceDrawCycle.setVbufCbuf(vicCharCache, vicColCache);
-      // Phase 8: sync dmli to JaC64's vmli. vmli is incremented after
-      // each drawGraphics paint within the case dispatcher, so at the
-      // end of cycle N it equals the NEXT column to be drawn. We feed
-      // the column for THIS cycle's emit by clamping to [0,39] and
-      // using max(0, vmli-1) when the dispatcher already advanced.
-      int dmliForCycle = vmli - 1;
+      // Phase 8 fix 2026-05-23: sync dmli to JaC64's POST-bump vmli.
+      // vmli is incremented INSIDE drawGraphicsVice in case 16..55 BEFORE
+      // finishCycleVice runs, so vmli at this point = VICE's dmli at this
+      // cycle's pipe load:
+      //   cyc 16: vmli=1 ⇒ load vbuf[1]=col1 (matches VICE Phi2(16) dmli=1)
+      //   cyc 17: vmli=2 ⇒ load vbuf[2] (matches VICE Phi2(17) dmli=2)
+      // Cyc 14-15 have vmli=0 (no drawGraphics yet), matching VICE's
+      // pre-first-vis-en state. EV-DrawCycle trace at vicii_reg_timing-a5
+      // raster $8b cyc 17-19 confirms byte-for-byte match with VICE after
+      // this fix.
+      int dmliForCycle = vmli;
       if (dmliForCycle < 0) dmliForCycle = 0;
       if (dmliForCycle > 39) dmliForCycle = 39;
       viceDrawCycle.setDmli(dmliForCycle);
