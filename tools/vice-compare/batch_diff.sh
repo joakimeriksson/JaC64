@@ -36,7 +36,12 @@ run_jac64() {
     local test=$1 prg=$2 extra
     extra=$(test_extra_flags "$test")
     rm -f /tmp/jac64_test_frame_*.png 2>/dev/null || true
-    java -Djac64.warp=true -Djac64.framesToCapture=2 -Djac64.captureOnDone=true \
+    # captureFrames=2 (the actual property — was framesToCapture which is
+    # not read by TestRaster, so it fell back to default 30 and we'd pick
+    # frame 29 = many seconds of warp later, giving misleading cell-diffs
+    # for tests whose output evolves over time (greydot, fetchsplit, ...).
+    # Cap at 2 and use frame_001 below.
+    java -Djac64.warp=true -Djac64.captureFrames=2 -Djac64.captureOnDone=true \
          -Djac64.injectAtCycle=7005254 -Djac64.detSysJump=true \
          -Djac64.zeroColorRam=true $extra ${JAC64_EXTRA_FLAGS:-} \
          -cp "$BUILD_DIR:$JAC64_ROOT" TestRaster "$prg" \
@@ -70,15 +75,17 @@ for test in "${tests[@]}"; do
     prg=$(find "$TESTPROGS" -name "${test}.prg" 2>/dev/null | head -1)
     if [ -z "$prg" ]; then continue; fi
     run_jac64 "$test" "$prg"
-    # Pick the LATEST captured frame as the snapshot (frame_010 doesn't
-    # always exist if the test starts capturing late under regressions).
-    latest=$(ls -1 /tmp/jac64_test_frame_*.png 2>/dev/null | sort | tail -1)
+    # Pick frame_001: 1 wall-clock second of warp past SYS-jump. That's
+    # ~30M emulated cycles in, which is well past test completion for
+    # every VICE-testprogs PRG. Falls back to LATEST if frame_001 absent.
+    snap_src="/tmp/jac64_test_frame_001.png"
+    [ ! -f "$snap_src" ] && snap_src=$(ls -1 /tmp/jac64_test_frame_*.png 2>/dev/null | sort | tail -1)
     snap="/tmp/jac64_${test}_frame010.png"
-    if [ -z "$latest" ]; then
+    if [ -z "$snap_src" ]; then
         echo "WARN: no frames captured for $test" >&2
         continue
     fi
-    cp "$latest" "$snap"
+    cp "$snap_src" "$snap"
     TESTS_OK+=("$test")
 
     printf "%-23s" "$test"
