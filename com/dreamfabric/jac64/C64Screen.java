@@ -2465,7 +2465,8 @@ public class C64Screen extends ExtChip implements Observer {
   }
 
   private void scheduleGlueAlarm(int vbank) {
-    glueAlarmClock = cpu.cycles + 2;
+    // VICE c64gluelogic.c:62 — alarm fires at maincpu_clk + 1.
+    glueAlarmClock = cpu.cycles + 1;
     glueAlarmActive = true;
   }
 
