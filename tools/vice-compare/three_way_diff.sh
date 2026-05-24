@@ -57,12 +57,19 @@ if [ -z "$JAC64_SKIP_BUILD" ]; then
         }
 fi
 
+# --- per-test extra JaC flags (mirrors batch_diff.sh test_extra_flags) ---
+case "$TEST" in
+    colorsplit) EXTRA_FLAGS="-Djac64.zeroScreenRam=true" ;;
+    *) EXTRA_FLAGS="" ;;
+esac
+
 # --- JaC64 shot ---
 echo "Running JaC64..." >&2
 rm -f /tmp/jac64_test_frame_*.png
 java -Djac64.warp=true -Djac64.captureFrames=2 -Djac64.captureOnDone=true \
      -Djac64.injectAtCycle=7005254 -Djac64.detSysJump=true \
      -Djac64.zeroColorRam=true \
+     $EXTRA_FLAGS \
      -cp "$BUILD_DIR:$JAC64_ROOT" TestRaster "$PRG" > /tmp/jac64_${TEST}.log 2>&1
 cp /tmp/jac64_test_frame_001.png "$JAC_SHOT"
 
