@@ -708,6 +708,10 @@ public final class ViceDrawCycle {
     }
     dbufOffset += 8;
 
+    // Per-cycle EV-DrawCycle trace (matches VICE format for direct diff).
+    // No-op when -Djac64.traceJacDraw is unset.
+    emitJacDrawTrace();
+
     // Step 3: snapshot pendingFromCpu for NEXT cycle's commit.
     // (VICE's update_cregs at line 799, AFTER draw_colors_8565 calls.)
     if (Boolean.parseBoolean(System.getProperty("jac64.cregsCommitPipe", "true"))) {
@@ -787,6 +791,76 @@ public final class ViceDrawCycle {
         greyDotTrace = new java.io.PrintStream(new java.io.FileOutputStream(p), true);
       } catch (Exception e) { greyDotTrace = System.err; }
     }
+  }
+
+  // ===========================================================
+  // EV-DrawCycle trace (Session-1 border-test infrastructure 2026-05-25)
+  //
+  // Format byte-equivalent to VICE x64sc's JAC64_TRACE_FILE_DRAW (patched in
+  // /Users/joakimeriksson/work/vice-emu/vice/src/viciisc/vicii-draw-cycle.c).
+  // Enables direct `diff /tmp/jac.trace /tmp/vice.trace` to find per-cycle
+  // VIC-state divergences. Lazy-init: ZERO per-cycle cost when off.
+  //
+  // Enable with -Djac64.traceJacDraw=true and optional clk-window gate via
+  // -Djac64.traceJacDrawClkLo / -Djac64.traceJacDrawClkHi to keep file sizes
+  // manageable on long demos.
+  //
+  // File path: -Djac64.traceJacDrawFile=/tmp/jac64_draw.trace (default).
+  // ===========================================================
+  private static java.io.PrintStream jacDrawTrace = null;
+  private static final long JAC_DRAW_TRACE_CLK_LO =
+      Long.getLong("jac64.traceJacDrawClkLo", 0L);
+  private static final long JAC_DRAW_TRACE_CLK_HI =
+      Long.getLong("jac64.traceJacDrawClkHi", Long.MAX_VALUE);
+  private static final boolean JAC_DRAW_TRACE_ON =
+      Boolean.getBoolean("jac64.traceJacDraw");
+  static {
+    if (JAC_DRAW_TRACE_ON) {
+      String p = System.getProperty("jac64.traceJacDrawFile", "/tmp/jac64_draw.trace");
+      try {
+        jacDrawTrace = new java.io.PrintStream(new java.io.FileOutputStream(p), true);
+      } catch (Exception e) {
+        jacDrawTrace = System.err;
+      }
+    }
+  }
+
+  private void emitJacDrawTrace() {
+    if (!JAC_DRAW_TRACE_ON || jacDrawTrace == null) return;
+    if (cycleClk < JAC_DRAW_TRACE_CLK_LO || cycleClk > JAC_DRAW_TRACE_CLK_HI) return;
+    // dbufOffset was incremented to next cycle's start; rewind to get THIS
+    // cycle's offset (= what VICE prints as `offs`).
+    int offs = dbufOffset - 8;
+    int last = thisCycleLastReg & 0xff;
+    int gbufRaw = gbuf & 0xff;
+    int vbufRaw = vbufReg & 0xff;
+    int cbufRaw = cbufReg & 0xff;
+    int mb = mainBorder ? 1 : 0;
+    int vb = vborder & 0xff;
+    int cregs21 = cregs[0x21] & 0xff;
+    StringBuilder sb = new StringBuilder(192);
+    sb.append("EV-DrawCycle clk=").append(cycleClk)
+      .append(" rast=$").append(Integer.toHexString(cycleVbeam))
+      .append(" cyc=").append(cycleVicCycle)
+      .append(" offs=").append(offs)
+      .append(" cregs21=$").append(Integer.toHexString(cregs21))
+      .append(" last=$").append(Integer.toHexString(last))
+      .append(" gbuf=$").append(Integer.toHexString(gbufRaw))
+      .append(" vbuf=$").append(Integer.toHexString(vbufRaw))
+      .append(" cbuf=$").append(Integer.toHexString(cbufRaw))
+      .append(" mb=").append(mb)
+      .append(" vb=").append(vb)
+      .append(" px=");
+    for (int i = 0; i < 8; i++) {
+      if (i > 0) sb.append('.');
+      sb.append(Integer.toHexString(emittedColors[i] & 0xff));
+    }
+    sb.append(" rb=");
+    for (int i = 0; i < 8; i++) {
+      if (i > 0) sb.append('.');
+      sb.append(Integer.toHexString(renderBuffer[i] & 0xff));
+    }
+    jacDrawTrace.println(sb.toString());
   }
 
   // ===========================================================
