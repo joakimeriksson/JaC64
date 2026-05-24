@@ -3406,7 +3406,12 @@ public class C64Screen extends ExtChip implements Observer {
       // Fixes vicii_reg_timing cyc 13-14 mismatch.
       int gByte = 0;
       int cycleFlagsForFetch = ViceDrawCycle.cycleFlagsFor(vicCycle);
-      boolean isFetchG = (cycleFlagsForFetch & ViceDrawCycle.PHI1_FETCH_G) != 0;
+      // PHI1_FETCH_G is an enum value within PHI1_TYPE_M (3-bit field),
+      // not a flag bit. Bitwise AND with PHI1_FETCH_G alone matches other
+      // enum values that share bit 10 (e.g. PHI1_REFRESH=0x600). Compare
+      // by equality against the masked type field.
+      boolean isFetchG = (cycleFlagsForFetch & ViceDrawCycle.PHI1_TYPE_M)
+          == ViceDrawCycle.PHI1_FETCH_G;
       if (isFetchG && vmli < 40 && !notVisible) {
         int vByte = vicCharCache[vmli] & 0xff;
         boolean colorLatency = Boolean.parseBoolean(
@@ -3477,10 +3482,18 @@ public class C64Screen extends ExtChip implements Observer {
       // Opt-out: -Djac64.idleGfxFetch=false.
       boolean idleFetch = !gfxVisible
           && Boolean.parseBoolean(System.getProperty("jac64.idleGfxFetch", "true"));
-      if (idleFetch) {
-        viceDrawCycle.setGbuf(memory[0x3fff] & 0xff);
-      } else {
-        viceDrawCycle.setGbuf(gByte);
+      // VICE viciisc/vicii-cycle.c:137-144 — vicii.gbuf is only WRITTEN
+      // at FETCH_G cycles (display state OR idle state). At non-FETCH_G
+      // cycles vicii.gbuf retains its last value. Previously JaC64
+      // overwrote gbuf to 0 every non-FETCH_G cycle, clearing the pipe
+      // register too early and producing wrong rendering for modesplit
+      // / vicii_reg_timing at cycle boundaries past the matrix fetch.
+      if (isFetchG) {
+        if (idleFetch) {
+          viceDrawCycle.setGbuf(memory[0x3fff] & 0xff);
+        } else {
+          viceDrawCycle.setGbuf(gByte);
+        }
       }
       viceDrawCycle.setRegs0x11(control1);
       viceDrawCycle.setRegs0x16(control2);
