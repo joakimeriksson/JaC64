@@ -3583,7 +3583,9 @@ public class C64Screen extends ExtChip implements Observer {
         .append(" vBorder=").append(vBorder ? 1 : 0)
         .append(" vmli=").append(vmli)
         .append(" vc=").append(vc)
-        .append(" rc=").append(rc);
+        .append(" rc=").append(rc)
+        .append(" vcBase=").append(vcBase)
+        .append(" gfx=").append(gfxVisible ? 1 : 0);
       if (traceVicActions.length() > 0) {
         sb.append(" act=[").append(traceVicActions).append(']');
         traceVicActions.setLength(0);
