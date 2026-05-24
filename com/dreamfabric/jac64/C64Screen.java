@@ -3425,7 +3425,15 @@ public class C64Screen extends ExtChip implements Observer {
           d011Fetch = control1FetchDelay;
         }
         if ((d011Fetch & 0x20) != 0) {
-          gByte = memory[vicBase + (vc & 0x3ff) * 8 + rc] & 0xff;
+          // VICE viciisc/vicii-fetch.c:163-181 g_fetch_addr() applies
+          // an ECM mask `a &= 0x39ff` AFTER the BMM address calc.
+          // Bits 10 and 9 of `a` correspond to bits 7 and 6 of vc, so
+          // ECM clears those bits of vc for the fetch. Fixes modesplit
+          // cols 33-35 (= 9 cells, 138 pixels) where the test enters
+          // ECM+BMM (invalid mode) at cyc 42 via $D011=$7b — JaC used
+          // to keep reading the un-masked bitmap byte for 6 cycles.
+          int vcMasked = (d011Fetch & 0x40) != 0 ? (vc & 0x33f) : (vc & 0x3ff);
+          gByte = memory[vicBase + vcMasked * 8 + rc] & 0xff;
         } else if ((d011Fetch & 0x40) != 0) {
           gByte = memory[charMemoryIndex + ((vByte & 0x3f) << 3) + rc] & 0xff;
         } else {
