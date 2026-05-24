@@ -4304,7 +4304,20 @@ public class C64Screen extends ExtChip implements Observer {
       viceSprPipe.reg1bPipe = memory[0xd01b + IO_OFFSET] & 0xff;
       viceSprPipe.reg1cPipe = memory[0xd01c + IO_OFFSET] & 0xff;
       viceSprPipe.reg1dPipe = memory[0xd01d + IO_OFFSET] & 0xff;
-      System.arraycopy(sprPipeSpriteX, 0, viceSprPipe.currentSpriteX, 0, 8);
+      // VICE's sprite_x_pipe is updated by update_sprite_xpos() at END of
+      // draw_sprites8 (vicii-draw-cycle.c:478-481), giving exactly ONE cycle
+      // of delay between a $D000-$D010 write and the trigger comparison.
+      // ViceSpritePipeline ALREADY provides that latch (drawCycle8 line 290:
+      // spriteXPipe[s] = currentSpriteX[s] at end of cycle). Feeding
+      // sprPipeSpriteX (an additional cycle's snapshot of sprites[s].x)
+      // into currentSpriteX added a SECOND pipe stage, so triggers at
+      // cycle K saw sprites[s].x from end of K-2 instead of K-1. The
+      // ss-xpos test (mid-line $D000 writes) miss-triggered sprites at
+      // the OLD X for 32 cells. Pass the live sprites[s].x here; the
+      // pipe inside drawCycle8 closes the 1-cycle delay correctly.
+      for (int s = 0; s < 8; s++) {
+        viceSprPipe.currentSpriteX[s] = sprites[s].x & 0x1ff;
+      }
       viceSprPipe.traceLine = vbeam;
       viceSprPipe.traceCyc = vicCycle;
       viceSprPipe.traceClk = cpu.cycles;
