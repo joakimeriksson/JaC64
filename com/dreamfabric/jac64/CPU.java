@@ -295,6 +295,27 @@ public class CPU extends MOS6510Core {
     adr &= 0xffff;
     final boolean isIO = ioON && ((adr & 0xf000) == 0xd000);
 
+    int trapAdr = Integer.getInteger("jac64.trapWriteAdr", -1);
+    int trapAdrHi = Integer.getInteger("jac64.trapWriteAdrHi", trapAdr);
+    if (trapAdr >= 0 && adr >= trapAdr && adr <= trapAdrHi) {
+      long lo = Long.getLong("jac64.trapWriteClkLo", 0L);
+      long hi = Long.getLong("jac64.trapWriteClkHi", Long.MAX_VALUE);
+      if (cycles >= lo && cycles <= hi) {
+        int trapRast = -1; long trapCyc = -1;
+        if (chips instanceof C64Screen) {
+          C64Screen s = (C64Screen) chips;
+          trapRast = s.vbeam;
+          trapCyc = cycles - s.lastLine;
+        }
+        System.err.println("TRAP-WR adr=$" + Integer.toHexString(adr)
+            + " val=$" + Integer.toHexString(data & 0xff)
+            + " clk=" + cycles
+            + " pc=$" + Integer.toHexString(pc & 0xffff)
+            + " rast=$" + Integer.toHexString(trapRast)
+            + " cyc=" + trapCyc);
+      }
+    }
+
     if (isIO) {
       chips.performWrite(adr, data, cycles);
     } else {
@@ -306,17 +327,6 @@ public class CPU extends MOS6510Core {
             + " val=$" + Integer.toHexString(data & 0xff)
             + " clk=" + cycles
             + " pc=$" + Integer.toHexString(pc & 0xffff));
-      }
-      int trapAdr = Integer.getInteger("jac64.trapWriteAdr", -1);
-      if (trapAdr >= 0 && adr == trapAdr) {
-        long lo = Long.getLong("jac64.trapWriteClkLo", 0L);
-        long hi = Long.getLong("jac64.trapWriteClkHi", Long.MAX_VALUE);
-        if (cycles >= lo && cycles <= hi) {
-          System.err.println("TRAP-WR adr=$" + Integer.toHexString(adr)
-              + " val=$" + Integer.toHexString(data & 0xff)
-              + " clk=" + cycles
-              + " pc=$" + Integer.toHexString(pc & 0xffff));
-        }
       }
     }
   }
