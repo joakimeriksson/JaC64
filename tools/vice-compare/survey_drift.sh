@@ -46,11 +46,15 @@ total_jac_ref=0
 total_jac_vice=0
 n=0
 for test in "${TESTS[@]}"; do
-    PRG=$(find "$TESTPROGS" -name "${test}.prg" 2>/dev/null | head -1)
-    [ -z "$PRG" ] && { printf "%-23s | %-12s | %-12s | (no PRG)\n" "$test" "?" "?"; continue; }
+    # Find REF first; multiple PRGs can share a name (e.g. RS232/test1.prg vs
+    # VICII/lp-trigger/test1.prg), but each REF is in a specific test dir.
+    # Derive the matching PRG from the REF's directory.
     REF=$(find "$TESTPROGS" -path "*references*" -name "${test}.prg-8565.png" 2>/dev/null | head -1)
     [ -z "$REF" ] && REF=$(find "$TESTPROGS" -path "*references*" -name "${test}.prg.png" 2>/dev/null | head -1)
     [ -z "$REF" ] && { printf "%-23s | %-12s | %-12s | (no REF)\n" "$test" "?" "?"; continue; }
+    PRG="$(dirname "$(dirname "$REF")")/${test}.prg"
+    [ ! -f "$PRG" ] && PRG=$(find "$TESTPROGS" -name "${test}.prg" 2>/dev/null | head -1)
+    [ -z "$PRG" ] || [ ! -f "$PRG" ] && { printf "%-23s | %-12s | %-12s | (no PRG)\n" "$test" "?" "?"; continue; }
 
     JAC_SHOT="/tmp/sd_jac_${test}.png"
     VICE_SHOT="/tmp/sd_vice_${test}.png"

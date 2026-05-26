@@ -90,7 +90,15 @@ echo
 # still current). Track rows + per-variant totals.
 TESTS_OK=()
 for test in "${tests[@]}"; do
-    prg=$(find "$TESTPROGS" -name "${test}.prg" 2>/dev/null | head -1)
+    # Find REF first; derive PRG from REF directory to avoid name collisions
+    # (e.g. RS232/test1.prg vs VICII/lp-trigger/test1.prg).
+    ref_any=$(find "$TESTPROGS" -path "*references*" \( -name "${test}.prg-8565.png" -o -name "${test}.prg.png" \) 2>/dev/null | head -1)
+    if [ -n "$ref_any" ]; then
+        prg="$(dirname "$(dirname "$ref_any")")/${test}.prg"
+        [ ! -f "$prg" ] && prg=$(find "$TESTPROGS" -name "${test}.prg" 2>/dev/null | head -1)
+    else
+        prg=$(find "$TESTPROGS" -name "${test}.prg" 2>/dev/null | head -1)
+    fi
     if [ -z "$prg" ]; then continue; fi
     run_jac64 "$test" "$prg"
     # Pick frame_001: 1 wall-clock second of warp past SYS-jump. That's

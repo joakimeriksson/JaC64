@@ -491,6 +491,26 @@ public class C64Screen extends ExtChip implements Observer {
   private int videoMatrixFetchDelay = 0;
   private int vicBaseFetchDelay = 0;
   private int charMemoryIndexFetchDelay = 0;
+  // Sprite-crunch port (project_sprite_crunch_port_plan).
+  // Adds VICE-compatible mc/mcbase/exp_flop state machine + d017_store
+  // bit-mixing crunch formula.
+  // - UpdateMcBase at VICE Phi2(16) (= JaC case 15): mcbase=mc if expFlipFlop,
+  //   DMA off if mcbase==63
+  // - ChkSprExp at VICE Phi2(56) (= JaC case 55): toggle expFlipFlop for
+  //   sprites with dma + y_exp bit set (READING LIVE $D017 = sprYEX)
+  // - ChkSprDisp at VICE Phi1(58) (= JaC case 57): mc = mcbase
+  // - Fetch uses mc (mc++ per byte), not nextByte
+  // - $D017 write handler: on bit-clear + exp_flop=0, set exp_flop=1; if
+  //   at ChkSprCrunch cycle (= JaC case 14), apply bit-mixing formula
+  //   `mc = (0x2a & (mcbase & mc)) | (0x15 & (mcbase | mc))`
+  // Closes spritecrunch-3b/3c/3d-00 entirely (6000 cells) + sequencer-bug
+  // (480/481 cells) + spritecrunch2-07-29 partially (~1000+ cells).
+  // Default ON; opt-out via -Djac64.spriteCrunch=false. Anchor 16-test
+  // JaC-vs-VICE stays at 189 (same as default-off baseline). The earlier
+  // "regression" sighting on ss-hires-mc-exp/ss-mc-color2/vicii_reg_timing-a5
+  // was a mid-sweep build race; manually re-verified all three are clean.
+  private final boolean useSpriteCrunch =
+      Boolean.parseBoolean(System.getProperty("jac64.spriteCrunch", "true"));
   private final boolean viceRenderDelay =
       Boolean.getBoolean("jac64.viceRenderDelay");
   // ----- VICE-style cycle-driven gfx pipeline (jac64.viceGfx) -----
@@ -2039,6 +2059,28 @@ public class C64Screen extends ExtChip implements Observer {
       break;
 
     case 0xd017:
+      // VICE d017_store sprite-crunch handler (vicii-mem.c:226-263).
+      // For each sprite whose y_exp bit is CLEARED in the new value AND
+      // whose exp_flop is currently 0:
+      //  - If we're at the ChkSprCrunch cycle (VICE Phi2(15) = JaC case 14),
+      //    apply the bit-mixing formula to mc to extend sprite display.
+      //  - Always set exp_flop=1 for affected sprites.
+      if (useSpriteCrunch) {
+        int vicCycleNow = (int) (cpu.cycles - lastLine);
+        for (int i = 0; i < 8; i++) {
+          int b = 1 << i;
+          if ((data & b) == 0 && !sprites[i].expFlipFlop) {
+            if (vicCycleNow == 14) {
+              // ChkSprCrunch cycle — apply bit-mixing formula.
+              int mc = sprites[i].mc;
+              int mcbase = sprites[i].mcbase;
+              sprites[i].mc =
+                  (0x2a & (mcbase & mc)) | (0x15 & (mcbase | mc));
+            }
+            sprites[i].expFlipFlop = true;
+          }
+        }
+      }
       sprYEX = data;
       for (int i = 0, m = 1, n = 8; i < n; i++, m = m << 1) {
         sprites[i].expandY = (data & m) != 0;
@@ -3065,9 +3107,33 @@ public class C64Screen extends ExtChip implements Observer {
       }
 
       // Turn off sprite DMA if finished reading!
-      for (int i = 0, n = 8; i < n; i++) {
-        if (sprites[i].nextByte == 63)
-          sprites[i].dma = false;
+      if (useSpriteCrunch) {
+        // VICE Phi2(16) UpdateMcBase: mcbase=mc if expFlipFlop=1,
+        // DMA off if mcbase==63. Mirrors vicii-cycle.c:sprite_mcbase_update.
+        // Opt-in trace via -Djac64.traceSpriteCrunch=true.
+        for (int i = 0; i < 8; i++) {
+          Sprite s = sprites[i];
+          if (s.expFlipFlop) {
+            s.mcbase = s.mc;
+            if (s.mcbase == 63) s.dma = false;
+          }
+        }
+        if (Boolean.getBoolean("jac64.traceSpriteCrunch")
+            && vbeam >= 50 && vbeam <= 110) {
+          StringBuilder sb = new StringBuilder("MCBASE-UPD vbeam=").append(vbeam);
+          for (int i = 0; i < 8; i++) {
+            Sprite s = sprites[i];
+            sb.append(" s").append(i).append("[dma=").append(s.dma ? 1 : 0)
+              .append(" mc=").append(s.mc).append(" mcb=").append(s.mcbase)
+              .append(" eF=").append(s.expFlipFlop ? 1 : 0).append("]");
+          }
+          System.err.println(sb.toString());
+        }
+      } else {
+        for (int i = 0, n = 8; i < n; i++) {
+          if (sprites[i].nextByte == 63)
+            sprites[i].dma = false;
+        }
       }
 
       break;
@@ -3137,6 +3203,11 @@ public class C64Screen extends ExtChip implements Observer {
             sprite.nextByte = 0;
             sprite.dma = true;
             sprite.expFlipFlop = true;
+            if (useSpriteCrunch) {
+              // VICE turn_sprite_dma_on: mcbase=0, exp_flop=1.
+              sprite.mcbase = 0;
+              sprite.mc = 0;
+            }
             if (fldTrace) {
               fldOut.println("SPR-DMA-ON s=" + i +
                   " vbeam=" + vbeam + " cyc=" + vicCycle +
@@ -3188,12 +3259,29 @@ public class C64Screen extends ExtChip implements Observer {
             sprite.nextByte = 0;
             sprite.dma = true;
             sprite.expFlipFlop = true;
+            if (useSpriteCrunch) {
+              sprite.mcbase = 0;
+              sprite.mc = 0;
+            }
             if (fldTrace) {
               fldOut.println("SPR-DMA-ON-2 s=" + i +
                   " vbeam=" + vbeam + " cyc=" + vicCycle +
                   " y=$" + Integer.toHexString(sprite.y & 0xff) +
                   " clk=" + cpu.cycles);
             }
+          }
+        }
+      }
+      // VICE Phi2(56) ChkSprExp: toggle expFlipFlop for sprites with DMA
+      // and y_exp bit set. Reads $D017 LIVE (= sprYEX). Mirrors
+      // vicii-cycle.c:check_exp. This is the sprite-crunch trigger point —
+      // mid-line $D017 writes between this cycle and next-line UpdateMcBase
+      // change the mcbase commit behaviour.
+      if (useSpriteCrunch) {
+        for (int i = 0; i < 8; i++) {
+          Sprite s = sprites[i];
+          if (s.dma && (sprYEX & (1 << i)) != 0) {
+            s.expFlipFlop = !s.expFlipFlop;
           }
         }
       }
@@ -3234,6 +3322,13 @@ public class C64Screen extends ExtChip implements Observer {
       }
       break;
     case 57:
+      // VICE Phi1(58) ChkSprDisp: mc = mcbase, set display bits for active
+      // DMA sprites. Mirrors vicii-cycle.c:check_sprite_display.
+      if (useSpriteCrunch) {
+        for (int i = 0; i < 8; i++) {
+          sprites[i].mc = sprites[i].mcbase;
+        }
+      }
       for (int i = 0, n = 8; i < n; i++) {
         Sprite sprite = sprites[i];
         if (sprite.dma)
@@ -3424,6 +3519,7 @@ public class C64Screen extends ExtChip implements Observer {
           // 8565 path: use only previous-cycle $D011 for the fetch
           d011Fetch = control1FetchDelay;
         }
+        int fetchAddr;
         if ((d011Fetch & 0x20) != 0) {
           // VICE viciisc/vicii-fetch.c:163-181 g_fetch_addr() applies
           // an ECM mask `a &= 0x39ff` AFTER the BMM address calc.
@@ -3433,11 +3529,24 @@ public class C64Screen extends ExtChip implements Observer {
           // ECM+BMM (invalid mode) at cyc 42 via $D011=$7b — JaC used
           // to keep reading the un-masked bitmap byte for 6 cycles.
           int vcMasked = (d011Fetch & 0x40) != 0 ? (vc & 0x33f) : (vc & 0x3ff);
-          gByte = memory[vicBase + vcMasked * 8 + rc] & 0xff;
+          fetchAddr = vicBase + vcMasked * 8 + rc;
         } else if ((d011Fetch & 0x40) != 0) {
-          gByte = memory[charMemoryIndex + ((vByte & 0x3f) << 3) + rc] & 0xff;
+          fetchAddr = charMemoryIndex + ((vByte & 0x3f) << 3) + rc;
         } else {
-          gByte = memory[charMemoryIndex + (vByte << 3) + rc] & 0xff;
+          fetchAddr = charMemoryIndex + (vByte << 3) + rc;
+        }
+        gByte = memory[fetchAddr] & 0xff;
+        if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+            && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+          traceVicCycleOut.println("EV-FetchG clk=" + cpu.cycles
+              + " rast=$" + Integer.toHexString(vbeam)
+              + " cyc=" + vicCycle
+              + " col=" + vmli
+              + " addr=$" + Integer.toHexString(fetchAddr)
+              + " data=$" + Integer.toHexString(gByte)
+              + " d018=$" + Integer.toHexString(vicMem)
+              + " vc=" + vc
+              + " rc=" + rc);
         }
       }
       // Phase C: paint base aligned with VICE's Phi1(N)-quantized xpos
@@ -5392,6 +5501,13 @@ public class C64Screen extends ExtChip implements Observer {
     boolean priority = false;
     boolean lineFinished = false;
 
+    // Sprite-crunch state (VICE mcbase/mc model). Active when
+    // -Djac64.spriteCrunch=true. mc++ per byte fetched; mcbase latched at
+    // VICE Phi2(16) UpdateMcBase if expFlipFlop=1. See VICE
+    // vicii-cycle.c:sprite_mcbase_update and check_exp.
+    int mc = 0;
+    int mcbase = 0;
+
     int pixelsLeft = 0;
     int currentPixel = 0;
 
@@ -5431,32 +5547,48 @@ public class C64Screen extends ExtChip implements Observer {
     void readSpriteData() {
       if (TRACE_VIC_CYCLE) traceAct("SPR" + spriteNo + "Read");
       pointer = vicBank + memory[spr0BlockSel + spriteNo] * 0x40;
-      int b0 = memory[pointer + nextByte] & 0xff;
-      int b1 = memory[pointer + nextByte + 1] & 0xff;
-      int b2 = memory[pointer + nextByte + 2] & 0xff;
+      int b0, b1, b2;
+      if (useSpriteCrunch) {
+        // VICE path: 3 fetches at pointer+mc, each increments mc & 0x3f.
+        // mc was set to mcbase at case 57 (ChkSprDisp). The expFlipFlop
+        // toggle and nextByte rewind logic is REMOVED — handled by
+        // discrete ChkSprExp (case 55) and UpdateMcBase (case 15) events.
+        b0 = memory[pointer + mc] & 0xff; mc = (mc + 1) & 0x3f;
+        b1 = memory[pointer + mc] & 0xff; mc = (mc + 1) & 0x3f;
+        b2 = memory[pointer + mc] & 0xff; mc = (mc + 1) & 0x3f;
+        // Keep nextByte tracking for any legacy code still reading it.
+        nextByte = mc;
+      } else {
+        b0 = memory[pointer + nextByte] & 0xff;
+        b1 = memory[pointer + nextByte + 1] & 0xff;
+        b2 = memory[pointer + nextByte + 2] & 0xff;
+      }
       if (Boolean.getBoolean("jac64.traceSprFetch")
           && vbeam >= 248 && vbeam <= 256) {
         System.err.println("SPR" + spriteNo + "-FETCH vbeam=" + vbeam
             + " cyc=" + (cpu.cycles - lastLine)
             + " ptr=$" + Integer.toHexString(pointer)
             + " ptrByte=$" + Integer.toHexString(memory[spr0BlockSel + spriteNo] & 0xff)
-            + " nb=" + nextByte
+            + " nb=" + nextByte + " mc=" + mc
             + " bytes=$" + String.format("%02x%02x%02x", b0, b1, b2));
       }
-      nextByte += 3;
       spriteReg = (b0 << 16) | (b1 << 8) | b2;
 
       // Mirror into VICE pipeline's per-sprite data array. Loaded into
       // sbufReg at pixel 4 of the dma1_dma2 cycle by drawCycle8.
       viceSprPipe.currentSpriteData[spriteNo] = spriteReg & 0xffffff;
 
-      if (!expandY) expFlipFlop = false;
+      if (!useSpriteCrunch) {
+        // Legacy expFlipFlop / nextByte rewind path.
+        nextByte += 3;
+        if (!expandY) expFlipFlop = false;
 
-      if (expFlipFlop) {
-        nextByte = nextByte - 3;
+        if (expFlipFlop) {
+          nextByte = nextByte - 3;
+        }
+
+        expFlipFlop = !expFlipFlop;
       }
-
-      expFlipFlop = !expFlipFlop;
       pixelsLeft = 0;
 
       // Mirror into the new sequencer pipeline (stage 4+).
