@@ -399,6 +399,14 @@ public class C64Screen extends ExtChip implements Observer {
   private boolean sprPipeDma1Dma2 = false;
   private int sprPipeDmaNum = -1;
   private int sprPipeDisplayBits = 0;
+  // VICE-sticky sprite_display_bits: only updated at ChkSprDisp cycle (case 57)
+  // following VICE's check_sprite_display semantics. Set on Y-match + enable +
+  // DMA, cleared on DMA-off, otherwise unchanged. Closes spriteenable1-4
+  // (181 cells) without regressing any sprite test. Default ON; opt-out via
+  // -Djac64.spriteDispSticky=false.
+  private int spriteDisplayBitsSticky = 0;
+  private final boolean useSpriteDispSticky =
+      Boolean.parseBoolean(System.getProperty("jac64.spriteDispSticky", "true"));
   private int sprPipeReg1b = 0;
   private int sprPipeReg1c = 0;
   private int sprPipeReg1d = 0;
@@ -3329,6 +3337,23 @@ public class C64Screen extends ExtChip implements Observer {
           sprites[i].mc = sprites[i].mcbase;
         }
       }
+      // VICE-sticky sprite_display_bits update (vicii-cycle.c:64-81).
+      // SET bit on Y-match + enable + DMA active; CLEAR on DMA-off;
+      // otherwise unchanged (sticky across non-Y-match lines).
+      if (useSpriteDispSticky) {
+        int yMatch = (vPos + SC_SPYOFFS) & 0xff;
+        for (int s = 0; s < 8; s++) {
+          int bit = 1 << s;
+          Sprite sp = sprites[s];
+          if (sp.dma) {
+            if (sp.enabled && sp.y == yMatch) {
+              spriteDisplayBitsSticky |= bit;
+            }
+          } else {
+            spriteDisplayBitsSticky &= ~bit;
+          }
+        }
+      }
       for (int i = 0, n = 8; i < n; i++) {
         Sprite sprite = sprites[i];
         if (sprite.dma)
@@ -4458,10 +4483,18 @@ public class C64Screen extends ExtChip implements Observer {
       viceSprPipe.spritePtrDma0 = ptrDma0Now;
       viceSprPipe.spriteDma1Dma2 = dma12Now;
       viceSprPipe.spriteDmaNum = dmaNumNow;
-      int displayBitsNow = 0;
-      for (int s = 0; s < 8; s++) {
-        if (sprites[s].dma) displayBitsNow |= (1 << s);
-        viceSprPipe.currentSpriteX[s] = sprites[s].x & 0x1ff;
+      int displayBitsNow;
+      if (useSpriteDispSticky) {
+        displayBitsNow = spriteDisplayBitsSticky;
+        for (int s = 0; s < 8; s++) {
+          viceSprPipe.currentSpriteX[s] = sprites[s].x & 0x1ff;
+        }
+      } else {
+        displayBitsNow = 0;
+        for (int s = 0; s < 8; s++) {
+          if (sprites[s].dma) displayBitsNow |= (1 << s);
+          viceSprPipe.currentSpriteX[s] = sprites[s].x & 0x1ff;
+        }
       }
       viceSprPipe.spriteDisplayBits = displayBitsNow;
       viceSprPipe.reg1bPipe = memory[0xd01b + IO_OFFSET] & 0xff;
@@ -4501,10 +4534,18 @@ public class C64Screen extends ExtChip implements Observer {
       sprPipePtrDma0 = ptrDma0Next;
       sprPipeDma1Dma2 = dma12Next;
       sprPipeDmaNum = dmaNumNext;
-      int displayBitsNext = 0;
-      for (int s = 0; s < 8; s++) {
-        if (sprites[s].dma) displayBitsNext |= (1 << s);
-        sprPipeSpriteX[s] = sprites[s].x & 0x1ff;
+      int displayBitsNext;
+      if (useSpriteDispSticky) {
+        displayBitsNext = spriteDisplayBitsSticky;
+        for (int s = 0; s < 8; s++) {
+          sprPipeSpriteX[s] = sprites[s].x & 0x1ff;
+        }
+      } else {
+        displayBitsNext = 0;
+        for (int s = 0; s < 8; s++) {
+          if (sprites[s].dma) displayBitsNext |= (1 << s);
+          sprPipeSpriteX[s] = sprites[s].x & 0x1ff;
+        }
       }
       sprPipeDisplayBits = displayBitsNext;
       sprPipeReg1b = memory[0xd01b + IO_OFFSET] & 0xff;
