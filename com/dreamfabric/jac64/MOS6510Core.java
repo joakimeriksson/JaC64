@@ -880,6 +880,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
       brk = false;
       break;
     case PLP:
+      fetchByte(s | 0x100);
       tmp = pop();
       boolean irqWasDisabled = disableInterupt;
       setStatusByte(tmp);
