@@ -3553,7 +3553,20 @@ public class C64Screen extends ExtChip implements Observer {
           // cols 33-35 (= 9 cells, 138 pixels) where the test enters
           // ECM+BMM (invalid mode) at cyc 42 via $D011=$7b — JaC used
           // to keep reading the un-masked bitmap byte for 6 cycles.
-          int vcMasked = (d011Fetch & 0x40) != 0 ? (vc & 0x33f) : (vc & 0x3ff);
+          // BMM g-fetch uses the running vc counter directly (VICE
+          // g_fetch_addr: a = (vc<<3)|rc). But this block runs AFTER
+          // finishCycleVice has already post-incremented vc for the
+          // column, so vc here is one ahead of VICE's fetch-time vc.
+          // VICE uses vc THEN increments (vicii-fetch.c:287/315); we
+          // must undo finishCycleVice's increment to read the correct
+          // bitmap byte. Without this, BMM cols are shifted left by one
+          // cell on lines where the bitmap varies cell-to-cell
+          // (fetchsplit r7 gradient lines, ~40 cells CLASS A). Text mode
+          // is immune (it indexes vicCharCache[vmli], not vc).
+          int bmmVc = Boolean.parseBoolean(
+              System.getProperty("jac64.bmmVcFetchFix", "true"))
+              ? ((vc - 1) & 0x3ff) : (vc & 0x3ff);
+          int vcMasked = (d011Fetch & 0x40) != 0 ? (bmmVc & 0x33f) : bmmVc;
           fetchAddr = vicBase + vcMasked * 8 + rc;
         } else if ((d011Fetch & 0x40) != 0) {
           fetchAddr = charMemoryIndex + ((vByte & 0x3f) << 3) + rc;
