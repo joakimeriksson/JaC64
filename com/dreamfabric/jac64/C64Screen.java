@@ -341,13 +341,6 @@ public class C64Screen extends ExtChip implements Observer {
 
   private int horizScroll = 0;
   private int vScroll = 0;
-  // ysmooth (yscroll) as of the END of the previous cycle (after that
-  // cycle's CPU Phi2 write, before the current cycle's write). Latched in
-  // clockPhi2. The badline check uses this so a $D011 write coincident
-  // with the cyc-13 update_vc is observed one cycle later — matching VICE's
-  // Phi2-write-seen-next-cycle order. Equals live vScroll when yscroll is
-  // stable (screenpos-safe); lags only across a same-cycle write (FLI).
-  private int ysmoothPhi1 = 0;
 
   // VICE-compatible coordinate system. See viciitypes.h:124:
   //   VICII_RASTER_X(cycle) = (cycle - 17) * 8 + screen_leftborderwidth
@@ -1101,27 +1094,12 @@ public class C64Screen extends ExtChip implements Observer {
     // VICE vicii-cycle.c:605-607 — check_badline every cycle while
     // allow_bad_lines. The badline condition is `(line & 7) == ysmooth`
     // AND we're in the DMA range (48..247 per VICE FIRST/LAST_DMA_LINE).
-    // General badline (drives gfxVisible / display detection / update_rc):
-    // uses LIVE vScroll — required for screenpos's display-start, which
-    // writes $D011 at cyc 0 and needs that write live by the same line.
-    boolean badLineRc = false; // badline for the cyc-13 rc=0 reset only
     if (displayEnabled) {
       boolean newBad = (vbeam & 7) == vScroll && vbeam >= 0x30 && vbeam <= 0xf7;
       if (newBad && !badLine) {
         gfxVisible = true; // exit idle_state
       }
       badLine = newBad;
-      // FLI fix (flag jac64.fliYsmoothPhase): the rc=0 reset in update_vc
-      // (cyc 13) must use ysmooth as of BEFORE this cycle's $D011 write —
-      // VICE's Phi2 write is seen only next cycle. A $D011 write coincident
-      // with cyc 13 (FLI: blackmail) must NOT trigger the rc reset that
-      // line. ysmoothPhi1 (latched in clockPhi2) gives the pre-this-cycle-
-      // write value; for a write at any other cycle (screenpos's cyc 0) it
-      // has already propagated by cyc 13, so the reset still fires.
-      int ysmRc = Boolean.parseBoolean(
-          System.getProperty("jac64.fliYsmoothPhase", "true"))
-          ? ysmoothPhi1 : vScroll;
-      badLineRc = (vbeam & 7) == ysmRc && vbeam >= 0x30 && vbeam <= 0xf7;
     } else {
       badLine = false;
     }
@@ -1132,7 +1110,7 @@ public class C64Screen extends ExtChip implements Observer {
     if (vicCycle == 13) {
       vc = vcBase;
       vmli = 0;
-      if (badLineRc) rc = 0;
+      if (badLine) rc = 0;
     }
 
     // VICE vicii-cycle.c:629-640 — update_rc at VICII_PAL_CYCLE(58) =
@@ -2644,11 +2622,6 @@ public class C64Screen extends ExtChip implements Observer {
     }
 
     int vc = (int) (cycles - lastLine);
-
-    // Latch ysmooth at the true end of the cycle (after this cycle's CPU
-    // Phi2 write). The NEXT cycle's badline check reads this as the
-    // "before-this-cycle's-write" value, replicating VICE's order.
-    ysmoothPhi1 = vScroll;
   }
 
   public final void clock(long cycles) {
@@ -3116,10 +3089,7 @@ public class C64Screen extends ExtChip implements Observer {
         // at this cycle: writes BEFORE cyc 13 force a reset (e.g. FLI
         // first line of each char row), writes AFTER (FLI lines 1-7)
         // leave bad_line=false at this point so rc keeps incrementing.
-        // With VICE_BADLINE_FSM the rc=0 is owned by updateVicStateVice
-        // (which uses the phase-correct badLineRc); skip the redundant
-        // live-badLine reset here so it can't clobber the FSM decision.
-        if (!VICE_BADLINE_FSM) rc = 0;
+        rc = 0;
         gfxVisible = true;
       }
       break;
