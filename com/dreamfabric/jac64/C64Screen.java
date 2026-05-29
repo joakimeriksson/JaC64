@@ -3595,7 +3595,22 @@ public class C64Screen extends ExtChip implements Observer {
       // vs the previous shift=-8 default (which only won on screenpos by
       // happening to align with that test's reference convention).
       int shift = Integer.getInteger("jac64.viceShift", -16);
-      if (vicCycle >= 12 && vicCycle <= 60 && !notVisible
+      // The per-cycle paint base is vPos*SC_WIDTH + (cyc-12)*8 + shift.
+      // With shift=-16, the in-row visible span (x0..383) is exactly
+      // cyc 14..61. The old range cyc 12..60 was WRONG at BOTH edges:
+      //  - cyc 12-13 give a negative within-row offset → they wrote the
+      //    PREVIOUS row's right edge (x368-383). So line N+1's left-edge
+      //    paint clobbered line N's right-edge content — which is why a
+      //    sprite in the right border (Krestage 3's reused 9th sprite at
+      //    x376-383) was overwritten by the next line's bg.
+      //  - cyc 61 (x376-383) was dropped entirely, so the right edge was
+      //    never painted by its own line.
+      // Clamp to cyc 14..61 so every 8-px span stays within row vPos.
+      int loCyc = 12, hiCyc = 60;
+      if (Boolean.parseBoolean(System.getProperty("jac64.rightEdgeCyc61", "true"))) {
+        loCyc = 14; hiCyc = 61;
+      }
+      if (vicCycle >= loCyc && vicCycle <= hiCyc && !notVisible
           && vPos >= 0 && vPos < SC_HEIGHT) {
         viceCyclePaintBase = vPos * SC_WIDTH + (vicCycle - 12) * 8 + shift;
       } else {
