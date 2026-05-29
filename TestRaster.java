@@ -612,6 +612,28 @@ public class TestRaster {
             System.exit(0);
         }
 
+        // Deterministic cycle-anchored capture: pause at a fixed emulated
+        // cycle (same cycle every run) and snapshot the front buffer, then
+        // exit. Matches VICE's `-limitcycles N -exitscreenshot` determinism
+        // so JaC/VICE can be compared at the same demo phase — needed for
+        // transient effects (e.g. Krestage 3's 9th sprite) that wall-clock
+        // capture can't reliably land on.
+        long captureAtCycle = Long.getLong("jac64.captureAtCycle", -1L);
+        if (captureAtCycle > 0) {
+            System.out.println("Deterministic capture: pause-at-cycle " + captureAtCycle);
+            cpu.pauseAtCycle = captureAtCycle;
+            for (int i = 0; i < 2000; i++) {
+                if (cpu.pause && cpu.cycles >= captureAtCycle) break;
+                Thread.sleep(20);
+            }
+            String capPath = System.getProperty("jac64.captureFile",
+                "/tmp/jac64_capture.png");
+            screenshot(capPath);
+            System.out.println("Captured at clk=" + cpu.cycles + " -> " + capPath);
+            System.out.flush();
+            System.exit(0);
+        }
+
         // Capture screenshots every second for 30 seconds
         System.out.println("Capturing screenshots...");
         boolean dumpScreen = Boolean.getBoolean("jac64.dumpScreen");
