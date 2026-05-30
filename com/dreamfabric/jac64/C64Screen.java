@@ -377,6 +377,11 @@ public class C64Screen extends ExtChip implements Observer {
   private int lpX = 0;
   private int lpY = 0;
   private boolean lpTriggered = false;
+  // Pending trigger clk for 1-cyc-delay (matches VICE vicii-lightpen.c:44
+  // `vicii.light_pen.trigger_cycle = mclk + 1`). When CIA1 PB4 falls,
+  // store target clk = current + 1. clock() checks for pending trigger
+  // each cycle and fires when match.
+  private long lpPendingTriggerClk = -1;
 
   // ============================================================
   // VICE cycle-exact sprite pipeline (port of vicii-draw-cycle.c)
@@ -454,6 +459,17 @@ public class C64Screen extends ExtChip implements Observer {
    */
   public void triggerLightPen() {
     if (lpTriggered) return;
+    // VICE vicii-lightpen.c:44 — `trigger_cycle = mclk + 1`. The trigger
+    // is scheduled to fire 1 cycle later in vicii_cycle (not at the
+    // CIA-write cycle itself). Schedule it; clock() fires when match.
+    lpPendingTriggerClk = cpu.cycles + 1;
+  }
+
+  private void firePendingLightPen() {
+    if (lpTriggered || lpPendingTriggerClk < 0 || cpu.cycles != lpPendingTriggerClk) {
+      return;
+    }
+    lpPendingTriggerClk = -1;
     lpTriggered = true;
     int vicCycle = (int)(cpu.cycles - lastLine);
     // VICE formula: x = cycle_get_xpos(cycle_table[raster_cycle]) / 2.
@@ -469,6 +485,10 @@ public class C64Screen extends ExtChip implements Observer {
     } else {
       x = 204 + (vicCycle - 1) * 4;     // 204..248 for cyc 1..12
     }
+    // VICE adds x_extra_bits (1 for PAL color_latency=1 in CIA-PB
+    // trigger path per vicii-lightpen.c:42, factored through to lpX).
+    // Matches measured VICE values (fldscroll-29 $dd = base 220 + 1).
+    x += 1;
     lpX = x & 0xff;
     lpY = vbeam & 0xff;
   }
@@ -2786,6 +2806,10 @@ public class C64Screen extends ExtChip implements Observer {
     // Delta is cycles into the current raster line!
     int vicCycle = (int) (cycles - lastLine);
 
+    // Fire any pending lightpen trigger scheduled +1 cyc earlier
+    // (VICE vicii-cycle.c:825 `trigger_cycle == maincpu_clk` check).
+    firePendingLightPen();
+
     // VIC raster X — VICE formula (viciitypes.h:124).
     currentRasterX = rasterX(vicCycle);
 
@@ -2844,6 +2868,7 @@ public class C64Screen extends ExtChip implements Observer {
         // VICE vicii-lightpen.c semantics: light_pen.triggered cleared
         // at start of frame so a new /LP trigger can fire next frame.
         lpTriggered = false;
+        lpPendingTriggerClk = -1;
         if (fldTrace && --fldTraceFrames <= 0) {
           fldTrace = false;
           fldOut.println("=== FLD TRACE END ===");
