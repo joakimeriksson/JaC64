@@ -146,9 +146,21 @@ public class CPU extends MOS6510Core {
   }
 
   private void waitForBus(boolean isRead) {
+    if (Boolean.getBoolean("jac64.traceWfb")) {
+      long lo = Long.getLong("jac64.traceStallClkLo", 0L);
+      long hi = Long.getLong("jac64.traceStallClkHi", Long.MAX_VALUE);
+      if (cycles >= lo && cycles <= hi) {
+        System.err.println("WFB pc=$" + Integer.toHexString(pc & 0xffff)
+            + " isRead=" + isRead
+            + " cycles=" + cycles
+            + " baLowUntil=" + baLowUntil
+            + " willStall=" + (baLowUntil > cycles));
+      }
+    }
     if (baLowUntil <= cycles) {
       return;
     }
+    long entryClk = cycles;
     traceBaEvent("BA-WAIT-START until=" + baLowUntil);
     boolean stoleCycles = false;
     while (baLowUntil > cycles) {
@@ -160,6 +172,17 @@ public class CPU extends MOS6510Core {
       viceInterruptDelayAfterSteal();
     }
     traceBaEvent("BA-WAIT-END");
+    if (Boolean.getBoolean("jac64.traceStall")) {
+      long lo = Long.getLong("jac64.traceStallClkLo", 0L);
+      long hi = Long.getLong("jac64.traceStallClkHi", Long.MAX_VALUE);
+      if (entryClk >= lo && entryClk <= hi) {
+        System.err.println("STALL pc=$" + Integer.toHexString(pc & 0xffff)
+            + " isRead=" + isRead
+            + " entryClk=" + entryClk
+            + " baLowUntil=" + baLowUntil
+            + " stallCyc=" + (cycles - entryClk));
+      }
+    }
   }
 
   // Reads the memory with all respect to all flags...

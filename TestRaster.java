@@ -630,6 +630,23 @@ public class TestRaster {
                 "/tmp/jac64_capture.png");
             screenshot(capPath);
             System.out.println("Captured at clk=" + cpu.cycles + " -> " + capPath);
+            String dumpRangeAtCapture = System.getProperty("jac64.dumpMemRange");
+            if (dumpRangeAtCapture != null) {
+                String[] parts = dumpRangeAtCapture.split(":");
+                int start = Integer.decode(parts[0]);
+                int end = Integer.decode(parts[1]);
+                String binPath = parts.length >= 3 ? parts[2] : "/tmp/jac64_memdump.bin";
+                try (java.io.FileOutputStream fos = new java.io.FileOutputStream(binPath)) {
+                    int[] mem = cpu.getMemory();
+                    byte[] buf = new byte[end - start];
+                    for (int i = 0; i < buf.length; i++) buf[i] = (byte)(mem[start + i] & 0xff);
+                    fos.write(buf);
+                    System.out.println("Memory dump $" + Integer.toHexString(start)
+                        + "-$" + Integer.toHexString(end) + " in " + binPath);
+                } catch (Exception e) {
+                    System.err.println("Memory dump failed: " + e);
+                }
+            }
             System.out.flush();
             System.exit(0);
         }
