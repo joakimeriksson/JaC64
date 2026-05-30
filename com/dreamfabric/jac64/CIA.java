@@ -45,9 +45,10 @@ public class CIA {
   int prb = 0;
   int ddra = 0;
   int ddrb = 0;
-  // Track CIA1 PB3 output state for lightpen edge detection. PB3 wires to
-  // VIC /LP via the joystick port; HIGH→LOW transition triggers latch.
-  // Output is LOW only when DDRB bit 3 = 1 AND PRB bit 3 = 0.
+  // Track CIA1 PB4 output state for lightpen edge detection. PB4 wires to
+  // joystick port 1 pin 6 which connects to VIC /LP (per VICE c64cia1.c:153
+  // `vicii_set_light_pen(maincpu_clk, !(m & 0x10))`). HIGH→LOW transition
+  // triggers latch. Output is LOW only when DDRB bit 4 = 1 AND PRB bit 4 = 0.
   private boolean lpPrevHigh = true;
   int tod10sec = 0;
   int todsec = 0;
@@ -132,18 +133,24 @@ public class CIA {
   }
 
   /**
-   * Detect CIA-1 PB3 HIGH→LOW transition and trigger VIC lightpen latch.
-   * Only CIA-1 (offset 0x10c00) is wired to VIC /LP. PB3 output is LOW iff
-   * DDRB bit 3 = 1 AND PRB bit 3 = 0. Open-drain otherwise (= HIGH).
+   * Detect CIA-1 PB4 HIGH→LOW transition and trigger VIC lightpen latch.
+   * Only CIA-1 (offset 0x10c00) is wired to VIC /LP. PB4 output is LOW iff
+   * DDRB bit 4 = 1 AND PRB bit 4 = 0. Open-drain otherwise (= HIGH).
    * Used by fldscroll's rastersync_lp routine which writes $DC01=$00 to
    * trigger the LP latch and reads $D013 to get the precise CPU cycle.
+   *
+   * Per VICE c64cia1.c:153 — m = val & pb & read_joyport_dig(JOYPORT_1);
+   * vicii_set_light_pen(maincpu_clk, !(m & 0x10)). So bit 4 is the LP line.
+   * Initial implementation used bit 3 (0x08) which incidentally triggered
+   * on tests like spritefetchbug/test-136-2a where bit 3 toggles but
+   * bit 4 doesn't (+322 spurious cells). Bit 4 (0x10) is correct.
    */
   private void checkLightPenTrigger() {
     if (offset != 0x10c00) return; // only CIA1
     // Flag jac64.lightpen default true. Set false to disable the LP
     // hardware (revert to legacy "all $D013/$D014 reads return 0").
     if (!Boolean.parseBoolean(System.getProperty("jac64.lightpen", "true"))) return;
-    boolean nowHigh = !((ddrb & 0x08) != 0 && (prb & 0x08) == 0);
+    boolean nowHigh = !((ddrb & 0x10) != 0 && (prb & 0x10) == 0);
     if (lpPrevHigh && !nowHigh && chips instanceof C64Screen) {
       ((C64Screen) chips).triggerLightPen();
     }
