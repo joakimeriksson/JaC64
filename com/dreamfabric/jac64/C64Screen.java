@@ -1073,6 +1073,7 @@ public class C64Screen extends ExtChip implements Observer {
       System.err.println("BADFSM-PRE clk=" + cpu.cycles + " vbeam=" + vbeam + " cyc=" + vicCycle
           + " vc=" + vc + " vmli=" + vmli + " rc=" + rc + " vcBase=" + vcBase
           + " badLine=" + badLine + " gfxVisible=" + gfxVisible
+          + " viceIdle=" + viceIdleState
           + " displayEnabled=" + displayEnabled + " vScroll=" + vScroll
           + " control1=$" + Integer.toHexString(control1));
     }
@@ -1150,6 +1151,14 @@ public class C64Screen extends ExtChip implements Observer {
     // VICE vicii-cycle.c:629-640 — update_rc at VICII_PAL_CYCLE(58) =
     // internal raster_cycle 57.
     if (vicCycle == 57) {
+      // Snapshot rc BEFORE the legacy path mutates it. VICE's update_rc
+      // checks `rc == 7` against the PRE-increment value; if the
+      // viceIdleState check at the bottom reads the POST-increment rc,
+      // it fires at every char-row transition (rc 6→7) instead of at
+      // the genuine 7→0 transition only. border-251 char-row-boundary
+      // bug 2026-05-30: caused 952 spurious black-row pixels at every
+      // bottom-half char-row start.
+      int rcPre = rc;
       if (rc == 7) {
         gfxVisible = false; // enter idle_state (legacy)
         vcBase = vc;
@@ -1161,9 +1170,13 @@ public class C64Screen extends ExtChip implements Observer {
       // VICE-faithful idle_state per vicii-cycle.c:656-667:
       //   if (rc == 7) idle_state = 1, vcbase = vc;
       //   if (!idle_state || bad_line) rc = (rc+1)&7, idle_state = 0;
-      // (Note: rc and vcbase already updated above for the legacy path.
-      //  We track viceIdleState separately to avoid touching gfxVisible.)
-      if (rc == 7) {
+      // Use the PRE-increment rcPre (matches VICE's ordering).
+      // Flag jac64.vicePreRcUpdateRc default true. Set to false to
+      // restore the legacy (POST-increment) behavior for A/B testing.
+      boolean vicePreRc = Boolean.parseBoolean(
+          System.getProperty("jac64.vicePreRcUpdateRc", "true"));
+      int rcForIdle = vicePreRc ? rcPre : rc;
+      if (rcForIdle == 7) {
         viceIdleState = true;
       }
       if (!viceIdleState || badLine) {
