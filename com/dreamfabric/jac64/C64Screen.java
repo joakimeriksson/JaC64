@@ -1104,6 +1104,25 @@ public class C64Screen extends ExtChip implements Observer {
       badLine = false;
     }
 
+    // FLI fix (2026-05-30): VICE's BaFetch flag is set in cycle_table for raster
+    // cycles 11..53 (= externally visible cyc 12..54). When a mid-line $D011
+    // write at cyc 11 changes ysmooth, VICE's STX abs SET_ABS does STORE then
+    // CLK_INC — the CLK_INC's vicii_cycle at cyc 12 sees the new ysmooth, sets
+    // bad_line=1, and ba_low=1 (via BaFetch). So the next CPU access (LDY at
+    // cyc 12) stalls IMMEDIATELY.
+    //
+    // JaC's case-11 dispatcher uses PRE-write badLine (because clock(cyc 11)
+    // runs BEFORE the cyc-11 store fires). With FLI writes at cyc 11, badLine
+    // becomes true only at clock(cyc 12) — but JaC's case-12 dispatcher had no
+    // BA-low setter, so BA-low was 1 cycle late vs VICE.
+    //
+    // Setting BA-low here in updateVicStateVice (which runs at top of clock())
+    // mirrors VICE's "check_badline + ba_low check in same vicii_cycle" model.
+    if (badLine && vicCycle >= 11 && vicCycle <= 54
+        && Boolean.parseBoolean(System.getProperty("jac64.fliBaLowFix", "true"))) {
+      setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-FSM");
+    }
+
     // VICE vicii-cycle.c:619-625 — update_vc at VICII_PAL_CYCLE(14) =
     // internal raster_cycle 13.
     //   vicii.vc = vicii.vcbase; vicii.vmli = 0; if bad_line: rc = 0;
