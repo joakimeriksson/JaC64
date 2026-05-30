@@ -2114,6 +2114,16 @@ public class C64Screen extends ExtChip implements Observer {
       videoMode = (extended ? 0x02 : 0)
       | (multiCol ? 0x01 : 0) | (((control1 & 0x20) != 0)
           ? 0x04 : 0x00);
+      if (Boolean.getBoolean("jac64.traceRegW")) {
+        long _wLo = Long.getLong("jac64.traceRegWClkLo", 0L);
+        long _wHi = Long.getLong("jac64.traceRegWClkHi", Long.MAX_VALUE);
+        if (cpu.cycles >= _wLo && cpu.cycles <= _wHi) {
+          System.err.println("REGW adr=$d016 val=$" + Integer.toHexString(data)
+              + " clk=" + cpu.cycles
+              + " rast=$" + Integer.toHexString(vbeam)
+              + " cyc=" + ((int)(cpu.cycles - lastLine)));
+        }
+      }
       if (Boolean.getBoolean("jac64.traceFli")) {
         int vicCycleNow = (int) (cpu.cycles - lastLine);
         System.err.println("D016=$" + Integer.toHexString(data)
@@ -3694,7 +3704,19 @@ public class C64Screen extends ExtChip implements Observer {
           System.getProperty("jac64.colorLatency", "false"));
       viceDrawCycle.setColorLatency(colorLatencyFlag);
       viceSprPipe.colorLatency = colorLatencyFlag;
-      boolean mainBorderNow = paintBorder || borderClosed() || vBorderOnly();
+      // VICE keeps main_border and vborder SEPARATE in vicii-draw-cycle.c.
+      // draw_border8 early-exits on `!(border_state || main_border)` —
+      // vborder=1 alone does NOT force a fill. The legacy `|| vBorderOnly()`
+      // here forced mainBorder=1 in EVERY vborder=1 cycle (= the entire
+      // vertical-border zone), painting solid COL_D020 even when the
+      // side-border-open trick had left mainBorder=0. Removing it lets
+      // the bottom-border-open case (border-250/251/252 family) paint
+      // bitmap content like VICE. ViceDrawCycle reads vborder separately
+      // via setVborder() for its own pipe-load gate. Flag:
+      // -Djac64.mbVborderOr (default false) to keep the legacy OR.
+      boolean mainBorderNow = paintBorder || borderClosed()
+          || (Boolean.parseBoolean(System.getProperty("jac64.mbVborderOr", "false"))
+              ? vBorderOnly() : false);
       viceDrawCycle.setMainBorder(mainBorderNow);
       viceDrawCycle.setVborder(vBorder ? 1 : 0);
       // Phase 9: sync borderState to JaC64's authoritative
@@ -3844,7 +3866,13 @@ public class C64Screen extends ExtChip implements Observer {
     // VICE viciisc/vicii-draw-cycle.c:581 — capture end-of-cycle
     // main_border. Read by next cycle's drawBorderVice for transition
     // state machine.
-    borderStatePrev = paintBorder || borderClosed() || vBorderOnly();
+    // Mirror the mainBorderNow computation above — same gating, so the
+    // pipeline's borderState (= prior-cycle main_border) matches VICE's
+    // file-static border_state which is only updated from main_border
+    // (not vborder) inside draw_border8.
+    borderStatePrev = paintBorder || borderClosed()
+        || (Boolean.parseBoolean(System.getProperty("jac64.mbVborderOr", "false"))
+            ? vBorderOnly() : false);
   }
 
   private boolean borderStatePrev = true;
