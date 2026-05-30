@@ -1524,6 +1524,18 @@ public class C64Screen extends ExtChip implements Observer {
     if (prefetchCycles > 0) {
       vicCharCache[column] = 0xff;
       vicColCache[column] = memory[cpu.pc & 0xffff] & 0x0f;
+      if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
+          && cpu.cycles <= TRACE_VIC_CYCLE_END) {
+        traceVicCycleOut.println("EV-FetchC clk=" + cpu.cycles
+            + " rast=$" + Integer.toHexString(vbeam)
+            + " cyc=" + (cpu.cycles - lastLine)
+            + " col=" + column
+            + " src=PREFETCH"
+            + " prefetchCycles=" + prefetchCycles
+            + " vbyte=$ff"
+            + " cbyte=$" + Integer.toHexString(vicColCache[column] & 0x0f)
+            + " pc=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
+      }
       return;
     }
 
