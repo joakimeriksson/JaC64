@@ -602,11 +602,24 @@ public final class ViceDrawCycle {
     // resets via init or vicii-cycle.c state changes. C64Screen drives
     // dmli explicitly via setDmli() before each drawCycle() call, so
     // the pipeline reads vbuf/cbuf at the same index JaC64 just fetched.
-    if (visEn && vborder == 0 && !idleState
-        && vbuf != null && cbuf != null
-        && dmli >= 0 && dmli < vbuf.length) {
-      vbufPipe0Reg = vbuf[dmli];
-      cbufPipe0Reg = cbuf[dmli];
+    //
+    // VICE clear-pipe-in-idle fix (2026-05-30): in vis area + idle,
+    // VICE clears vbuf/cbuf pipe0 to 0 (vicii-draw-cycle.c:313-317).
+    // JaC had no else branch — pipe stayed STALE from previous fetch,
+    // which is why colorfetchbug late-badline lines and Krestage 3
+    // picture-mover seam show stale-cache chars where VICE shows clean
+    // background. Flag: -Djac64.idleClearPipe (default true).
+    if (visEn && vborder == 0) {
+      if (!idleState
+          && vbuf != null && cbuf != null
+          && dmli >= 0 && dmli < vbuf.length) {
+        vbufPipe0Reg = vbuf[dmli];
+        cbufPipe0Reg = cbuf[dmli];
+      } else if (Boolean.parseBoolean(
+          System.getProperty("jac64.idleClearPipe", "true"))) {
+        vbufPipe0Reg = 0;
+        cbufPipe0Reg = 0;
+      }
     }
   }
 

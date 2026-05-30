@@ -276,6 +276,13 @@ public class C64Screen extends ExtChip implements Observer {
 
   // Cached variables...
   boolean gfxVisible = false;
+  // VICE-faithful idle_state — mirrors vicii.idle_state per vicii-cycle.c
+  // update_rc semantics ONLY. Initial value 0 = not idle (VICE init at
+  // vicii.c:347). Used by [[idle-clear-pipe-fix]] for the pipe-load
+  // clear decision (vicii-draw-cycle.c:309-317) so the clear-to-0 matches
+  // VICE exactly, independent of JaC's gfxVisible field whose mid-line
+  // transitions are load-bearing for other tests (dmadelay, ss-pri).
+  boolean viceIdleState = false;
   boolean paintBorder = false;
   boolean paintSideBorder = false;
 
@@ -1100,6 +1107,14 @@ public class C64Screen extends ExtChip implements Observer {
         gfxVisible = true; // exit idle_state
       }
       badLine = newBad;
+      // VICE check_badline (vicii-cycle.c:53-62): when bad_line=1, also
+      // sets idle_state=0 EVERY cycle (not just rising edge). My initial
+      // "idle_state only changes at update_rc" was incorrect — this
+      // mid-cycle clear is what makes JaC's gfxVisible mid-line
+      // transition correct vs VICE.
+      if (badLine) {
+        viceIdleState = false;
+      }
     } else {
       badLine = false;
     }
@@ -1136,12 +1151,23 @@ public class C64Screen extends ExtChip implements Observer {
     // internal raster_cycle 57.
     if (vicCycle == 57) {
       if (rc == 7) {
-        gfxVisible = false; // enter idle_state
+        gfxVisible = false; // enter idle_state (legacy)
         vcBase = vc;
       }
       if (gfxVisible || badLine) {
         rc = (rc + 1) & 7;
         gfxVisible = true;
+      }
+      // VICE-faithful idle_state per vicii-cycle.c:656-667:
+      //   if (rc == 7) idle_state = 1, vcbase = vc;
+      //   if (!idle_state || bad_line) rc = (rc+1)&7, idle_state = 0;
+      // (Note: rc and vcbase already updated above for the legacy path.
+      //  We track viceIdleState separately to avoid touching gfxVisible.)
+      if (rc == 7) {
+        viceIdleState = true;
+      }
+      if (!viceIdleState || badLine) {
+        viceIdleState = false;
       }
     }
   }
@@ -3662,7 +3688,14 @@ public class C64Screen extends ExtChip implements Observer {
       // Phase 9: sync borderState to JaC64's authoritative
       // borderStatePrev (captured at end of prev cycle).
       viceDrawCycle.setBorderState(borderStatePrev ? 1 : 0);
-      viceDrawCycle.setIdleState(!gfxVisible);
+      // Pipe-load gate: use VICE-faithful viceIdleState (mirrors VICE
+      // update_rc-only transitions) so [[idle-clear-pipe-fix]] doesn't
+      // fire when VICE wouldn't clear the pipe. Falls back to legacy
+      // !gfxVisible if flag set.
+      boolean idleForPipe = Boolean.parseBoolean(
+          System.getProperty("jac64.useViceIdleStateForPipe", "true"))
+          ? viceIdleState : !gfxVisible;
+      viceDrawCycle.setIdleState(idleForPipe);
       // VICE viciisc/vicii-fetch.c: vicii_fetch_idle_gfx() reads from
       // $3FFF when in idle_state. This routes content pixels through
       // COL_CBUF → cregs[0] = 0 = BLACK (ss-pri test relies on this:
@@ -3679,7 +3712,16 @@ public class C64Screen extends ExtChip implements Observer {
       // / vicii_reg_timing at cycle boundaries past the matrix fetch.
       if (isFetchG) {
         if (idleFetch) {
-          viceDrawCycle.setGbuf(memory[0x3fff] & 0xff);
+          // VICE vicii_fetch_idle_gfx (vicii-fetch.c:236-255):
+          //   fetch_phi1(0x3fff) — includes VIC bank offset
+          //   (vbank_phi1 + 0x3fff) & vaddr_mask | vaddr_offset.
+          // For ECM (bit 6 of $D011): use 0x39ff instead.
+          // Previously JaC read memory[0x3fff] directly, missing the
+          // VIC bank — wrong for tests with bank != 0.
+          int idleAddr = ((control1 & 0x40) != 0) ? 0x39ff : 0x3fff;
+          // VIC bank only (NOT char base). vicBank = glueVisibleVBank << 14.
+          int bankAddr = (vicBank + idleAddr) & 0xffff;
+          viceDrawCycle.setGbuf(memory[bankAddr] & 0xff);
         } else {
           viceDrawCycle.setGbuf(gByte);
         }
@@ -3858,8 +3900,22 @@ public class C64Screen extends ExtChip implements Observer {
     // state advancement (vc/vmli/gbufPipe shift) so the legacy viceGfx
     // path remains correct when pipeline is OFF, but skip mem[] writes.
     if (useViceFullPipeline) {
-      if (gfxVisible && !paintBorder && !vBorderOnly()) vc++;
-      vmli++;
+      // VICE-faithful: vmli++ AND vc++ both fire ONLY when !idle_state
+      // (vicii-fetch.c:314-316 vicii_fetch_graphics). When idle,
+      // vicii_fetch_idle_gfx is called instead — neither vmli nor vc
+      // increments. Gate on gfxVisible (= !idle_state).
+      // Flag: -Djac64.viceVmliGate (default true).
+      boolean viceGate = Boolean.parseBoolean(
+          System.getProperty("jac64.viceVmliGate", "true"));
+      if (viceGate) {
+        if (gfxVisible) {
+          vc++;
+          vmli++;
+        }
+      } else {
+        if (gfxVisible && !paintBorder && !vBorderOnly()) vc++;
+        vmli++;
+      }
       gbufPipe1Reg = gbufPipe0Reg;
       gbufPipe0Reg = 0;
       return;
