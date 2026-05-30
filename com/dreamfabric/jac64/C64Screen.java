@@ -369,6 +369,15 @@ public class C64Screen extends ExtChip implements Observer {
 
   private int currentRasterX = 0;
 
+  // Lightpen latched X/Y. CIA1 PB3 HIGH→LOW transition triggers latch
+  // via triggerLightPen(). Returned by $D013/$D014 reads. Cleared at frame
+  // start (or new trigger after frame wrap). Per VICE vicii-lightpen.c:75
+  // x = cycle_get_xpos(cycle_table[raster_cycle]) / 2; in JaC's 1-indexed
+  // vicCycle convention this maps to (vicCycle * 4 - 52), clamped >= 0.
+  private int lpX = 0;
+  private int lpY = 0;
+  private boolean lpTriggered = false;
+
   // ============================================================
   // VICE cycle-exact sprite pipeline (port of vicii-draw-cycle.c)
   // ============================================================
@@ -431,6 +440,37 @@ public class C64Screen extends ExtChip implements Observer {
   /** VICE-compatible raster_x given the current VIC cycle within a line. */
   private int rasterX(int vicCycle) {
     return (vicCycle - 17) * 8 + SCREEN_LEFT_BORDER_WIDTH;
+  }
+
+  /**
+   * Called by CIA-1 when PB3 transitions HIGH→LOW. Latches current beam
+   * X/Y for $D013/$D014 reads. Per VICE vicii-lightpen.c, only triggers
+   * once per frame (lpTriggered cleared at frame start).
+   *
+   * Used by fldscroll rastersync_lp (and any LP-based cycle-alignment
+   * routine) which writes $DC01=$00 to trigger, then reads $D013 to learn
+   * the precise CPU cycle within the current raster line and delay-NOP
+   * itself to a fixed cycle alignment.
+   */
+  public void triggerLightPen() {
+    if (lpTriggered) return;
+    lpTriggered = true;
+    int vicCycle = (int)(cpu.cycles - lastLine);
+    // VICE formula: x = cycle_get_xpos(cycle_table[raster_cycle]) / 2.
+    // PAL Phi2(N) xpos table values WRAP at N=13:
+    //   Phi2(11)=0x1e8, Phi2(12)=0x1f0, Phi2(13)=0x000, Phi2(14)=0x008, …
+    //   So pixel xpos starts at 0 at vicCycle 13 (left HSync edge) and
+    //   counts up by 8 per cycle until reaching ~496 at cycle 12 of the
+    //   NEXT line (= 504-px PAL line width).
+    // Lightpen X = xpos / 2 (per hardware specification).
+    int x;
+    if (vicCycle >= 13) {
+      x = (vicCycle - 13) * 4;          // 0..200 for cyc 13..63
+    } else {
+      x = 204 + (vicCycle - 1) * 4;     // 204..248 for cyc 1..12
+    }
+    lpX = x & 0xff;
+    lpY = vbeam & 0xff;
   }
 
   /** Sprite register X → internal coord used by sprite comparisons. */
@@ -1798,9 +1838,10 @@ public class C64Screen extends ExtChip implements Observer {
       return val;
       // Sprite collission registers - zeroed after read!
     case 0xd013:
+      // Lightpen X (latched at /LP trigger via triggerLightPen()).
+      return lpX & 0xff;
     case 0xd014:
-      // Lightpen x/y
-        return 0;
+      return lpY & 0xff;
     case 0xd015:
       return sprEN;
     case 0xd016:
@@ -2800,6 +2841,9 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (vbeam == 0) {
         frame++;
+        // VICE vicii-lightpen.c semantics: light_pen.triggered cleared
+        // at start of frame so a new /LP trigger can fire next frame.
+        lpTriggered = false;
         if (fldTrace && --fldTraceFrames <= 0) {
           fldTrace = false;
           fldOut.println("=== FLD TRACE END ===");

@@ -45,6 +45,10 @@ public class CIA {
   int prb = 0;
   int ddra = 0;
   int ddrb = 0;
+  // Track CIA1 PB3 output state for lightpen edge detection. PB3 wires to
+  // VIC /LP via the joystick port; HIGH→LOW transition triggers latch.
+  // Output is LOW only when DDRB bit 3 = 1 AND PRB bit 3 = 0.
+  private boolean lpPrevHigh = true;
   int tod10sec = 0;
   int todsec = 0;
   int todmin = 0;
@@ -125,6 +129,25 @@ public class CIA {
     timerA.otherTimer = timerB;
     todEvent.time = cpu.cycles + 10000;
     cpu.scheduler.addEvent(todEvent);
+  }
+
+  /**
+   * Detect CIA-1 PB3 HIGH→LOW transition and trigger VIC lightpen latch.
+   * Only CIA-1 (offset 0x10c00) is wired to VIC /LP. PB3 output is LOW iff
+   * DDRB bit 3 = 1 AND PRB bit 3 = 0. Open-drain otherwise (= HIGH).
+   * Used by fldscroll's rastersync_lp routine which writes $DC01=$00 to
+   * trigger the LP latch and reads $D013 to get the precise CPU cycle.
+   */
+  private void checkLightPenTrigger() {
+    if (offset != 0x10c00) return; // only CIA1
+    // Flag jac64.lightpen default true. Set false to disable the LP
+    // hardware (revert to legacy "all $D013/$D014 reads return 0").
+    if (!Boolean.parseBoolean(System.getProperty("jac64.lightpen", "true"))) return;
+    boolean nowHigh = !((ddrb & 0x08) != 0 && (prb & 0x08) == 0);
+    if (lpPrevHigh && !nowHigh && chips instanceof C64Screen) {
+      ((C64Screen) chips).triggerLightPen();
+    }
+    lpPrevHigh = nowHigh;
   }
 
   public void reset() {
@@ -227,12 +250,14 @@ public class CIA {
       break;
     case DDRB:
       ddrb = data;
+      checkLightPenTrigger();
       break;
     case PRA:
       pra = data;
       break;
     case PRB:
       prb = data;
+      checkLightPenTrigger();
       break;
     case TIMALO:
       // Update latch value
