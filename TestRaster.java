@@ -592,6 +592,12 @@ public class TestRaster {
                 cpu.enterText("RUN~");
                 System.out.println("PRG loaded and RUN");
             }
+            // Set captureAtCycle pause BEFORE the long sleep, so warp-mode
+            // CPU doesn't overshoot past the target during the wait window.
+            {
+                long _capEarly = Long.getLong("jac64.captureAtCycle", -1L);
+                if (_capEarly > 0) cpu.pauseAtCycle = _capEarly;
+            }
             Thread.sleep(3000);
         }
 
