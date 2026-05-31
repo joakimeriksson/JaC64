@@ -29,6 +29,24 @@
                 <data android:pathPattern=".*\\.p00" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".SIDPlayActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true"
+            android:screenOrientation="landscape"
+            android:hardwareAccelerated="true"
+            android:label="SIDPlay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+                <data android:pathPattern=".*\\.sid" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>

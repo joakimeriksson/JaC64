@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#16163B">
+
+    <!-- Top toolbar -->
+    <LinearLayout
+        android:id="@+id/sid_toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="44dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:background="#121234">
+
+        <ImageButton
+            android:id="@+id/sid_btn_back"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:src="@android:drawable/ic_menu_revert"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="Back"
+            android:scaleType="fitCenter"
+            android:padding="6dp" />
+
+        <TextView
+            android:id="@+id/sid_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="SIDPlay"
+            android:textColor="#A098F0"
+            android:textSize="16sp"
+            android:fontFamily="monospace"
+            android:textStyle="bold"
+            android:paddingStart="8dp"
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <ImageButton
+            android:id="@+id/sid_btn_open"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:src="@android:drawable/ic_menu_upload"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="Open .sid file"
+            android:scaleType="fitCenter"
+            android:padding="6dp" />
+
+        <ImageButton
+            android:id="@+id/sid_btn_hvsc"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:src="@android:drawable/ic_menu_search"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="Search HVSC"
+            android:scaleType="fitCenter"
+            android:padding="6dp" />
+
+        <ImageButton
+            android:id="@+id/sid_btn_menu"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:src="@android:drawable/ic_menu_more"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="Options"
+            android:scaleType="fitCenter"
+            android:padding="6dp" />
+    </LinearLayout>
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#3A3480" />
+
+    <!-- Visualization -->
+    <com.dreamfabric.jac64.android.SIDVisualizationView
+        android:id="@+id/sid_visualization"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <!-- Divider -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#3A3480" />
+
+    <!-- Transport bar -->
+    <LinearLayout
+        android:id="@+id/sid_transport"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:background="#121234">
+
+        <!-- Metadata -->
+        <TextView
+            android:id="@+id/sid_metadata"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Load a .sid file to begin"
+            android:textColor="#7B71D5"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <!-- Song counter -->
+        <TextView
+            android:id="@+id/sid_song_label"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=" --/-- "
+            android:textColor="#A098F0"
+            android:textSize="13sp"
+            android:fontFamily="monospace"
+            android:textStyle="bold"
+            android:paddingStart="8dp"
+            android:paddingEnd="8dp" />
+
+        <ImageButton
+            android:id="@+id/sid_btn_prev"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_media_previous"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="Previous song"
+            android:scaleType="fitCenter"
+            android:padding="8dp" />
+
+        <ImageButton
+            android:id="@+id/sid_btn_play"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_media_play"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="Play"
+            android:scaleType="fitCenter"
+            android:padding="8dp" />
+
+        <ImageButton
+            android:id="@+id/sid_btn_stop"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_media_pause"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="Stop"
+            android:scaleType="fitCenter"
+            android:padding="8dp" />
+
+        <ImageButton
+            android:id="@+id/sid_btn_next"
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:src="@android:drawable/ic_media_next"
+            android:background="?android:attr/selectableItemBackground"
+            android:contentDescription="Next song"
+            android:scaleType="fitCenter"
+            android:padding="8dp" />
+    </LinearLayout>
+</LinearLayout>

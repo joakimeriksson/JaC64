@@ -88,6 +88,16 @@ public abstract class ExtChip {
   public abstract void performWrite(int address, int data, long cycles);
   public abstract void clock(long cycles);
 
+  /**
+   * Phi2 end-of-cycle hook. Called by CPU AFTER the memory access for the
+   * current cycle, before cycles++. Used for events that must observe the
+   * CPU's write to memory this cycle: border check (ChkBrdL/R), raster IRQ
+   * trigger, sprite collision IRQ fire. Default no-op for chips that don't
+   * need a Phi2 boundary (e.g. C1541Chips).
+   */
+  public void clockPhi2(long cycles) {
+  }
+
   public void setObserver(Observer o) {
     observer = o;
   }

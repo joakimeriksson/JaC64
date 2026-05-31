@@ -625,7 +625,10 @@ public class JaC64MCP {
 
     private JsonObject toolScreenshot() {
         int[] pixels = scr.getPixelBuffer();
-        int w = 384, h = 284;
+        // Buffer is SC_WIDTH * (SC_HEIGHT + 10) = 384 * 282 in C64Screen.
+        // h was 284 (2 rows too many) → setRGB read past the end and threw
+        // ArrayIndexOutOfBounds at index 108288 (= 384*282).
+        int w = 384, h = pixels.length / w;
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         img.setRGB(0, 0, w, h, pixels, 0, w);
 

@@ -1,6 +1,8 @@
 package com.dreamfabric.jsidplay;
 
+import com.dreamfabric.jac64.AudioDriverSE;
 import com.dreamfabric.jac64.C64Screen;
+import com.dreamfabric.jac64.SELoader;
 
 import javax.swing.*;
 import javax.swing.border.*;
@@ -41,7 +43,7 @@ public class SIDPlayerFrame extends JFrame {
         super("JSIDPlay - SID Music Player");
         snapshotRef = new AtomicReference<>();
         engine = new SIDPlayerEngine();
-        engine.init();
+        engine.init(new AudioDriverSE(), new SELoader());
         engine.setOnStateChange(this::updateUI);
 
         initUI();

@@ -39,7 +39,7 @@ public class VICConstants {
   // Next line...
   public static final int BA_SP2 = SCAN_RATE + 0;
   public static final int BA_SP3 = SCAN_RATE + 2;
-  public static final int BA_SP4 = SCAN_RATE + 5;
+  public static final int BA_SP4 = SCAN_RATE + 4;
   // Current line...
   public static final int BA_SP5 = 6; // On at 1, off at >6 (e.g. 7)
   public static final int BA_SP6 = 8;
@@ -105,20 +105,20 @@ public class VICConstants {
     { // Ripped from WinVICE (on XP/PC)
       0xff000000, // 0 Black
       0xffFFFFFF, // 1 White
-      0xff894036, // 2 Red
+      0xffaf3c58, // 2 Red
       0xff7abfc7, // 3 Cyan
       0xff8a46ae, // 4 Purple
       0xff68a941, // 5 Green
-      0xff3e31a2, // 6 Blue
-      0xffd0dc71, // 7 Yellow
+      0xff2c3dec, // 6 Blue
+      0xffffff46, // 7 Yellow
       0xff905f25, // 8 Orange
       0xff5c4700, // 9 Brown
       0xffbb776d, // 10 Lt.Red
       0xff555555, // 11 Dk.Gra
       0xff808080, // 12 Gray
       0xffaeea88, // 13 Lt.Gre
-      0xff7c70da, // 14 Lt.Blu
-      0xffababab  // 15 Lt.Gray
+      0xff7385ff, // 14 Lt.Blu
+      0xffcdcdcd  // 15 Lt.Gray
     }
   };
 }

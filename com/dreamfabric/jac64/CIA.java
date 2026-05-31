@@ -45,6 +45,11 @@ public class CIA {
   int prb = 0;
   int ddra = 0;
   int ddrb = 0;
+  // Track CIA1 PB4 output state for lightpen edge detection. PB4 wires to
+  // joystick port 1 pin 6 which connects to VIC /LP (per VICE c64cia1.c:153
+  // `vicii_set_light_pen(maincpu_clk, !(m & 0x10))`). HIGH→LOW transition
+  // triggers latch. Output is LOW only when DDRB bit 4 = 1 AND PRB bit 4 = 0.
+  private boolean lpPrevHigh = true;
   int tod10sec = 0;
   int todsec = 0;
   int todmin = 0;
@@ -125,6 +130,31 @@ public class CIA {
     timerA.otherTimer = timerB;
     todEvent.time = cpu.cycles + 10000;
     cpu.scheduler.addEvent(todEvent);
+  }
+
+  /**
+   * Detect CIA-1 PB4 HIGH→LOW transition and trigger VIC lightpen latch.
+   * Only CIA-1 (offset 0x10c00) is wired to VIC /LP. PB4 output is LOW iff
+   * DDRB bit 4 = 1 AND PRB bit 4 = 0. Open-drain otherwise (= HIGH).
+   * Used by fldscroll's rastersync_lp routine which writes $DC01=$00 to
+   * trigger the LP latch and reads $D013 to get the precise CPU cycle.
+   *
+   * Per VICE c64cia1.c:153 — m = val & pb & read_joyport_dig(JOYPORT_1);
+   * vicii_set_light_pen(maincpu_clk, !(m & 0x10)). So bit 4 is the LP line.
+   * Initial implementation used bit 3 (0x08) which incidentally triggered
+   * on tests like spritefetchbug/test-136-2a where bit 3 toggles but
+   * bit 4 doesn't (+322 spurious cells). Bit 4 (0x10) is correct.
+   */
+  private void checkLightPenTrigger() {
+    if (offset != 0x10c00) return; // only CIA1
+    // Flag jac64.lightpen default true. Set false to disable the LP
+    // hardware (revert to legacy "all $D013/$D014 reads return 0").
+    if (!Boolean.parseBoolean(System.getProperty("jac64.lightpen", "true"))) return;
+    boolean nowHigh = !((ddrb & 0x10) != 0 && (prb & 0x10) == 0);
+    if (lpPrevHigh && !nowHigh && chips instanceof C64Screen) {
+      ((C64Screen) chips).triggerLightPen();
+    }
+    lpPrevHigh = nowHigh;
   }
 
   public void reset() {
@@ -227,12 +257,14 @@ public class CIA {
       break;
     case DDRB:
       ddrb = data;
+      checkLightPenTrigger();
       break;
     case PRA:
       pra = data;
       break;
     case PRB:
       prb = data;
+      checkLightPenTrigger();
       break;
     case TIMALO:
       // Update latch value
@@ -443,7 +475,7 @@ public class CIA {
     private void loadTimer(long cycles) {
       timer = latch;
       nextZero = cycles + latch;
- 
+
       if (TIMER_DEBUG && offset == 0x10d00) {
         System.out.println(ciaID() + ": " + id + " - timer loaded at "
             + cycles + " with: " + latch + " diff " +
@@ -508,21 +540,29 @@ public class CIA {
       // set a default
       underflow = false;
       nextUpdate = cycles + 1;
-      if (interruptNext) {
-        ciaicrRead |= iflag;
-        interruptNext = false;
-        // Trigg the stuff...
-        updateInterrupts();
-      }
       // Update timer...
       getTimer(cycles);
       // Timer state machine!
+      // NOTE: previously the `if (interruptNext)` block ran HERE (before
+      // the state machine), introducing a 1-cycle delay between timer
+      // underflow and CPU IRQ source set. That matched OLD CIA (6526)
+      // semantics. VICE x64sc by default emulates NEW CIA (8521) where
+      // underflow → IRQ source set happens IN THE SAME CYCLE
+      // (ciacore.c:402-417 CIA_IRQ_RAISE0 path). The 1-cycle delay
+      // caused JaC64's IRQ to land at the next CPU instruction
+      // boundary vs VICE's, accumulating to the irq-ack-vicii slot 5
+      // failure. Move firing to AFTER the state-machine so the same
+      // cycle's triggerInterrupt directly raises IRQ via the
+      // interruptNext check at end of update().
       switch (state) {
       case STOP:
         // Nothing...
         break;
       case WAIT:
-        // Go to count next time!
+        // VICE pipeline: at this cycle the load completes (cnt=latch), and
+        // COUNT3 is still off so no decrement. Set nextZero now so the
+        // first cycle in COUNT (next update) reads `latch`.
+        loadTimer(cycles);
         state = COUNT;
         break;
       case LOAD_STOP:
@@ -538,12 +578,19 @@ public class CIA {
         if (nextZero == cycles + 1) {
           triggerInterrupt(cycles);
         }
+        // Cache latch into timer so getTimer() during the WAIT hold cycle
+        // returns the loaded value. nextZero is set when WAIT→COUNT runs,
+        // matching VICE's pipeline (cnt=latch on LOAD, hold cycle, then
+        // COUNT3 raised → decrement starts).
+        timer = latch;
         state = WAIT;
-        loadTimer(cycles);
         break;
       case COUNT_STOP:
         if (!countUnderflow) {
-          timer = (int) (cycles - nextZero);
+          // Cache the remaining-count value when stopping. Was `cycles -
+          // nextZero` which is negative until underflow → got clamped to 0,
+          // making bascan tests 3/4/6/7 read 0 instead of the live value.
+          timer = (int) (nextZero - cycles);
           if (timer < 0) timer = 0;
         }
         state = STOP;
@@ -574,6 +621,13 @@ public class CIA {
       if (writeCR != -1) {
         delayedWrite(cycles);
         writeCR = -1;
+      }
+      // NEW CIA: IRQ source set in SAME cycle as underflow.
+      // triggerInterrupt set interruptNext above; fire it now.
+      if (interruptNext) {
+        ciaicrRead |= iflag;
+        interruptNext = false;
+        updateInterrupts();
       }
     }
 

@@ -621,6 +621,7 @@ public class MainActivity extends Activity {
         if (diskImages.size() > 1) {
             popup.getMenu().add(0, 60, 13, "Swap Disk (" + (currentDisk + 1) + "/" + diskImages.size() + ")");
         }
+        popup.getMenu().add(0, 70, 14, "SID Player");
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -647,6 +648,9 @@ public class MainActivity extends Activity {
                     return true;
                 case 50: showUrlDialog(); return true;
                 case 60: showSwapDiskDialog(); return true;
+                case 70:
+                    startActivity(new Intent(MainActivity.this, SIDPlayActivity.class));
+                    return true;
             }
             return false;
         });

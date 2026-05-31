@@ -180,7 +180,7 @@ public class HVSCBrowser extends JDialog {
         tableModel.setRowCount(0);
         results.clear();
 
-        SwingWorker<List<SIDEntry>, Void> worker = new SwingWorker<>() {
+        SwingWorker<List<SIDEntry>, Void> worker = new SwingWorker<List<SIDEntry>, Void>() {
             @Override
             protected List<SIDEntry> doInBackground() throws Exception {
                 String encoded = URLEncoder.encode(query, "UTF-8");
@@ -310,7 +310,7 @@ public class HVSCBrowser extends JDialog {
         loadButton.setEnabled(false);
         statusLabel.setText("Downloading " + selectedEntry.title + "...");
 
-        SwingWorker<File, Void> worker = new SwingWorker<>() {
+        SwingWorker<File, Void> worker = new SwingWorker<File, Void>() {
             @Override
             protected File doInBackground() throws Exception {
                 URL url = new URL(DOWNLOAD_BASE + selectedEntry.id);
