@@ -627,13 +627,38 @@ public class TestRaster {
         long captureAtCycle = Long.getLong("jac64.captureAtCycle", -1L);
         if (captureAtCycle > 0) {
             System.out.println("Deterministic capture: pause-at-cycle " + captureAtCycle);
+            // Burst mode: -Djac64.captureBurst=N captures N consecutive frames
+            // (one PAL frame = 19656 cycles apart, tunable via
+            // jac64.captureBurstStride), each deterministically paused, written
+            // as <captureFile-without-ext>_000.png.. . Lets transient per-frame
+            // artifacts (e.g. FLI left-edge flicker) be flipped through / diffed.
+            int burst = Integer.getInteger("jac64.captureBurst", 1);
+            long stride = Long.getLong("jac64.captureBurstStride", 19656L);
+            String capPath = System.getProperty("jac64.captureFile",
+                "/tmp/jac64_capture.png");
+            if (burst > 1) {
+                String base = capPath.replaceFirst("\\.png$", "");
+                for (int frame = 0; frame < burst; frame++) {
+                    long target = captureAtCycle + frame * stride;
+                    cpu.pauseAtCycle = target;
+                    cpu.setPause(false);
+                    for (int i = 0; i < 4000; i++) {
+                        if (cpu.pause && cpu.cycles >= target) break;
+                        Thread.sleep(5);
+                    }
+                    String fp = String.format("%s_%03d.png", base, frame);
+                    screenshot(fp);
+                    System.out.println("Burst frame " + frame + " at clk="
+                        + cpu.cycles + " -> " + fp);
+                }
+                System.out.flush();
+                System.exit(0);
+            }
             cpu.pauseAtCycle = captureAtCycle;
             for (int i = 0; i < 2000; i++) {
                 if (cpu.pause && cpu.cycles >= captureAtCycle) break;
                 Thread.sleep(20);
             }
-            String capPath = System.getProperty("jac64.captureFile",
-                "/tmp/jac64_capture.png");
             screenshot(capPath);
             System.out.println("Captured at clk=" + cpu.cycles + " -> " + capPath);
             String dumpRangeAtCapture = System.getProperty("jac64.dumpMemRange");

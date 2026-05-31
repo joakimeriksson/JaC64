@@ -7,6 +7,17 @@ It can be run as a stand-alone desktop application or as an Android app.
 
 ## What's New
 
+- **Cycle-accurate VIC-II** — the graphics chip was rewritten to follow VICE's
+  per-cycle pipeline (the `VicDrawCycle` / `VicSpritePipeline` port). FLI,
+  sprite-crunch, border tricks, lightpen and the FLI-bug prefetch now render
+  faithfully — **118 of 138 VICE test programs are pixel-perfect**, and the
+  6510 CPU is byte-exact with VICE x64sc at the cycle level.
+- **MCP server** — drive the emulator from an AI agent / MCP client
+  (`JaC64MCP`): peek/poke memory, load files, type text, read the screen,
+  take screenshots, inspect CPU state, and more.
+- **Headless test harness + VICE comparison tooling** — `TestRaster` with
+  deterministic cycle-anchored capture, plus a 3-way REF/JaC/VICE pixel-diff
+  pipeline used to drive the accuracy work.
 - **Android port** — full C64 emulation on Android with virtual keyboard and joystick
 - **Gradle build system** — modern build for both desktop and Android
 - **Refactored rendering** — separated platform-independent emulation from UI code
@@ -80,6 +91,63 @@ java C64Test
 
 Example usage of JaC64 is in the `index_jac64.html` files, showing
 simple usage of JaC64 and describing how to use them.
+
+## Accuracy
+
+JaC64's VIC-II and 6510 are validated cycle-by-cycle against
+[VICE](https://vice-emu.sourceforge.io/) x64sc, the reference C64 emulator,
+using the VICE test-program suite:
+
+- **118 / 138 VICE testprogs render pixel-perfect** vs VICE.
+- The **6510 CPU is byte-exact** with VICE at the cycle level.
+- Faithful handling of FLI, sprite crunch / multiplexing, open side/top/bottom
+  borders, lightpen, `$D018`/bank/`$D016` splits, and the FLI-bug prefetch — so
+  demos such as Krestage 3 render correctly.
+
+Most VIC-II behaviours are gated behind `-Djac64.*` flags (default-on) so each
+fix can be A/B compared in isolation.
+
+## MCP server
+
+`JaC64MCP` exposes the emulator over the [Model Context Protocol](https://modelcontextprotocol.io)
+so an AI agent / MCP client can drive a live C64. Build the JAR (`./gradlew jar`)
+and point your MCP client at it:
+
+```json
+{
+  "mcpServers": {
+    "jac64": {
+      "type": "stdio",
+      "command": "java",
+      "args": ["-cp", "build/libs/JaC64.jar", "JaC64MCP"]
+    }
+  }
+}
+```
+
+Available tools include: `peek` / `poke`, `load_file`, `type_text`,
+`key_press`, `joystick`, `read_screen`, `screenshot`, `cpu_state`, `reset`,
+`set_speed`, `set_sid`, `swap_disk`, `list_directory`, and `iec_trace`.
+After rebuilding the JAR, reconnect the MCP client so it loads the new build.
+
+## Testing & VICE comparison
+
+`TestRaster` is a headless harness that boots the emulator, loads a
+`.d64`/`.prg`, and captures screenshots / traces — no UI needed:
+
+```sh
+# warp to a fixed emulated cycle and snapshot (deterministic, repeatable)
+java -Djac64.warp=true -Djac64.captureAtCycle=7100000 \
+     -cp build/libs/JaC64.jar TestRaster path/to/test.prg
+
+# capture N consecutive frames (one PAL frame apart) to flip through
+java -Djac64.warp=true -Djac64.captureAtCycle=168000000 -Djac64.captureBurst=24 \
+     -cp build/libs/JaC64.jar TestRaster path/to/demo.prg
+```
+
+The `tools/vice-compare/` scripts (`survey_drift.sh`, `three_way_diff.sh`,
+`png_cell_diff.py`) run the VICE test suite through both emulators and tabulate
+the per-cell differences (REF vs JaC vs VICE) that drive the accuracy work.
 
 ## Links
 
