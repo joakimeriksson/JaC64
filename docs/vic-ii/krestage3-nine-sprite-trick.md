@@ -1,7 +1,7 @@
 # Krestage 3: the "9-sprite" trick & "50-pixel wide sprites"
 
 > Status (2026-05-21): the OLD V2 sprite pipeline analysis below is **superseded** by
-> the cycle-exact `ViceSpritePipeline` port + Phase E render-buffer (default ON since
+> the cycle-exact `VicSpritePipeline` port + Phase E render-buffer (default ON since
 > May 2026). Krestage 3 scroll-in + beast scenes now render cleanly. Remaining gaps
 > for the "50-pixel sprite" effect documented in [Current status](#current-status).
 
@@ -33,7 +33,7 @@ or 1-px gap and you get ~50 visible pixels of contiguous sprite.
 ## Current status (2026-05-21)
 
 JaC64's sprite pipeline is now the cycle-exact
-[`ViceSpritePipeline`](../../com/dreamfabric/jac64/ViceSpritePipeline.java)
+[`VicSpritePipeline`](../../com/dreamfabric/jac64/VicSpritePipeline.java)
 — a 494-LOC faithful port of VICE `viciisc/vicii-draw-cycle.c`. It implements:
 
 - 24-bit shift registers per sprite (`sbufReg[8]`)
@@ -51,7 +51,7 @@ active / pending / halt / sbuf progression after JaC64 vicCycle N ≡ VICE
 raster_cycle N alignment. See `project_sprite_xpos_offset.md` in memory.
 
 Plus the **Phase E render-buffer pipeline** (commits `7045afe..8aa040e`,
-default ON since May 2026 via `-Djac64.viceRenderBuf=true`):
+default ON since May 2026 via `-Djac64.vicRenderBuf=true`):
 - `vicii.cregs[]` 1-cycle commit delay (cregs pipe-delay, commit `6d35ab2`)
 - Resolves $D02X mid-cycle writes at the next cycle boundary, matching VICE
 - Confirmed clean render of Krestage 3 scroll-in + beast scenes
@@ -86,7 +86,7 @@ DMA at cyc 58. See `project_krestage3_scrollin_open.md` for details.
 # Extract the demo PRG once:
 # (see /Users/joakimeriksson/work/JaC64/.capture/krestage3_crest.prg)
 
-# JaC64 with current defaults (viceRenderBuf=true, cregs pipe-delay):
+# JaC64 with current defaults (vicRenderBuf=true, cregs pipe-delay):
 java -Djac64.warp=true -Djac64.captureFrames=130 \
      -cp . TestRaster /tmp/krestage3_crest.prg
 
@@ -103,25 +103,25 @@ java -Djac64.warp=true -Djac64.captureFrames=130 \
 - VICE sprite fetch: `vice-emu/vice/src/viciisc/vicii-fetch.c`
   (`vicii_fetch_sprite_pointer`, `vicii_fetch_sprite_dma_1/2`)
 - JaC64 sprite pipeline:
-  `com/dreamfabric/jac64/ViceSpritePipeline.java` (entire file)
+  `com/dreamfabric/jac64/VicSpritePipeline.java` (entire file)
 - JaC64 dispatcher hand-off:
   `com/dreamfabric/jac64/C64Screen.java` (`advanceSpritePipeline`,
   `drawCyclePart1`/`drawCyclePart2` order)
 - JaC64 render-buffer / cregs pipeline:
-  `com/dreamfabric/jac64/ViceDrawCycle.java` (`drawColors8`, `drawColors6569`,
+  `com/dreamfabric/jac64/VicDrawCycle.java` (`drawColors8`, `drawColors6569`,
   `drawColors8565`)
 
 ## Related memory
 
 - `reference_krestage3_csdb.md` — CSDb release page (the 9-sprite comment)
-- `project_krestage3_phase_e_fix.md` — viceRenderBuf=true win (May 10)
+- `project_krestage3_phase_e_fix.md` — vicRenderBuf=true win (May 10)
 - `project_sprite_xpos_offset.md` — SP-LATCH-verified per-pixel match
 - `project_idle_gfx_fetch_3fff.md` — idle gfx fetch fix (sprite-priority 1392→0)
 - `project_vis_en_cyc56_fix.md` — VIS_EN cyc 56 fix (suite -500 cells)
 
 ---
 
-# OLD V2-pipeline analysis (superseded by ViceSpritePipeline)
+# OLD V2-pipeline analysis (superseded by VicSpritePipeline)
 
 > The text below described the pre-port V2 sprite pipeline and its
 > `RasterChangeQueue`-based approach. Both have been replaced by the

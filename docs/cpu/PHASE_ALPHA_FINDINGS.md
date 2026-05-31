@@ -60,7 +60,7 @@ Phase β should:
 | Flags | colorsplit cell-diff |
 |---|---|
 | default | 2676 |
-| `-Djac64.viceIrqDelayCounter=true` | 2676 |
+| `-Djac64.vicIrqDelayCounter=true` | 2676 |
 | `-Djac64.irqAssertPreIncrement=true` | 2692 |
 | both | 2676 |
 

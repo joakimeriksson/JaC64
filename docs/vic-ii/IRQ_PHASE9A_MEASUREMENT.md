@@ -49,7 +49,7 @@ specific $D019 RMW + read interactions during INC/ASL/LDA tests.
 **Real bug candidates (next sessions to investigate):**
 1. INC $D019 RMW dummy-write cycle: JaC64 may write before VICE,
    shifting subsequent VIC-cycle by 1.
-2. LDA $D019 read Phi1/Phi2 ordering: -Djac64.viceD019Phi2 fix
+2. LDA $D019 read Phi1/Phi2 ordering: -Djac64.vicD019Phi2 fix
    only covers writes; reads may have their own ordering issue.
 3. ASL $D019 same pattern as INC.
 
@@ -66,7 +66,7 @@ the LDA read collide on the same cycle.
 ## Phase 9.2 fix attempt (rejected — reverted)
 
 Tried a `vbeamForCpuRead` 1-cycle lag for $D012/$D011 reads (gated
-by `-Djac64.viceD012Lag`). Hypothesis: VICE increments raster_line
+by `-Djac64.vicD012Lag`). Hypothesis: VICE increments raster_line
 at raster_cycle 0 (= JaC64 vicCycle (-1) per the case-N=VICE-(N+1)
 convention), so JaC64's vbeam transition appears 1 cycle EARLIER
 to CPU reads than VICE's; lag the read by 1 cycle.
@@ -106,7 +106,7 @@ deeper level (the cumulative phase drift between IRQs).
 ## Phase 9.3 fix attempt (also rejected — reverted)
 
 Tried `lastLine = cpu.cycles + 1` at reset (gated by
-`-Djac64.viceLastLineShift`) to shift JaC64's entire VIC line
+`-Djac64.vicLastLineShift`) to shift JaC64's entire VIC line
 boundary by +1 cycle. Hypothesis: shift everything later by 1
 cycle so vbeam transition aligns with VICE's raster_line transition.
 
@@ -152,7 +152,7 @@ VICE's at the same logical handler position.**
 ## Phase 9.4 fix attempt: lineShift (also rejected — reverted)
 
 Tried shifting `lastLine` at reset by N cycles
-(`-Djac64.viceLastLineShift=2`). Hypothesis: shift JaC64's line
+(`-Djac64.vicLastLineShift=2`). Hypothesis: shift JaC64's line
 boundaries forward by 2 cycles to align with VICE's.
 
 **Result: no observable change in cyc value.** With shift=2,

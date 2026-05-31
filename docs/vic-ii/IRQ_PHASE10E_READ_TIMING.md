@@ -7,7 +7,7 @@ chips.clock). VICE's `FETCH_OPCODE` and `LOAD()` macros read at CURRENT
 clk BEFORE `CLK_INC` advances. This 1-cycle ordering difference is
 exactly the slot-5 cyc=60 vs cyc=59 delta found in Phase 10.D.
 
-## Fix tested: `-Djac64.viceReadOldClk=true`
+## Fix tested: `-Djac64.vicReadOldClk=true`
 
 Modified `fetchByte` to read at OLD clk first, then `cycles++` and
 `schedule(cycles)`:
@@ -30,7 +30,7 @@ protected final int fetchByte(int adr) {
 
 ```
 Without fix (baseline): 1 failed cell (slot 5 LDA SS-COL = ddddd. instead of dddd..)
-With viceReadOldClk:    2 failed cells:
+With vicReadOldClk:    2 failed cells:
   - row 0 col 5 (STA RASTER slot 5: actual=`-` vs reference=`*`)
   - row 3 col 5 (STA SS-COL slot 5: actual=`-` vs reference=`*`)
 ```
@@ -67,7 +67,7 @@ NEW clk, VICE reads at OLD clk.
 This is a fundamental CPU/VIC ordering difference. To fix without
 regression requires:
 1. ALSO changing `writeByte` to write at OLD clk (= remove the
-   existing `viceMemBus`/`viceD019Phi2` carve-outs).
+   existing `vicMemBus`/`vicD019Phi2` carve-outs).
 2. Restoring handler_2 BEQ stability through some other mechanism.
 
 ## Phase 10.F plan

@@ -80,7 +80,7 @@ at clk 1+56=57 in theory but actual first wrap empirically at 63).
 
 ### Fix: `lastLine = cpu.cycles - 1` at reset (commit 49e41d0)
 
-Gated by `-Djac64.viceLineAlign=true` (default ON). Empirically:
+Gated by `-Djac64.vicLineAlign=true` (default ON). Empirically:
 - JaC64 line transitions: clk=63, 126, 189, 252, 315 — **byte-for-byte
   match VICE**.
 - CIA timer test: no regression (verified diff identical).

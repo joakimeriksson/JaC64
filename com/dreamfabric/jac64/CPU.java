@@ -135,7 +135,7 @@ public class CPU extends MOS6510Core {
   // Legacy pre-increment access remains available for A/B testing.
   //
   // VICE-style memory access semantics — locked in (no flag).
-  // viceMem and viceCycleAccessPhase used to be toggleable; setting them
+  // vicMem and vicCycleAccessPhase used to be toggleable; setting them
   // to false breaks irq-ack-vicii and cia-timer-newcias, so the legacy
   // branches are dead code. Constants kept for code clarity.
   private static final boolean VICE_MEM_MODEL = true;
@@ -169,7 +169,7 @@ public class CPU extends MOS6510Core {
       schedule(cycles);
     }
     if (stoleCycles) {
-      viceInterruptDelayAfterSteal();
+      vicInterruptDelayAfterSteal();
     }
     traceBaEvent("BA-WAIT-END");
     if (Boolean.getBoolean("jac64.traceStall")) {
@@ -197,14 +197,14 @@ public class CPU extends MOS6510Core {
     if (VICE_MEM_MODEL) {
       /* VICE order: check_ba (with prev cycle's BA flag) -> CLK_INC. */
       waitForBus(true);
-      viceInterruptDelayBeforeClockInc();
+      vicInterruptDelayBeforeClockInc();
       cycles++;
       // Sample IRQ line BEFORE schedule() so we see the line state
       // from END OF PREVIOUS cycle, not after this cycle's VIC work.
       sampleIrqLine();
       schedule(cycles);
     } else {
-      viceInterruptDelayBeforeClockInc();
+      vicInterruptDelayBeforeClockInc();
       cycles++;
       sampleIrqLine();
       schedule(cycles);
@@ -275,10 +275,10 @@ public class CPU extends MOS6510Core {
   }
 
   private static final boolean VICE_BODY_ACCESS_PHASE =
-      Boolean.getBoolean("jac64.viceBodyAccessPhase");
+      Boolean.getBoolean("jac64.vicBodyAccessPhase");
 
   private void clockIncAfterCurrentCycleAccess() {
-    viceInterruptDelayBeforeClockInc();
+    vicInterruptDelayBeforeClockInc();
     cycles++;
     sampleIrqLine();
     schedule(cycles);
@@ -366,7 +366,7 @@ public class CPU extends MOS6510Core {
 
   // A byte is written directly to memory or to ioChips.
   //
-  // VICE memory-bus split (jac64.viceMemBus, default OFF — opt-in):
+  // VICE memory-bus split (jac64.vicMemBus, default OFF — opt-in):
   //   - Memory writes (non-IO): schedule VIC catch-up FIRST, then apply the
   //     write. Models Phi1/Phi2 hardware semantics — VIC's Phi1 read at
   //     cycle N happens before CPU's Phi2 write, so VIC sees the OLD byte
@@ -379,9 +379,9 @@ public class CPU extends MOS6510Core {
   // color stripes — the artifact must have a different root cause. Keeping
   // the option for future experimentation; default-off so we don't change
   // any other demo's timing.
-  // Enable with -Djac64.viceMemBus=true.
+  // Enable with -Djac64.vicMemBus=true.
   private static final boolean VICE_MEM_BUS_SPLIT =
-      VICE_MEM_MODEL && Boolean.getBoolean("jac64.viceMemBus");
+      VICE_MEM_MODEL && Boolean.getBoolean("jac64.vicMemBus");
 
   protected final void writeByte(int adr, int data) {
     if (VICE_CYCLE_ACCESS_PHASE) {
@@ -390,7 +390,7 @@ public class CPU extends MOS6510Core {
       return;
     }
 
-    viceInterruptDelayBeforeClockInc();
+    vicInterruptDelayBeforeClockInc();
     cycles++;
     if (!VICE_MEM_MODEL) {
       // Legacy: schedule + waitForBus BEFORE write. Writes can stall on BA-low.
@@ -590,9 +590,9 @@ public class CPU extends MOS6510Core {
   // → 8-byte repeating pattern (00 00 FF FF FF FF 00 00) for the first
   //   16384 bytes, inverted (FF FF 00 00 00 00 FF FF) for the next 16384.
   // Confirmed against actual VICE x64sc dump.
-  // Opt out with -Djac64.viceRamInit=false.
+  // Opt out with -Djac64.vicRamInit=false.
   private void initRamPattern() {
-    if (!Boolean.parseBoolean(System.getProperty("jac64.viceRamInit", "true"))) {
+    if (!Boolean.parseBoolean(System.getProperty("jac64.vicRamInit", "true"))) {
       return;
     }
     final int START_VALUE = 0;

@@ -2,18 +2,18 @@
 
 ## Goal
 
-Close the +3099-cell suite delta between `-Djac64.viceFullPipeline=true`
+Close the +3099-cell suite delta between `-Djac64.vicFullPipeline=true`
 and flag-off baseline. Stretch: pipeline output ≤ flag-off cells on
 all 9 baseline tests, with the door open to dropping legacy paint.
 
 ## Current state recap (commit landed)
 
-- `ViceDrawCycle.java` skeleton + faithful per-cycle port of
+- `VicDrawCycle.java` skeleton + faithful per-cycle port of
   `vicii-draw-cycle.c` (drawGraphics, drawSprites overlay,
   drawBorder8, drawColors8 6569+8565 with update_cregs).
 - Dispatcher hand-off in `C64Screen.clock()` runs every VIC cycle.
-- `-Djac64.viceFullPipeline=true` flag + configurable
-  `-Djac64.viceShift=-8` paint base.
+- `-Djac64.vicFullPipeline=true` flag + configurable
+  `-Djac64.vicShift=-8` paint base.
 - Flag-off path: **byte-identical** to legacy across all 10 phases ✓
 - Wins: ss-hires-color **PERFECT (0)**, rmwtest **-711**, ss-pri/ss-xpos
   significantly improved.
@@ -72,8 +72,8 @@ to fix. Avoids whack-a-mole sweeps.
    `reference_vice_local_fork.md`, patched binary at
    `/Users/joakimeriksson/work/vice-emu/`. Test build:
    `cd ~/work/vice-emu && make` (~5 min).
-2. In `ViceDrawCycle.java`, add trace-emission gated by
-   `Boolean.getBoolean("jac64.viceDrawTrace")`. Events to emit:
+2. In `VicDrawCycle.java`, add trace-emission gated by
+   `Boolean.getBoolean("jac64.vicDrawTrace")`. Events to emit:
    - `EV-DrawColors8` per cycle: cregs[$21], pixelBuffer[0..7],
      thisCycleLastReg, dbufOffset, vicCycle.
    - `EV-DrawGraphics8` per cycle: gbuf, vbufReg, cbufReg,
@@ -104,14 +104,14 @@ makes Phase 12+ bugs easier to chase.
 
 **Steps**:
 1. In `C64Screen.clock()` case dispatcher: gate `drawGraphics`,
-   `drawBackground`, `drawSprites`, `finishCycleVice`,
-   `applyD02xCurrentCycleColor` calls behind `if (!useViceFullPipeline)`.
+   `drawBackground`, `drawSprites`, `finishCycleVic`,
+   `applyD02xCurrentCycleColor` calls behind `if (!useVicFullPipeline)`.
 2. Keep all *state* updates outside the guard (`vc++`, `vmli++`,
    `xPos += 8`, `mpos += 8`, badline data fetches, BA gating).
 3. Run sweep. Expect zero pixel change (validation: the existing
    overlay is byte-identical to standalone-pipeline output).
 
-**Acceptance**: Re-run 9-test sweep with -Djac64.viceFullPipeline=true.
+**Acceptance**: Re-run 9-test sweep with -Djac64.vicFullPipeline=true.
 Numbers should be **identical** to current Phase 10 baseline (6309).
 A regression here = pipeline coverage gap → critical to fix BEFORE
 moving on.
@@ -138,10 +138,10 @@ Likely 1-cycle phase off.
 **VICE references**: `vicii-fetch.c:228-230`, `vicii-cycle.c:419-428`.
 
 **Steps**:
-1. Add a `viceGbufNext` field in C64Screen that's SET at the
+1. Add a `vicGbufNext` field in C64Screen that's SET at the
    appropriate cycle (cycle (N) for column (N-16), matching VICE's
    g-access at Phi1(16+K)).
-2. Replace the inline gbuf calc in the hand-off with `viceGbufNext`.
+2. Replace the inline gbuf calc in the hand-off with `vicGbufNext`.
 3. Verify badline-vs-idle distinction. VICE reads gbuf as 0 (idle
    pattern) when not in display state.
 
@@ -211,7 +211,7 @@ Java as a static `int[]` constant.
 1. Add `printf` to VICE's `vicii_chip_model_init` to dump
    `cycle_table[0..62]` after init. Save to file.
 2. Convert to Java `static final int[] PAL_6569_CYCLE_TABLE = {...};`
-   in ViceDrawCycle. ~63 int values.
+   in VicDrawCycle. ~63 int values.
 3. Use the mask constants (VISIBLE_M, FETCH_G, etc.) from
    vicii-chip-model.h — port the #defines as Java constants.
 4. Replace `setCycleFlags(vicCycle 15..54 ? VIS_EN_M : 0)` call
@@ -222,7 +222,7 @@ Java as a static `int[]` constant.
 Phase A trace. ss-pri/spritesplit edge cases improve.
 
 **Failure mode**: Wrong bit positions → mass visual corruption.
-Mitigation: gate behind `-Djac64.viceCycleTable=true` sub-flag,
+Mitigation: gate behind `-Djac64.vicCycleTable=true` sub-flag,
 default off until validated.
 
 **Rollback**: Flip flag back to coarse VIS_EN_M gate.
@@ -245,16 +245,16 @@ and use-case for runtime switching is clear.
 Was queued part of Phase 11.
 
 **Why**: Once pipeline is at-parity with VICE, legacy path
-(drawGraphics/drawGraphicsVice/drawColorsVice + retroactive paint
+(drawGraphics/drawGraphicsVic/drawColorsVic + retroactive paint
 helpers) is dead weight. Removing simplifies the codebase and
 eliminates the dual-truth confusion.
 
 **Steps**:
-1. Make `-Djac64.viceFullPipeline=true` the default.
-2. Delete drawGraphics, drawGraphicsVice, drawColorsVice,
-   drawBorderVice, drawBackground, applyD02xCurrentCycleColor,
+1. Make `-Djac64.vicFullPipeline=true` the default.
+2. Delete drawGraphics, drawGraphicsVic, drawColorsVic,
+   drawBorderVic, drawBackground, applyD02xCurrentCycleColor,
    applySpriteColorCurrentCycle, the cregs[] in C64Screen
-   (already redundant with ViceDrawCycle.cregs[]).
+   (already redundant with VicDrawCycle.cregs[]).
 3. Update tests + memory notes.
 
 **Exit criteria**: ~1500-2000 LOC removed from C64Screen.java. All

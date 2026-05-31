@@ -14,18 +14,18 @@ int val = readMemoryAt(adr, cycles + 1);   // read at clk N+1
 cycles++;                      // counter catches up
 ```
 
-Gated behind `-Djac64.viceCpuVic=true`.
+Gated behind `-Djac64.vicCpuVic=true`.
 
 ## Empirical result (REJECTED)
 
-irq-ack-vicii.prg with `viceCpuVic=true`:
+irq-ack-vicii.prg with `vicCpuVic=true`:
 
 ```
 Baseline (47/48):
   row 00 INC RASTER: ***-**       (matches VICE ref)
   row 03 LDA SS-COL: ddddd.       (1 cell mismatch — slot 5 = the failing cell)
 
-viceCpuVic=true (46/48):
+vicCpuVic=true (46/48):
   row 00 INC RASTER: **-***       (2 cells mismatch — dash at slot 3 instead of 4)
   row 03 LDA SS-COL: dddd..       (matches VICE ref — slot 5 fixed!)
 ```

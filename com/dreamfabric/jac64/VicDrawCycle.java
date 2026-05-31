@@ -6,11 +6,11 @@ package com.dreamfabric.jac64;
  * Source reference:
  *   /Users/joakimeriksson/work/vice-emu/vice/src/viciisc/vicii-draw-cycle.c
  *
- * Multi-week port goal: replace JaC64's legacy drawGraphics/drawColorsVice
+ * Multi-week port goal: replace JaC64's legacy drawGraphics/drawColorsVic
  * + retroactive-paint mechanisms with a single VICE-aligned pipeline.
  *
  * Status: skeleton. Functions are stubs until each Phase commit ports
- * them faithfully. Activate via `-Djac64.viceFullPipeline=true`.
+ * them faithfully. Activate via `-Djac64.vicFullPipeline=true`.
  *
  * Mode flag matrix:
  *   color_latency = true  → 6569 PAL old (1-pixel cregs pipe delay)
@@ -32,11 +32,11 @@ package com.dreamfabric.jac64;
  *   setRegs(int[])
  *   setDbufWriter(DbufSink) — output sink (matches JaC64's mem[] writes)
  *
- * NOT yet active in default builds; -Djac64.viceFullPipeline switches
- * the draw path from drawGraphicsVice/drawColorsVice (legacy) to this
+ * NOT yet active in default builds; -Djac64.vicFullPipeline switches
+ * the draw path from drawGraphicsVic/drawColorsVic (legacy) to this
  * class's drawCycle().
  */
-public final class ViceDrawCycle {
+public final class VicDrawCycle {
 
   // ===========================================================
   // COLOR CODE CONSTANTS (port of vicii-draw-cycle.c:42-63)
@@ -238,7 +238,7 @@ public final class ViceDrawCycle {
   private int dbufOffset;
 
   // Phase 7: per-cycle sprite output snapshot, populated by C64Screen
-  // from ViceSpritePipeline outputs BEFORE drawCycle() is called.
+  // from VicSpritePipeline outputs BEFORE drawCycle() is called.
   // Code 0 = transparent. Code 1 = COL_D025 (MC0). Code 2 = COL_D027+s
   // (sprite individual). Code 3 = COL_D026 (MC1). fgWin = graphics
   // foreground priority beat the sprite at this pixel.
@@ -314,9 +314,9 @@ public final class ViceDrawCycle {
   // causing the gbuf to load 1 cycle early at left-edge transitions.
   // Suite delta on 8565 variant: modesplit 534→384 (-150) with
   // screenpos +5. Net -145 cells.
-  // Opt out: -Djac64.viceFlagsPipe=false.
+  // Opt out: -Djac64.vicFlagsPipe=false.
   private static final boolean USE_FLAGS_PIPE =
-      Boolean.parseBoolean(System.getProperty("jac64.viceFlagsPipe", "true"));
+      Boolean.parseBoolean(System.getProperty("jac64.vicFlagsPipe", "true"));
 
   public void drawCycle() {
     if (rasterCycle == 1) {
@@ -360,15 +360,15 @@ public final class ViceDrawCycle {
 
   // ===========================================================
   // TRACE (Phase A) — emit EV-DrawCycle matching VICE's patch in
-  // vicii-draw-cycle.c. Gated by -Djac64.viceDrawTrace + clk window.
+  // vicii-draw-cycle.c. Gated by -Djac64.vicDrawTrace + clk window.
   // ===========================================================
 
   private static final boolean traceDraw =
-      Boolean.getBoolean("jac64.viceDrawTrace");
+      Boolean.getBoolean("jac64.vicDrawTrace");
   private static final long traceDrawClkStart =
-      Long.getLong("jac64.viceDrawTraceStart", 0L);
+      Long.getLong("jac64.vicDrawTraceStart", 0L);
   private static final long traceDrawClkEnd =
-      Long.getLong("jac64.viceDrawTraceEnd", Long.MAX_VALUE);
+      Long.getLong("jac64.vicDrawTraceEnd", Long.MAX_VALUE);
   private static java.io.PrintStream traceOut;
   private final int[] emittedColors = new int[8];
   private long traceClk;
@@ -382,7 +382,7 @@ public final class ViceDrawCycle {
   private void emitTrace(int offsBefore) {
     if (traceClk < traceDrawClkStart || traceClk > traceDrawClkEnd) return;
     if (traceOut == null) {
-      String path = System.getProperty("jac64.viceDrawTraceFile",
+      String path = System.getProperty("jac64.vicDrawTraceFile",
           "/tmp/jac64_draw.trace");
       try { traceOut = new java.io.PrintStream(path); }
       catch (Exception e) { traceOut = System.err; }
@@ -419,13 +419,13 @@ public final class ViceDrawCycle {
   // ===========================================================
   // draw_sprites8 — port of vicii-draw-cycle.c:469 (overlay only).
   // The full VICE draw_sprites8 advances sprite shift registers + does
-  // priority math; ViceSpritePipeline already produces byte-identical
+  // priority math; VicSpritePipeline already produces byte-identical
   // sbufReg/output (see project_sprite_shift_match.md). Phase 7 reads
   // those outputs and overlays them into renderBuffer / priBuffer.
   // ===========================================================
 
   private void drawSprites8() {
-    // ViceSpritePipeline sets outColorCode[i] = 0 when sprite loses
+    // VicSpritePipeline sets outColorCode[i] = 0 when sprite loses
     // priority to graphics foreground, so an unconditional overlay on
     // non-zero is correct (matches VICE's draw_sprites priority gate).
     for (int i = 0; i < 8; i++) {
@@ -632,11 +632,11 @@ public final class ViceDrawCycle {
    * `borderStatePrev`, which clobbered the transition state and caused
    * JaC64 to paint content 1 cycle earlier than VICE on the left-border
    * close (and similarly on right-border open). With
-   * `-Djac64.viceInternalBorderState=true` (default), the field is
+   * `-Djac64.vicInternalBorderState=true` (default), the field is
    * managed internally by drawBorder8 only — matching VICE.
    */
   public void setBorderState(int s) {
-    if (Boolean.parseBoolean(System.getProperty("jac64.viceInternalBorderState", "true"))) {
+    if (Boolean.parseBoolean(System.getProperty("jac64.vicInternalBorderState", "true"))) {
       return; // ignore external overrides; drawBorder8 owns the state
     }
     this.borderState = s & 0x01;

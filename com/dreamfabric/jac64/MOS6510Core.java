@@ -239,15 +239,15 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected static final boolean VICE_SEI_IRQ_WINDOW = true;
 
   protected static final boolean VICE_IRQ_DELAY_COUNTER =
-      Boolean.getBoolean("jac64.viceIrqDelayCounter");
+      Boolean.getBoolean("jac64.vicIrqDelayCounter");
 
-  protected final void viceInterruptDelayBeforeClockInc() {
+  protected final void vicInterruptDelayBeforeClockInc() {
     if (VICE_IRQ_DELAY_COUNTER && IRQLow && irqCycleStart <= cycles) {
       irqDelayCycles++;
     }
   }
 
-  protected final void viceInterruptDelayAfterSteal() {
+  protected final void vicInterruptDelayAfterSteal() {
     if (!VICE_IRQ_DELAY_COUNTER || !IRQLow || irqDelayCycles != 0
         || irqCycleStart >= cycles) {
       return;

@@ -112,13 +112,13 @@ protected final void LOAD_DUMMY(int addr) { LOAD(addr); }
 ## Rollout strategy
 
 1. **Phase 2** — add primitives (`clkInc`, `clkAdd`, `LOAD`, `STORE`)
-   behind flag `jac64.viceCpuModel`. Keep legacy path as default.
+   behind flag `jac64.vicCpuModel`. Keep legacy path as default.
 2. **Phase 3** — port memory-access macros (STORE_ABS family etc.)
    as Java helpers.
 3. **Phase 4** — port opcodes group by group. Run each group
    through TestRaster + a "smoke" demo to catch regressions early.
 4. **Phase 5** — port illegals.
-5. **Phase 6** — flip `viceCpuModel` to default-on; remove legacy
+5. **Phase 6** — flip `vicCpuModel` to default-on; remove legacy
    path; run full validation matrix.
 
 ## Validation matrix (per phase)

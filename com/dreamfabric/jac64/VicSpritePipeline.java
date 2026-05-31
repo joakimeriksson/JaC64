@@ -46,7 +46,7 @@ package com.dreamfabric.jac64;
  *   - SprDma1/SprDma2 (sprite bytes 1+2) cycles: ptr cycle + 1.
  *   - check_sprite_display: VICE cycle 58 = JaC64 case 57.
  */
-public final class ViceSpritePipeline {
+public final class VicSpritePipeline {
 
   // Static trace gate evaluated once at class load — zero per-pixel cost
   // when off. Enable with -Djac64.traceSpriteDraw=true and optional

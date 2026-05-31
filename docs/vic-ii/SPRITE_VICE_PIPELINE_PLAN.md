@@ -1,7 +1,7 @@
 # Sprite cycle-exact pipeline — restart plan
 
 > Status: WIP. Commit `51ae943` lands the foundation behind
-> `-Djac64.viceSprPipe=true` (default OFF). Default-off behavior is
+> `-Djac64.vicSprPipe=true` (default OFF). Default-off behavior is
 > unchanged — all current passing tests still pass.
 
 ## Context (read first)
@@ -41,7 +41,7 @@ basic-rendering bugs cause simple-test regression. Plus
 
 ## What's already built
 
-### `com/dreamfabric/jac64/ViceSpritePipeline.java` (new, 357 lines)
+### `com/dreamfabric/jac64/VicSpritePipeline.java` (new, 357 lines)
 
 Faithful port of `vicii-draw-cycle.c` lines 88-532. State, helpers,
 and per-cycle entry point all match VICE 1:1 with source-line
@@ -50,30 +50,30 @@ citations in comments.
 Public API:
 ```java
 // Per-cycle inputs (set by caller before drawCycle8):
-viceSprPipe.checkSprDisp        // true at VICE cycle 58 = JaC64 case 57
-viceSprPipe.spritePtrDma0       // true at SprPtr/SprDma0 cycle
-viceSprPipe.spriteDma1Dma2      // true at SprDma1/SprDma2 cycle
-viceSprPipe.spriteDmaNum        // 0..7, sprite being fetched (or -1)
-viceSprPipe.spriteDisplayBits   // mask of dma'd sprites
-viceSprPipe.reg1bPipe           // $D01B
-viceSprPipe.reg1cPipe           // $D01C
-viceSprPipe.reg1dPipe           // $D01D
-viceSprPipe.currentSpriteX[]    // sprites[s].x
-viceSprPipe.currentSpriteData[] // 24-bit data (loaded into sbufReg at pixel 4)
-viceSprPipe.priBuffer[]         // foreground-priority per pixel
+vicSprPipe.checkSprDisp        // true at VICE cycle 58 = JaC64 case 57
+vicSprPipe.spritePtrDma0       // true at SprPtr/SprDma0 cycle
+vicSprPipe.spriteDma1Dma2      // true at SprDma1/SprDma2 cycle
+vicSprPipe.spriteDmaNum        // 0..7, sprite being fetched (or -1)
+vicSprPipe.spriteDisplayBits   // mask of dma'd sprites
+vicSprPipe.reg1bPipe           // $D01B
+vicSprPipe.reg1cPipe           // $D01C
+vicSprPipe.reg1dPipe           // $D01D
+vicSprPipe.currentSpriteX[]    // sprites[s].x
+vicSprPipe.currentSpriteData[] // 24-bit data (loaded into sbufReg at pixel 4)
+vicSprPipe.priBuffer[]         // foreground-priority per pixel
 
-viceSprPipe.drawCycle8(xpos);    // runs 8 pixels of draw_sprites8
+vicSprPipe.drawCycle8(xpos);    // runs 8 pixels of draw_sprites8
 
 // Outputs:
-viceSprPipe.outColorCode[i]      // 0 transparent / 1 D025 / 2 D027+s / 3 D026
-viceSprPipe.outSprite[i]         // winning sprite or -1
-viceSprPipe.outSpriteSpriteColl[i]  // SS-COL mask for this pixel
-viceSprPipe.outSpriteBgColl[i]   // SB-COL mask for this pixel
+vicSprPipe.outColorCode[i]      // 0 transparent / 1 D025 / 2 D027+s / 3 D026
+vicSprPipe.outSprite[i]         // winning sprite or -1
+vicSprPipe.outSpriteSpriteColl[i]  // SS-COL mask for this pixel
+vicSprPipe.outSpriteBgColl[i]   // SB-COL mask for this pixel
 ```
 
-### `C64Screen.drawSpritesViceCycle()` (new, ~120 lines)
+### `C64Screen.drawSpritesVicCycle()` (new, ~120 lines)
 
-Integration: replaces `drawSprites()` body when `viceSprPipe=true`.
+Integration: replaces `drawSprites()` body when `vicSprPipe=true`.
 Sets pipeline inputs from existing state, runs `drawCycle8`, paints
 outputs into `mem[]` and `collissionMask[]`. Hooks
 `Sprite.readSpriteData()` to populate `currentSpriteData[]`.
@@ -115,7 +115,7 @@ integration writes `sprCol |= ssColl` per pixel, bypassing that
 pipeline. The collision IRQ then fires at the wrong cycle.
 
 **Fix:** Don't OR `sprCol` directly. Instead, accumulate sprite-sprite
-hits in a temporary mask, and at end of `drawSpritesViceCycle()`,
+hits in a temporary mask, and at end of `drawSpritesVicCycle()`,
 follow the existing pattern:
 
 ```java
@@ -135,8 +135,8 @@ Search `sprColFirePending` in `C64Screen.java` for the existing flow.
 **Root cause:** When sprite is hidden behind foreground priority,
 VICE still sets `active_sprite = s` and `collision_mask |= m` but
 *does not* paint to render_buffer. My pipeline does this correctly
-(see `drawSprites(i)` lines 254-269 of ViceSpritePipeline.java),
-but the integration in `drawSpritesViceCycle()` treats `s >= 0` as
+(see `drawSprites(i)` lines 254-269 of VicSpritePipeline.java),
+but the integration in `drawSpritesVicCycle()` treats `s >= 0` as
 "sprite drew here" and OR's into collissionMask — which then makes
 it look like a foreground pixel for *next* sprite. Loop.
 
@@ -160,14 +160,14 @@ static DRAW_INLINE void update_sprite_xpos(void) {
 
 This is called at the *end* of `draw_sprites8()`. My pipeline does
 the same. But: it samples `currentSpriteX[s]` which I set from
-`sprites[s].x` *at the start* of `drawSpritesViceCycle()`. If the
+`sprites[s].x` *at the start* of `drawSpritesVicCycle()`. If the
 CPU writes $D000 mid-cycle, my snapshot might be stale.
 
 **Fix:** Sample `sprites[s].x` inside `drawCycle8` at end (in the
 pipe-update step), not at start. This requires either:
 - Pass `Sprite[]` to drawCycle8, or
-- Call `viceSprPipe.currentSpriteX[s] = sprites[s].x` at the end of
-  `drawSpritesViceCycle` (before `drawCycle8` returns) — wait, no,
+- Call `vicSprPipe.currentSpriteX[s] = sprites[s].x` at the end of
+  `drawSpritesVicCycle` (before `drawCycle8` returns) — wait, no,
   drawCycle8 is what reads them. Restructure so the pipe update
   reads from a callback/array that's live.
 
@@ -176,7 +176,7 @@ Actually simplest: inside `drawCycle8`, replace:
 for (int s = 0; s < 8; s++) spriteXPipe[s] = currentSpriteX[s];
 ```
 with a call to a `xPosUpdater` lambda or just defer the update by
-having the integration call `viceSprPipe.commitXPipe()` after the
+having the integration call `vicSprPipe.commitXPipe()` after the
 cycle.
 
 ## Verification protocol (after each fix)
@@ -201,7 +201,7 @@ done
 
 # 2. Pipeline-ON regression — must reach PASS on all
 for test in [...same...]; do
-  java -Djac64.viceSprPipe=true -Djac64.headless=true -Djac64.warp=true \
+  java -Djac64.vicSprPipe=true -Djac64.headless=true -Djac64.warp=true \
     -Djac64.captureFrames=1 -cp build/libs/JaC64.jar TestRaster "$test" 2>&1 \
     | grep "Test complete:"
 done
@@ -210,7 +210,7 @@ done
 mkdir -p /tmp/jac64_pipe
 for prg in /Users/joakimeriksson/work/VICE-testprogs/VICII/spritesplit/*.prg; do
   name=$(basename "$prg" .prg)
-  java -Djac64.viceSprPipe=true -Djac64.headless=true -Djac64.warp=true \
+  java -Djac64.vicSprPipe=true -Djac64.headless=true -Djac64.warp=true \
     -Djac64.captureFrames=2 -cp build/libs/JaC64.jar TestRaster "$prg" >/dev/null 2>&1
   cp /tmp/jac64_test_frame_001.png /tmp/jac64_pipe/${name}.png
 done
@@ -245,8 +245,8 @@ done
    architectural mismatch + the cycle-table reference)
 3. `docs/vic-ii/krestage3-nine-sprite-trick.md` (the demo case driving
    this refactor)
-4. `com/dreamfabric/jac64/ViceSpritePipeline.java` (the new pipeline)
-5. `C64Screen.drawSpritesViceCycle()` ~ line 3220 (the integration)
+4. `com/dreamfabric/jac64/VicSpritePipeline.java` (the new pipeline)
+5. `C64Screen.drawSpritesVicCycle()` ~ line 3220 (the integration)
 6. `vicii-draw-cycle.c:88-532` for VICE source (under
    `/Users/joakimeriksson/work/vice-emu/vice/src/viciisc/`)
 

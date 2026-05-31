@@ -2,7 +2,7 @@
 
 ## What was tested
 - Default: `VICE_IRQ_DELAY_COUNTER=false` (cycle-comparison mode).
-- Modified: `-Djac64.viceIrqDelayCounter=true` (counter-based mode).
+- Modified: `-Djac64.vicIrqDelayCounter=true` (counter-based mode).
 
 ## Suite results
 

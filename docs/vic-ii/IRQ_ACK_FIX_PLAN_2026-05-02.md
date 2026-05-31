@@ -98,7 +98,7 @@ fix must port the access-phase contract rather than moving a single event.
 - A broad access-before-clock prototype moved the read to cycle 44, but it
   also changed upstream IRQ/flag state and regressed an SS-COL STA cell. This
   confirms the fix cannot be a simple global `fetchByte()` reordering.
-- A narrower opcode-body access prototype (`jac64.viceBodyAccessPhase=true`)
+- A narrower opcode-body access prototype (`jac64.vicBodyAccessPhase=true`)
   also moved toward VICE's `LOAD/STORE` shape but still produced row 03
   `****-*  ******  ******  DDDDD.`. Adding the global IRQ pre-increment made
   the LDA group `DDDD..` but broke the RASTER/STA groups again. This keeps the
@@ -107,7 +107,7 @@ fix must port the access-phase contract rather than moving a single event.
 
 2026-05-03 result:
 
-- `jac64.viceCycleAccessPhase=true` changes CPU reads/writes to VICE's
+- `jac64.vicCycleAccessPhase=true` changes CPU reads/writes to VICE's
   `access at current clock, then CLK_INC()` shape. This moves the bad
   `LDA $D019` sample to raster cycle 44, but the read still returned `$f4`
   because the sprite-sprite collision IRQ flag was set at the same clock.
@@ -116,11 +116,11 @@ fix must port the access-phase contract rather than moving a single event.
   same clock. VICE's passing behavior requires this flag to become visible one
   cycle later for this slot.
 - The passing candidate is the pair now enabled by default:
-  - `jac64.viceCycleAccessPhase=true`
-  - `jac64.viceCollisionIrqDelay=true`
+  - `jac64.vicCycleAccessPhase=true`
+  - `jac64.vicCollisionIrqDelay=true`
 - Opt-outs remain for A/B testing:
-  - `-Djac64.viceCycleAccessPhase=false`
-  - `-Djac64.viceCollisionIrqDelay=false`
+  - `-Djac64.vicCycleAccessPhase=false`
+  - `-Djac64.vicCollisionIrqDelay=false`
 
 The active root-cause area is the running IRQ/VIC/CPU pipeline: CPU access
 ordering relative to `vicii_cycle()`, IRQ delay counting, BA-steal interaction,
@@ -167,8 +167,8 @@ after the test is already executing.
      Phi2. This is not a `$D019` read special-case and applies to both collision
      IRQ sources.
    - The old behavior remains available with
-     `-Djac64.viceCycleAccessPhase=false` and
-     `-Djac64.viceCollisionIrqDelay=false`.
+     `-Djac64.vicCycleAccessPhase=false` and
+     `-Djac64.vicCollisionIrqDelay=false`.
 
 6. Reject local hacks:
    - Do not patch the test program.
