@@ -1253,11 +1253,29 @@ public class C64Screen extends ExtChip implements Observer {
 
   private void updateDisplayEnabledFromControl(int data) {
     if (vbeam == 0x30) {
-      displayEnabled = (data & 0x10) != 0;
-      if (displayEnabled) {
-        borderState &= ~0x04;
+      // VICE vicii-cycle.c:630 — on FIRST_DMA_LINE allow_bad_lines = DEN is
+      // evaluated only while !allow_bad_lines, so once DEN has been seen ON
+      // this line it LATCHES and a later DEN-clear on the same line cannot
+      // un-set it. JaC's per-frame reset (the cyc-0 latch above) already
+      // captures DEN at line start; this write handler must therefore only
+      // allow 0->1 on line 48, never 1->0 — clearing it let a late DEN-clear
+      // (den10-48-2: $D011=$0b at cyc 1) wrongly drop the chip into idle, so
+      // the whole display rendered $3fff stripe garbage instead of text.
+      // den10-48-0/1 stay correct: their clear lands before the cyc-0 reset,
+      // so displayEnabled is already false and never re-latches. Flag
+      // jac64.viceDenLatchLock default true; false = legacy track-both-ways.
+      if (Boolean.parseBoolean(System.getProperty("jac64.viceDenLatchLock", "true"))) {
+        if ((data & 0x10) != 0) {
+          displayEnabled = true;
+          borderState &= ~0x04;
+        }
       } else {
-        borderState |= 0x04;
+        displayEnabled = (data & 0x10) != 0;
+        if (displayEnabled) {
+          borderState &= ~0x04;
+        } else {
+          borderState |= 0x04;
+        }
       }
     }
   }
