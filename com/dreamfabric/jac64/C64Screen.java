@@ -1587,65 +1587,81 @@ public class C64Screen extends ExtChip implements Observer {
 
   private void fetchBadLineData(int column) {
     if (TRACE_VIC_CYCLE) traceAct("FetchC-c" + column);
-    int sourceColumn = column;
+
+    // VICE vbuf/prefetch pipeline alignment (2026-05-31): VICE's vicii_cycle
+    // runs the g-fetch FIRST (vicii_fetch_graphics reads vbuf[vmli], then
+    // vmli++) and the matrix-fetch LATER (vicii_fetch_matrix writes
+    // vbuf[vmli]). Because vmli is already incremented, VICE writes the
+    // c-data for column k at the cycle BEFORE column k is rendered, and the
+    // FLI-bug prefetch ($ff, vicii-fetch.c:194) decision uses prefetch_cycles
+    // as it stood at THAT earlier write cycle. JaC's c-access is coincident —
+    // fetchBadLineData(col) writes vicCharCache[col] and the same cycle's
+    // drawGraphicsVice reads it — i.e. one cycle later than VICE. For stable
+    // (non-prefetch) data this is invisible, but the prefetch decision then
+    // used the wrong cycle's prefetch_cycles, so the FLI-bug idle stripe
+    // landed one column too early (fldscroll-2A/2B col 37 vs VICE's 38;
+    // blackmail FLI). Fix: write the c-data for column k while PROCESSING
+    // column k-1 (shift source+dest +1) so the write cycle, and thus the
+    // prefetch decision, matches VICE. Normal data is unchanged (source k is
+    // still stored at index k); only the $ff placement corrects. Column 0 has
+    // no preceding cycle, so it is also written directly when column==0.
+    // Flag jac64.fldPrefetchShift default true.
+    if (Boolean.parseBoolean(System.getProperty("jac64.fldPrefetchShift", "true"))) {
+      if (column == 0) {
+        writeCAccess(0);
+      }
+      writeCAccess(column + 1);
+    } else {
+      writeCAccess(column);
+    }
+  }
+
+  // Performs one c-access (matrix fetch) into vicCharCache[col]/vicColCache[col]
+  // for the given column, replicating VICE vicii_fetch_matrix: prefetch ($ff +
+  // PC color byte) while prefetchCycles > 0, idle ($ff) off the 0..39 range,
+  // else the real screen+color byte at vcBase+col. col >= 40 is dropped (VICE
+  // renders only columns 0..39).
+  private void writeCAccess(int col) {
+    if (col < 0 || col >= 40) {
+      return;
+    }
     final int fetchVideoMatrix = viceFetchDelay ? videoMatrixFetchDelay : videoMatrix;
     final int fetchCharMemoryIndex = viceFetchDelay ? charMemoryIndexFetchDelay : charMemoryIndex;
 
-    // VICE viciisc/vicii-fetch.c:194 — when prefetch_cycles > 0, fetch
-    // returns $3FFF bus + PC byte (FLI-bug pre-fetch). Otherwise normal
-    // c-access at current vc.
     if (prefetchCycles > 0) {
-      vicCharCache[column] = 0xff;
-      vicColCache[column] = memory[cpu.pc & 0xffff] & 0x0f;
+      vicCharCache[col] = 0xff;
+      vicColCache[col] = memory[cpu.pc & 0xffff] & 0x0f;
       if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
           && cpu.cycles <= TRACE_VIC_CYCLE_END) {
         traceVicCycleOut.println("EV-FetchC clk=" + cpu.cycles
             + " rast=$" + Integer.toHexString(vbeam)
             + " cyc=" + (cpu.cycles - lastLine)
-            + " col=" + column
+            + " col=" + col
             + " src=PREFETCH"
             + " prefetchCycles=" + prefetchCycles
             + " vbyte=$ff"
-            + " cbyte=$" + Integer.toHexString(vicColCache[column] & 0x0f)
+            + " cbyte=$" + Integer.toHexString(vicColCache[col] & 0x0f)
             + " pc=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
       }
       return;
     }
 
-    if (sourceColumn < 0 || sourceColumn >= 40) {
-      vicCharCache[column] = 0xff;
-      vicColCache[column] = memory[cpu.pc & 0xffff] & 0x0f;
-      if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
-          && cpu.cycles <= TRACE_VIC_CYCLE_END) {
-        traceVicCycleOut.println("EV-FetchC clk=" + cpu.cycles
-            + " rast=$" + Integer.toHexString(vbeam)
-            + " cyc=" + (cpu.cycles - lastLine)
-            + " col=" + column
-            + " src=" + sourceColumn
-            + " vbyte=$ff"
-            + " cbyte=$" + Integer.toHexString(vicColCache[column] & 0x0f)
-            + " pc=$" + Integer.toHexString(cpu.getInstructionStartPC() & 0xffff));
-      }
-      return;
-    }
-
-    int videoOffset = (vcBase + sourceColumn) & 0x3ff;
-    vicCharCache[column] = memory[fetchVideoMatrix + videoOffset];
-    vicColCache[column] = memory[IO_OFFSET + 0xd800 + videoOffset];
+    int videoOffset = (vcBase + col) & 0x3ff;
+    vicCharCache[col] = memory[fetchVideoMatrix + videoOffset];
+    vicColCache[col] = memory[IO_OFFSET + 0xd800 + videoOffset];
     if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
         && cpu.cycles <= TRACE_VIC_CYCLE_END) {
       traceVicCycleOut.println("EV-FetchC clk=" + cpu.cycles
           + " rast=$" + Integer.toHexString(vbeam)
           + " cyc=" + (cpu.cycles - lastLine)
-          + " col=" + column
-          + " src=" + sourceColumn
+          + " col=" + col
           + " fvm=$" + Integer.toHexString(fetchVideoMatrix)
           + " fci=$" + Integer.toHexString(fetchCharMemoryIndex)
           + " vbase=$" + Integer.toHexString(vcBase)
           + " vmli=" + vmli
           + " vc=" + vc
-          + " vbyte=$" + Integer.toHexString(vicCharCache[column] & 0xff)
-          + " cbyte=$" + Integer.toHexString(vicColCache[column] & 0x0f)
+          + " vbyte=$" + Integer.toHexString(vicCharCache[col] & 0xff)
+          + " cbyte=$" + Integer.toHexString(vicColCache[col] & 0x0f)
           + " d011=$" + Integer.toHexString(control1)
           + " d016=$" + Integer.toHexString(control2)
           + " bank=$" + Integer.toHexString(vicBank));
