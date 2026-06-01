@@ -275,13 +275,13 @@ public class C64Screen extends ExtChip implements Observer {
   int offsetY = 0;
 
   // Cached variables...
-  boolean gfxVisible = false;
-  // VICE-faithful idle_state — mirrors vicii.idle_state per vicii-cycle.c
-  // update_rc semantics ONLY. Initial value 0 = not idle (VICE init at
-  // vicii.c:347). Used by [[idle-clear-pipe-fix]] for the pipe-load
-  // clear decision (vicii-draw-cycle.c:309-317) so the clear-to-0 matches
-  // VICE exactly, independent of JaC's gfxVisible field whose mid-line
-  // transitions are load-bearing for other tests (dmadelay, ss-pri).
+  // VICE-faithful idle_state — the SINGLE source of truth for display vs
+  // idle, mirroring vicii.idle_state (vicii-cycle.c). Initial value 0 =
+  // not idle / display (VICE init at vicii.c:347). The former separate
+  // `gfxVisible` field (== !vicIdleState) was collapsed into this on
+  // 2026-06-01; all display-state reads now use !vicIdleState. Used by
+  // the badline FSM, vc/vmli gating, and the pipe-load clear decision
+  // (vicii-draw-cycle.c:309-317).
   boolean vicIdleState = false;
   boolean paintBorder = false;
   boolean paintSideBorder = false;
@@ -1132,7 +1132,7 @@ public class C64Screen extends ExtChip implements Observer {
         && cpu.cycles <= Long.getLong("jac64.traceBadFsmClkHi", 7041000L)) {
       System.err.println("BADFSM-PRE clk=" + cpu.cycles + " vbeam=" + vbeam + " cyc=" + vicCycle
           + " vc=" + vc + " vmli=" + vmli + " rc=" + rc + " vcBase=" + vcBase
-          + " badLine=" + badLine + " gfxVisible=" + gfxVisible
+          + " badLine=" + badLine + " gfxVisible=" + (!vicIdleState)
           + " vicIdle=" + vicIdleState
           + " displayEnabled=" + displayEnabled + " vScroll=" + vScroll
           + " control1=$" + Integer.toHexString(control1));
@@ -1155,7 +1155,7 @@ public class C64Screen extends ExtChip implements Observer {
     // increment vc one cycle earlier than VICE, accumulating off-by-one
     // vcBase/rc state by the time the screenpos test reaches its first
     // visible line (line 51).
-    if (vicCycle >= 15 && vicCycle <= 54 && gfxVisible) {
+    if (vicCycle >= 15 && vicCycle <= 54 && !vicIdleState) {
       vc = (vc + 1) & 0x3ff;
     }
 
@@ -1164,15 +1164,11 @@ public class C64Screen extends ExtChip implements Observer {
     // AND we're in the DMA range (48..247 per VICE FIRST/LAST_DMA_LINE).
     if (displayEnabled) {
       boolean newBad = (vbeam & 7) == vScroll && vbeam >= 0x30 && vbeam <= 0xf7;
-      if (newBad && !badLine) {
-        gfxVisible = true; // exit idle_state
-      }
       badLine = newBad;
       // VICE check_badline (vicii-cycle.c:53-62): when bad_line=1, also
-      // sets idle_state=0 EVERY cycle (not just rising edge). My initial
-      // "idle_state only changes at update_rc" was incorrect — this
-      // mid-cycle clear is what makes JaC's gfxVisible mid-line
-      // transition correct vs VICE.
+      // sets idle_state=0 EVERY cycle (not just rising edge) — this
+      // includes the rising edge (exit idle), so a separate rise-edge
+      // clear is unnecessary.
       if (badLine) {
         vicIdleState = false;
       }
@@ -1211,35 +1207,19 @@ public class C64Screen extends ExtChip implements Observer {
     // VICE vicii-cycle.c:629-640 — update_rc at VICII_PAL_CYCLE(58) =
     // internal raster_cycle 57.
     if (vicCycle == 57) {
-      // Snapshot rc BEFORE the legacy path mutates it. VICE's update_rc
-      // checks `rc == 7` against the PRE-increment value; if the
-      // vicIdleState check at the bottom reads the POST-increment rc,
-      // it fires at every char-row transition (rc 6→7) instead of at
-      // the genuine 7→0 transition only. border-251 char-row-boundary
-      // bug 2026-05-30: caused 952 spurious black-row pixels at every
-      // bottom-half char-row start.
-      int rcPre = rc;
+      // VICE-faithful update_rc, verbatim (vicii-cycle.c:705-710):
+      //   if (rc == 7) { idle_state = 1; vcbase = vc; }
+      //   if (!idle_state || bad_line) { rc = (rc+1)&7; idle_state = 0; }
+      // The rc==7 check is PRE-increment (rc isn't bumped until the second
+      // clause), and idle_state is the single source of truth — this is
+      // the collapse of the former gfxVisible/vicIdleState pair, which were
+      // parallel implementations of exactly this (gfxVisible == !idle).
       if (rc == 7) {
-        gfxVisible = false; // enter idle_state (legacy)
+        vicIdleState = true;
         vcBase = vc;
       }
-      if (gfxVisible || badLine) {
-        rc = (rc + 1) & 7;
-        gfxVisible = true;
-      }
-      // VICE-faithful idle_state per vicii-cycle.c:656-667:
-      //   if (rc == 7) idle_state = 1, vcbase = vc;
-      //   if (!idle_state || bad_line) rc = (rc+1)&7, idle_state = 0;
-      // Use the PRE-increment rcPre (matches VICE's ordering).
-      // Flag jac64.vicPreRcUpdateRc default true. Set to false to
-      // restore the legacy (POST-increment) behavior for A/B testing.
-      boolean vicPreRc = Boolean.parseBoolean(
-          System.getProperty("jac64.vicPreRcUpdateRc", "true"));
-      int rcForIdle = vicPreRc ? rcPre : rc;
-      if (rcForIdle == 7) {
-        vicIdleState = true;
-      }
       if (!vicIdleState || badLine) {
+        rc = (rc + 1) & 7;
         vicIdleState = false;
       }
     }
@@ -1589,14 +1569,14 @@ public class C64Screen extends ExtChip implements Observer {
       vmli = badLineFetchStartColumn;
     }
 
-    gfxVisible = true;
+    vicIdleState = false;
   }
 
   private void handleBadLineStop(int vicCycle, boolean wasVisible) {
     resetBadLineFetchWindow();
 
     if (vicCycle > 0) {
-      gfxVisible = true;
+      vicIdleState = false;
       if (!wasVisible && vicCycle > 13) {
         rc = 0;
       }
@@ -2150,7 +2130,7 @@ public class C64Screen extends ExtChip implements Observer {
         fldOut.println("D011=" + Integer.toHexString(data) +
             " vbeam=" + vbeam + " cyc=" + wCyc +
             " vScroll=" + vScroll + " badLine=" + badLine +
-            " gfxVis=" + gfxVisible + " rc=" + rc +
+            " gfxVis=" + (!vicIdleState) + " rc=" + rc +
             " vmli=" + vmli + " vc=" + vc +
             " clk=" + cpu.cycles +
             " pc=$" + Integer.toHexString(cpu.pc & 0xffff) +
@@ -2978,7 +2958,7 @@ public class C64Screen extends ExtChip implements Observer {
       if (vicCycle != 0) {
         boolean newBadLine = isBadLine(vScroll);
         if (newBadLine != badLine) {
-          boolean wasVisibleNow = gfxVisible;
+          boolean wasVisibleNow = !vicIdleState;
           if (newBadLine) {
             badLine = true;
             if (!badLineStartedThisLine) {
@@ -3026,7 +3006,7 @@ public class C64Screen extends ExtChip implements Observer {
           + " cyc=" + vicCycle
           + " vc=" + vc + " vmli=" + vmli
           + " rc=" + rc + " vcbase=" + vcBase
-          + " idle=" + (gfxVisible ? 0 : 1)
+          + " idle=" + (vicIdleState ? 1 : 0)
           + " bad=" + (badLine ? 1 : 0)
           + " abl=" + (displayEnabled ? 1 : 0)
           + " ys=" + vScroll);
@@ -3090,7 +3070,7 @@ public class C64Screen extends ExtChip implements Observer {
 
       if (fldTrace && (vbeam < 0x30 || vbeam <= 0xf7)) {
         fldOut.println("CYC0 vbeam=" + vbeam + " badLine=" + badLine +
-            " gfxVis=" + gfxVisible + " rc=" + rc +
+            " gfxVis=" + (!vicIdleState) + " rc=" + rc +
             " vScroll=" + vScroll + " borderSt=" + borderState +
             " sprDMA=$" + Integer.toHexString(spriteDmaMask()) +
             " d011=$" + Integer.toHexString(control1) +
@@ -3273,7 +3253,7 @@ public class C64Screen extends ExtChip implements Observer {
         // first line of each char row), writes AFTER (FLI lines 1-7)
         // leave bad_line=false at this point so rc keeps incrementing.
         rc = 0;
-        gfxVisible = true;
+        vicIdleState = false;
       }
       break;
     case 14:
@@ -3552,7 +3532,7 @@ public class C64Screen extends ExtChip implements Observer {
       if (!VICE_BADLINE_FSM) {
         if (rc == 7) {
           vcBase = vc;
-          gfxVisible = false;
+          vicIdleState = true;
           if (BAD_LINE_DEBUG) {
             monitor.info("#### RC7 ==> vc = " + vc + " at " + vbeam +
                 " vicCycle = " + vicCycle);
@@ -3562,9 +3542,9 @@ public class C64Screen extends ExtChip implements Observer {
           }
         }
 
-        if (badLine || gfxVisible) {
+        if (badLine || !vicIdleState) {
           rc = (rc + 1) & 7;
-          gfxVisible = true;
+          vicIdleState = false;
         }
       }
       // (VICE_BADLINE_FSM path: rc/idle/vcbase update happens in
@@ -3844,7 +3824,7 @@ public class C64Screen extends ExtChip implements Observer {
       // !gfxVisible if flag set.
       boolean idleForPipe = Boolean.parseBoolean(
           System.getProperty("jac64.useVicIdleStateForPipe", "true"))
-          ? vicIdleState : !gfxVisible;
+          ? vicIdleState : vicIdleState;
       vicDrawCycle.setIdleState(idleForPipe);
       // VICE viciisc/vicii-fetch.c: vicii_fetch_idle_gfx() reads from
       // $3FFF when in idle_state. This routes content pixels through
@@ -3852,7 +3832,7 @@ public class C64Screen extends ExtChip implements Observer {
       // its rast1 $D011=$1b write misses the FIRST_DMA_LINE DEN latch,
       // so abl=0 throughout the frame and bg renders BLACK not $D021).
       // Opt-out: -Djac64.idleGfxFetch=false.
-      boolean idleFetch = !gfxVisible
+      boolean idleFetch = vicIdleState
           && Boolean.parseBoolean(System.getProperty("jac64.idleGfxFetch", "true"));
       // VICE viciisc/vicii-cycle.c:137-144 — vicii.gbuf is only WRITTEN
       // at FETCH_G cycles (display state OR idle state). At non-FETCH_G
@@ -3958,7 +3938,7 @@ public class C64Screen extends ExtChip implements Observer {
         .append(" vc=").append(vc)
         .append(" rc=").append(rc)
         .append(" vcBase=").append(vcBase)
-        .append(" gfx=").append(gfxVisible ? 1 : 0);
+        .append(" gfx=").append(!vicIdleState ? 1 : 0);
       if (traceVicActions.length() > 0) {
         sb.append(" act=[").append(traceVicActions).append(']');
         traceVicActions.setLength(0);
@@ -4018,7 +3998,7 @@ public class C64Screen extends ExtChip implements Observer {
     for (int i = 0; i < 8; i++) {
       mem[bpos++] = currentBg;
     }
-    if (fldTrace && vbeam >= 0x30 && vbeam <= 0xf7 && gfxVisible) {
+    if (fldTrace && vbeam >= 0x30 && vbeam <= 0xf7 && !vicIdleState) {
       fldOut.println("  drawBG overwrite at mpos=" + mpos +
           " vmli=" + vmli + " borderSt=" + borderState);
     }
@@ -4064,12 +4044,12 @@ public class C64Screen extends ExtChip implements Observer {
       boolean vicGate = Boolean.parseBoolean(
           System.getProperty("jac64.vicVmliGate", "true"));
       if (vicGate) {
-        if (gfxVisible) {
+        if (!vicIdleState) {
           vc++;
           vmli++;
         }
       } else {
-        if (gfxVisible && !paintBorder && !vBorderOnly()) vc++;
+        if (!vicIdleState && !paintBorder && !vBorderOnly()) vc++;
         vmli++;
       }
       gbufPipe1Reg = gbufPipe0Reg;
@@ -4077,7 +4057,7 @@ public class C64Screen extends ExtChip implements Observer {
       return;
     }
     if (notVisible) {
-      if (gfxVisible && !paintBorder && !vBorderOnly()) {
+      if (!vicIdleState && !paintBorder && !vBorderOnly()) {
         vc++;
       }
       vmli++;
@@ -4091,7 +4071,7 @@ public class C64Screen extends ExtChip implements Observer {
       return;
     }
 
-    if (!gfxVisible || paintBorder || vBorderOnly()) {
+    if (vicIdleState || paintBorder || vBorderOnly()) {
       // VICE viciisc/vicii-draw-cycle.c — outside display, render_buffer
       // is filled by draw_graphics with $D021 (or VC_NONE for hard
       // border) then optionally overwritten by draw_border8 with $D020.
@@ -4402,7 +4382,7 @@ public class C64Screen extends ExtChip implements Observer {
       return;
     }
 
-    if (!gfxVisible || paintBorder || vBorderOnly()) {
+    if (vicIdleState || paintBorder || vBorderOnly()) {
       mpos -= horizScroll;
       int color = (paintBorder || borderClosed()) ? borderColor : bgColor;
       for (int i = mpos, n = mpos + 8; i < n; i++) {

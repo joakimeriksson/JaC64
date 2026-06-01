@@ -4,6 +4,13 @@ A repeatable loop for tracking down JaC64-vs-VICE timing divergences
 without ending up with hacks. Read this BEFORE patching the emulator
 in response to a failing test or visual artifact.
 
+> **Current state & what's left:** see
+> [`ACCURACY_STATE.md`](ACCURACY_STATE.md). TL;DR: 119/138 pixel-perfect; the
+> per-cycle/sub-cycle pixel pipeline already exists (`VicDrawCycle` +
+> `drawCyclePart1`/`Part2`); ~70–100% of remaining cell-diff is phase/
+> measurement that VICE shares; the only real lever left is a **mode-aware
+> `vmli`/`vbuf` read-phase** fix (global shifts already disproven).
+
 ## Core principle
 
 > **Every emulation fix must cite the VICE source line that

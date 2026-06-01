@@ -98,11 +98,27 @@ JaC64's VIC-II and 6510 are validated cycle-by-cycle against
 [VICE](https://vice-emu.sourceforge.io/) x64sc, the reference C64 emulator,
 using the VICE test-program suite:
 
-- **118 / 138 VICE testprogs render pixel-perfect** vs VICE.
-- The **6510 CPU is byte-exact** with VICE at the cycle level.
+- **119 / 138 VICE testprogs render pixel-perfect** vs VICE.
+- The **6510 CPU is byte-exact** with VICE at the cycle level, and the VIC-II
+  state machine (vc/vmli/rc/badline/idle) matches VICE byte-for-byte.
+- A **per-cycle pixel pipeline** (`VicDrawCycle`, a port of VICE's
+  `vicii_draw_cycle`, emitting 8 px/cycle with a `cycle_flags` pipe and an
+  intra-cycle `drawCyclePart1`/`drawCyclePart2` split for mid-cycle `$D016`
+  events), plus a `VicSpritePipeline` and the `VICE_CYCLE_ACCESS_PHASE` CPU
+  write-phase model.
 - Faithful handling of FLI, sprite crunch / multiplexing, open side/top/bottom
   borders, lightpen, `$D018`/bank/`$D016` splits, and the FLI-bug prefetch — so
   demos such as Krestage 3 render correctly.
+
+A 3-way REF/JaC/VICE pixel-diff shows the remaining ~19 imperfect tests are
+overwhelmingly **phase/measurement** on dynamic FLI/border displays — where
+VICE itself diverges from its own reference image (single screenshots of a
+moving display catch each emulator at a slightly different demo phase). The
+genuinely JaC-specific residual is a few hundred cells in one family: a
+**mode-dependent `vmli`/`vbuf` read-phase** offset within the existing pixel
+pipeline (surfaces in `fetchsplit`, bitmap left-edges, and FLI write-phase),
+correct in text mode but off by a pipeline step in some bitmap/FLI-split
+contexts. See `docs/vic-ii/ACCURACY_STATE.md`.
 
 Most VIC-II behaviours are gated behind `-Djac64.*` flags (default-on) so each
 fix can be A/B compared in isolation.

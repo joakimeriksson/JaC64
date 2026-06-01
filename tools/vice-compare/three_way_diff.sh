@@ -81,6 +81,14 @@ echo "Running VICE..." >&2
     -exitscreenshot "$VICE_SHOT" >/tmp/vice_${TEST}.log 2>&1 || true
 
 # --- 3-way report ---
+# WARNING: the per-pixel classifier below compares RAW RGB with NO image
+# alignment and NO palette normalization. JaC screenshots are 282 rows tall vs
+# the 272-row REF/VICE shots, and VICE's -exitscreenshot palette differs from
+# the -8565 reference palette. Its jac_bug/triple breakdown is UNRELIABLE and
+# must NOT be used to characterize residuals. For real numbers use
+# survey_drift.sh (png_cell_diff.py: pattern-based, title-aligned,
+# palette-independent). The png_cell_diff "Total cell-diffs" line below
+# (REF vs JaC) is the trustworthy figure.
 # (head -N would SIGPIPE upstream; just print the lines we want)
 python3 "$JAC64_ROOT/tools/vice-compare/png_cell_diff.py" "$REF" "$JAC_SHOT" 2>&1 | grep "Total cell" || true
 echo
