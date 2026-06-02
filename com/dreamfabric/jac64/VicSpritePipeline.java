@@ -306,8 +306,25 @@ public final class VicSpritePipeline {
    * Port of get_trigger_candidates (vicii-draw-cycle.c:304-316).
    * Returns sprite-bit mask of sprites whose X is in this 8-pixel cycle.
    */
+  /** #217: wrap sprite xpos to VICE's per-line range (PAL 504) so high-X
+   *  sprites trigger in the opened side border. Closes spritefetchbug
+   *  test-136-2a (118->0) plus border-bm-idle/ysh/ysh2, border-mcbm and
+   *  hvborder2 (all the same bug). PAL-only (JaC is hardcoded PAL); opt out
+   *  with -Djac64.sprXposWrap=false. */
+  static final boolean SPR_XPOS_WRAP =
+      Boolean.parseBoolean(System.getProperty("jac64.sprXposWrap", "true"));
+
+  /** VICE's xpos counter wraps at the PAL line width 504 (= 63 cycles * 8),
+   *  NOT 512. Handles negative inputs (left-border cycles). */
+  static final int SPR_XPOS_WRAP_MOD = 504;
+  private static int sprXposMod504(int x) {
+    x %= SPR_XPOS_WRAP_MOD;
+    return x < 0 ? x + SPR_XPOS_WRAP_MOD : x;
+  }
+
   private int getTriggerCandidates(int xpos) {
     int candidateBits = 0;
+    if (SPR_XPOS_WRAP) xpos = sprXposMod504(xpos);
     int xposHi = xpos & 0x1f8;
     for (int s = 0; s < 8; s++) {
       if (xposHi == (spriteXPipe[s] & 0x1f8)) {
@@ -322,6 +339,13 @@ public final class VicSpritePipeline {
    * Activates sprites whose X exactly matches xpos.
    */
   private void triggerSprites(int xpos, int candidateBits) {
+    // #217: VICE's per-cycle xpos counter wraps at 504 (the line width in
+    // sprite-X coordinates), NOT 512. JaC's rasterX goes negative in the
+    // left border; mod-504 reproduces VICE's xpos EXACTLY for all 63 cycles
+    // (verified vs the dumped cycle_table), so high-X sprites (x_pipe
+    // 438/502 in test-136-2a) trigger at the right pixel. Using & 0x1ff
+    // (mod 512) was +8 off and mis-placed sprites by 8px in the border.
+    if (SPR_XPOS_WRAP) xpos = sprXposMod504(xpos);
     if (candidateBits == 0 || spritePendingBits == 0) return;
     for (int s = 0; s < 8; s++) {
       int m = 1 << s;

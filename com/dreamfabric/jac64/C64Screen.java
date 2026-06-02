@@ -2840,6 +2840,17 @@ public class C64Screen extends ExtChip implements Observer {
     if (useVicSprPipe
         && !VICE_SHAPED) {
       advanceSpritePipeline(vicCycle);
+    } else if (useVicSprPipe && VICE_SHAPED
+        && vicCycle >= 1 && vicCycle <= 11
+        && VicSpritePipeline.SPR_XPOS_WRAP) {
+      // #217 sprite-fetch-in-sideborder: VICE runs draw_sprites8 every
+      // cycle. JaC's VICE_SHAPED path advances the sprite pipeline only in
+      // finishCycleVic (cyc 12-59), so the left/right border cycles are
+      // skipped and high-X sprites (which trigger at the wrapped xpos in
+      // those cycles) are missed. Advance here with an empty priBuffer (no
+      // graphics foreground in the border).
+      for (int i = 0; i < 8; i++) vicSprPipe.priBuffer[i] = false;
+      advanceSpritePipeline(vicCycle);
     }
 
     // At cycle 0, increment vbeam BEFORE the raster compare
