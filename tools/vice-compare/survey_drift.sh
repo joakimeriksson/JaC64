@@ -35,6 +35,11 @@ fi
 extra_flags() {
     case "$1" in
         colorsplit) echo "-Djac64.zeroScreenRam=true" ;;
+        # border-mcbm reads color-RAM cells it never writes and relies on the
+        # power-on pattern (which the VICE reference captured). Zeroing color
+        # RAM here inflates the diff by ~2786 cells of pure init artifact
+        # (2793 zeroed vs 7 with natural init). Use JaC's natural init.
+        border-mcbm) echo "-Djac64.zeroColorRam=false" ;;
         *) echo "" ;;
     esac
 }
