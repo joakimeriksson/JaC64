@@ -1,6 +1,15 @@
 # VIC-II accuracy — current state & what's left
 
-_Last updated: 2026-06-01_
+_Last updated: 2026-06-03_
+
+> **✅ 2026-06-03: sprite-xpos-wrap fix (commit a1f4795) — −147 cells, 0 regressions.**
+> The sprite trigger compared raster xpos (negative in the left border) against
+> 9-bit sprite-X without wrapping, so high-X sprites never rendered in an
+> opened side border. VICE's xpos wraps at the **PAL line width 504** (not 512;
+> verified vs VICE's cycle_table). Fix: mod-504 wrap + advance the sprite
+> pipeline through left-border cyc 1-11. Closed **test-136-2a (#217) 118→0,
+> border-mcbm 7→0, border-bm-idle/ysh/ysh2 →0, hvborder2 8→0** — all the same
+> sprite-in-border bug. Flag `jac64.sprXposWrap` default on; PAL-only.
 
 > **⚠️ CORRECTION (2026-06-01, later):** an earlier version of this doc claimed
 > the remaining residual was "70–100% phase/measurement that VICE shares" and
