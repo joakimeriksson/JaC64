@@ -632,8 +632,10 @@ public abstract class MOS6510Core extends MOS6510Ops {
       else
         p1 += y;
 
-      tmp = adr + (p1 & 0xff);
-      adr += p1;
+      tmp = (adr + (p1 & 0xff)) & 0xffff;
+      // Effective address wraps within 16 bits (real 6502): $FFxx + index
+      // carries past $FFFF and wraps to $00xx, not the extended/ROM region.
+      adr = (adr + p1) & 0xffff;
 
       // If read - a fifth cycle patches the incorrect address...
       // Always done if RMW!
@@ -668,7 +670,9 @@ public abstract class MOS6510Core extends MOS6510Ops {
       fetchByte(p1);
       tmp = (p1 + x) & 0xff;
 
-      adr = (fetchByte(tmp + 1) << 8);
+      // Pointer high byte wraps within zero page (real 6502 quirk):
+      // for tmp=$FF the high byte comes from $00, not $0100.
+      adr = (fetchByte((tmp + 1) & 0xff) << 8);
       adr |= fetchByte(tmp);
 
       if (read) {
@@ -677,13 +681,17 @@ public abstract class MOS6510Core extends MOS6510Ops {
       break;
     case INDIRECT_Y:
       pc++;
-      // Fetch hi and lo
-      adr = (fetchByte(p1 + 1) << 8);
+      // Fetch hi and lo. Pointer high byte wraps within zero page
+      // (real 6502 quirk): for p1=$FF the high byte comes from $00.
+      adr = (fetchByte((p1 + 1) & 0xff) << 8);
       p1 = fetchByte(p1);
       p1 += y;
 
-      tmp = adr + (p1 & 0xff);
-      adr += p1;
+      tmp = (adr + (p1 & 0xff)) & 0xffff;
+      // Effective address wraps within 16 bits (real 6502): a base of
+      // $FFxx plus Y can carry past $FFFF and must wrap to $00xx, not
+      // spill into the extended/ROM-bank memory region.
+      adr = (adr + p1) & 0xffff;
 
       // If read - a sixth cycle patches the incorrect address...
       // Always done if RMW!
