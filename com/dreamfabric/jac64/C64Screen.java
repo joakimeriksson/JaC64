@@ -105,6 +105,7 @@ public class C64Screen extends ExtChip implements Observer {
   public String[] iecLog = new String[IEC_LOG_SIZE];
   public int iecLogPos = 0;
   private int iecLoopReadLogs = 0;
+  private long lastLoadLog = 0;
   // for disk emulation...
   int cia2PRA = 0;
   int cia2DDRA = 0;
@@ -1973,6 +1974,12 @@ public class C64Screen extends ExtChip implements Observer {
       | iecLines & c1541Chips.iecLines;
 
       val &= 0xff;
+      if (Boolean.getBoolean("jac64.traceLoad") && (cpu.cycles - lastLoadLog) > 1000000L) {
+        lastLoadLog = cpu.cycles;
+        int[] m = cpu.getMemory();
+        System.err.printf("EV-LOAD cyc=%d c64pc=%04X loadptr(AE/AF)=%02X%02X status90=%02X verck93=%02X%n",
+            cpu.cycles, cpu.getPC() & 0xffff, m[0xaf] & 0xff, m[0xae] & 0xff, m[0x90] & 0xff, m[0x93] & 0xff);
+      }
       if (iecLoopReadLogs < 16 && cpu.getPC() >= 0x01a9 && cpu.getPC() <= 0x01ad) {
         System.out.printf(
             "C64 loop read DD00=$%02X c64=%02X drv=%02X A=%02X X=%02X Y=%02X SP=%02X cyc=%d%n",

@@ -400,7 +400,8 @@ public class TestRaster {
         cpu.reset();
         waitReady();
         reader.readDiskFromFile(path);
-        cpu.enterText("LOAD\"*\",8,1~");
+        String name = System.getProperty("jac64.loadName", "*");
+        cpu.enterText("LOAD\"" + name + "\",8,1~");
     }
 
     public void run(String source) throws Exception {

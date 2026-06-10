@@ -17,6 +17,17 @@ import java.io.InputStreamReader;
  * @version 1.0
  */
 public class C1541Emu extends MOS6510Core {
+  // Drive-CPU instruction trace for JaC<->VICE lockstep (EV-DRV).
+  // Gated by -Djac64.traceDrv=true; starts emitting once the head is on a
+  // target track (>= traceDrvTrack, default 31) and caps at traceDrvLines.
+  private static final boolean TRACE_DRV =
+      Boolean.getBoolean("jac64.traceDrv");
+  private static final int TRACE_DRV_TRACK =
+      Integer.getInteger("jac64.traceDrvTrack", 31);
+  private static final int TRACE_DRV_LINES =
+      Integer.getInteger("jac64.traceDrvLines", 60000);
+  private int drvTraceCount = 0;
+  private java.io.PrintStream drvTraceOut = System.err;
 
   public static final boolean DEBUG = false; //true;
   public static final boolean IODEBUG = false;
@@ -119,6 +130,21 @@ public class C1541Emu extends MOS6510Core {
       // Run one instruction! - with special overflow "patch" -
       // Always fake 'byte ready' for fast read!
 //    boolean o = overflow;
+      if (TRACE_DRV && drvTraceCount < TRACE_DRV_LINES
+          && chips.currentTrack >= TRACE_DRV_TRACK) {
+        // EV-DRV pc a x y sp p via2pb via2pa trk sec bro
+        drvTraceOut.println("EV-DRV pc=" + Integer.toHexString(pc)
+            + " a=" + Integer.toHexString(acc & 0xff)
+            + " x=" + Integer.toHexString(x & 0xff)
+            + " y=" + Integer.toHexString(y & 0xff)
+            + " sp=" + Integer.toHexString(s & 0xff)
+            + " p=" + Integer.toHexString(getStatusByte() & 0xff)
+            + " pb2=" + Integer.toHexString(chips.via2PB & 0xff)
+            + " trk=" + chips.currentTrack + " sec=" + chips.currentSector
+            + " bro=" + (chips.byteReadyOverflow ? 1 : 0)
+            + " br=" + (byteReady ? 1 : 0));
+        drvTraceCount++;
+      }
       if (byteReady && chips.byteReadyOverflow) {
         // Set overflow and clear byte ready!
         overflow = true;

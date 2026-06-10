@@ -77,6 +77,11 @@ public class C1541Chips extends ExtChip implements DiskListener {
   private int hTrack = 2;
   private int sector = 0;
   private int sectorPos = 0;
+  private static final boolean TRACE_RB = Boolean.getBoolean("jac64.traceRb");
+  private static final int TRACE_RB_TRACK = Integer.getInteger("jac64.traceRbTrack", 32);
+  private int rbCount = 0;
+  private static final boolean TRACE_IEC = Boolean.getBoolean("jac64.traceIec");
+  private int iecTraceCount = 0;
   private int currentTrackSize = 21;
   private int currentTrackLength = 7692;
   private int gcrSectorLength = GCR_SECTOR_HEADER_AND_DATA_SIZE + 8;
@@ -181,6 +186,18 @@ public class C1541Chips extends ExtChip implements DiskListener {
           | ((cia2.iecLines << 3) & 0x80)) ^ 0x85;               // ATN IN
       int value = (iecBus | 0x1a) & (~via1CB & 0xff)
           | (via1PB & via1CB);
+      if (TRACE_IEC && iecTraceCount < 300 && cpu.cycles > 12000000L) {
+        int dpc = cpu.getPC() & 0xffff;
+        boolean serial = (dpc >= 0xe680 && dpc <= 0xea80) || (dpc >= 0xfef0);
+        if (serial) {
+          CPU c64 = (CPU) cia2.cpu;
+          System.err.printf(
+              "EV-IEC drvpc=%04X via1PB=%02X read=%02X drvIEC=%02X c64IEC=%02X | c64pc=%04X c64A=%02X drvcyc=%d%n",
+              dpc, via1PB & 0xff, value & 0xff, iecLines & 0xff, cia2.iecLines & 0xff,
+              c64.getPC() & 0xffff, c64.getAcc() & 0xff, cpu.cycles);
+          iecTraceCount++;
+        }
+      }
       if (iecLoopReadLogs < 96
           && cpu.getPC() >= 0x06a1 && cpu.getPC() <= 0x06c8
           && (cpu.y & 0xff) <= 0x08) {
@@ -248,8 +265,17 @@ public class C1541Chips extends ExtChip implements DiskListener {
           case 0x1c00: // VIA2 PB
             return (via2PB & 0x6f) | sync() | writeProtect();
           case 0x1c01: // VIA2 PA - read from disk!
-          case 0x1c0f:
-            return readByte();
+          case 0x1c0f: {
+            int rb = readByte();
+            if (TRACE_RB && rbCount < 4000 && track >= TRACE_RB_TRACK) {
+              System.err.println("EV-RB pc=" + Integer.toHexString(cpu.getPC())
+                  + " byte=" + Integer.toHexString(rb & 0xff)
+                  + " trk=" + track + " sec=" + sector
+                  + " sp=" + sectorPos + " sync=" + (sync() != 0 ? 1 : 0));
+              rbCount++;
+            }
+            return rb;
+          }
           case 0x1c02: // VIA2 CB
             return via2CB;
           case 0x1c03: // VIA2 CA
