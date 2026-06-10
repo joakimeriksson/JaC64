@@ -463,7 +463,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
   }
 
   public void emulateOp() {
-    instructionStartPC = pc & 0xffff;
+    // PC wraps within 16 bits: code executing across the $FFFF->$0000
+    // boundary (e.g. an opcode at $FFFE) must fetch the next byte from
+    // $0000, not spill into the extended/ROM-bank array at $10000.
+    pc &= 0xffff;
+    instructionStartPC = pc;
     updatePendingIRQLineState();
     boolean hadIrqEnableDelay = irqEnableDelayOps > 0;
     boolean irqAllowedByStatus = !disableInterupt
@@ -582,7 +586,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
 //  + " data: " + Hex.hex2(data));
 
     // fetch first argument (always fetched...?) - but not always pc++!!
-    int p1 = fetchByte(pc);
+    int p1 = fetchByte(pc & 0xffff);
 
     // Fetch addres, and read if it should be done!
     switch (addrMode) {
@@ -593,7 +597,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
       break;
     case ABSOLUTE:
       pc++;
-      adr = (fetchByte(pc++) << 8) + p1;
+      adr = (fetchByte((pc++) & 0xffff) << 8) + p1;
       if (read) {
         data = loadByte(adr);
       }
@@ -624,7 +628,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
     case ABSOLUTE_Y:
       pc++;
       // Fetch hi byte!
-      adr = fetchByte(pc++) << 8;
+      adr = fetchByte((pc++) & 0xffff) << 8;
 
       // add x/y to low byte & possibly faulty fetch!
       if (addrMode == ABSOLUTE_X)
