@@ -38,6 +38,18 @@ public class CIA {
   public static final int CRA = 0x0e;
   public static final int CRB = 0x0f;
 
+  // CIA chip model select. The two revisions differ in timer-underflow ->
+  // interrupt timing:
+  //   8521 ("new" CIA, C64C):  data flag + IR flag + IRQ line all set in the
+  //                            SAME cycle as the underflow. (default)
+  //   6526 ("old" CIA):        data flag set on underflow, but the IR flag
+  //                            (ICR bit 7) and IRQ line lag by ONE cycle.
+  // 8521 is the default (matches VICE x64sc and passes irq-ack-vicii /
+  // cia-timer-newcias). Set -Djac64.ciaModel=6526 for old-CIA timing
+  // (matches the Lorenz CIA timing suite). See CIATimer.update().
+  static final boolean CIA_OLD_MODEL =
+      "6526".equals(System.getProperty("jac64.ciaModel"));
+
   CIATimer timerA;
   CIATimer timerB;
 
@@ -419,6 +431,9 @@ public class CIA {
     long lastLatch = 0;
 
     boolean interruptNext = false;
+    // 6526 (old CIA) only: set when the data flag was raised this cycle and
+    // the IR flag / IRQ line must be raised one cycle later.
+    boolean irqRaisePending = false;
     boolean underflow = false;
     boolean flipflop = false;
 
@@ -458,6 +473,8 @@ public class CIA {
       nextZero = 0;
       nextUpdate = 0;
       writeCR = -1;
+      interruptNext = false;
+      irqRaisePending = false;
       cpu.scheduler.removeEvent(updateEvent);
     }
 
@@ -542,18 +559,23 @@ public class CIA {
       nextUpdate = cycles + 1;
       // Update timer...
       getTimer(cycles);
+
+      // 6526 (old CIA) only: the data flag was raised on last cycle's
+      // underflow; raise the IR flag (ICR bit 7) + IRQ line NOW, one cycle
+      // later. (8521 raises both in the same cycle — see the end of this
+      // method.) This is the OLD-CIA 1-cycle interrupt delay the Lorenz CIA
+      // suite expects; the 8521 default keeps irq-ack-vicii passing.
+      if (CIA_OLD_MODEL && irqRaisePending) {
+        irqRaisePending = false;
+        updateInterrupts();
+      }
+
       // Timer state machine!
-      // NOTE: previously the `if (interruptNext)` block ran HERE (before
-      // the state machine), introducing a 1-cycle delay between timer
-      // underflow and CPU IRQ source set. That matched OLD CIA (6526)
-      // semantics. VICE x64sc by default emulates NEW CIA (8521) where
-      // underflow → IRQ source set happens IN THE SAME CYCLE
-      // (ciacore.c:402-417 CIA_IRQ_RAISE0 path). The 1-cycle delay
-      // caused JaC64's IRQ to land at the next CPU instruction
-      // boundary vs VICE's, accumulating to the irq-ack-vicii slot 5
-      // failure. Move firing to AFTER the state-machine so the same
-      // cycle's triggerInterrupt directly raises IRQ via the
-      // interruptNext check at end of update().
+      // NOTE: the `if (interruptNext)` firing block runs AFTER the state
+      // machine (end of this method). For NEW CIA (8521, default) that makes
+      // underflow → IRQ source set happen IN THE SAME CYCLE (VICE x64sc
+      // ciacore.c:402-417 CIA_IRQ_RAISE0). For OLD CIA (6526) the IR flag /
+      // IRQ line is deferred one cycle by the irqRaisePending block above.
       switch (state) {
       case STOP:
         // Nothing...
@@ -622,12 +644,18 @@ public class CIA {
         delayedWrite(cycles);
         writeCR = -1;
       }
-      // NEW CIA: IRQ source set in SAME cycle as underflow.
-      // triggerInterrupt set interruptNext above; fire it now.
+      // triggerInterrupt set interruptNext above (this cycle's underflow).
+      // The DATA flag (ICR bit 0/1) is raised this cycle in BOTH models.
       if (interruptNext) {
         ciaicrRead |= iflag;
         interruptNext = false;
-        updateInterrupts();
+        if (CIA_OLD_MODEL) {
+          // 6526: defer the IR flag / IRQ line to next cycle's update().
+          irqRaisePending = true;
+        } else {
+          // 8521: IR flag + IRQ line raised in the SAME cycle.
+          updateInterrupts();
+        }
       }
     }
 
