@@ -712,8 +712,8 @@ public abstract class MOS6510Core extends MOS6510Ops {
       break;
     case INDIRECT:
       pc++;
-      // Fetch pointer
-      adr = (fetchByte(pc) << 8) + p1;
+      // Fetch pointer (pc wraps within 16 bits at the $FFFF boundary)
+      adr = (fetchByte(pc & 0xffff) << 8) + p1;
 
       // Calculate address
       tmp = (adr & 0xfff00) | ((adr + 1) & 0xff);
@@ -840,8 +840,10 @@ public abstract class MOS6510Core extends MOS6510Ops {
       fetchByte(s | 0x100);              // cycle 3: stack peek
       push((pc & 0xff00) >> 8);          // cycle 4: push PCH (of N+2)
       push(pc & 0x00ff);                 // cycle 5: push PCL
-      adr = (fetchByte(pc) << 8) + p1;   // cycle 6: fetch ADH + JUMP
-      pc = adr;
+      // pc wraps within 16 bits: a JSR at $FFFE fetches its ADH from $0000,
+      // not the extended/ROM-bank array at $10000. (Lorenz TRAP16/17.)
+      adr = (fetchByte(pc & 0xffff) << 8) + p1;  // cycle 6: fetch ADH + JUMP
+      pc = adr & 0xffff;
       break;
     case JMP:
       pc = adr;
@@ -849,7 +851,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
     case RTS:
       fetchByte(s | 0x100);
       pc = pop() + (pop() << 8);
-      pc++;
+      pc = (pc + 1) & 0xffff;            // RTS return wraps within 16 bits
       fetchByte(pc);
       break;
     case RTI:
