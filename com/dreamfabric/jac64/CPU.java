@@ -36,6 +36,15 @@ public class CPU extends MOS6510Core {
 
   private int romFlag = 0xa000;
 
+  // 6510 CPU I/O port ($0001) capacitive/latched state. Output bits follow
+  // the written data; input bits HOLD their last driven value (bits 7,6 are
+  // unconnected and float; bit 3 the cassette-write line). Updated on every
+  // $00/$01 write; used by the $0001 read to model the floating-bit
+  // behaviour the Lorenz cpuport test checks. Flag jac64.cpuPortFloat.
+  private static final boolean CPU_PORT_FLOAT =
+      Boolean.parseBoolean(System.getProperty("jac64.cpuPortFloat", "true"));
+  private int cpuPortLastState = 0;
+
   // Defaults for the ROMs
   public boolean basicROM = true;
   public boolean kernalROM = true;
@@ -261,12 +270,24 @@ public class CPU extends MOS6510Core {
       // garbled scene rendering).
       int ddr = memory[0] & 0xff;
       int data = memory[1] & 0xff;
-      // For OUTPUT bits (DDR=1): return the data bit value as written.
-      // For INPUT bits (DDR=0): return the pullup mask bit (0x17 default,
-      // matches VICE c64/c64mem.c:222). No data_out latching modeled —
-      // headless harness has no tape sense / motor signals.
-      final int PULLUP = 0x17;
-      int result = (data & ddr) | (~ddr & PULLUP);
+      int result;
+      if (CPU_PORT_FLOAT) {
+        // 6510 port read (matches the Lorenz cpuport test's model exactly):
+        //   bits 0,1,2,4 ($17): output -> data, input -> pulled HIGH.
+        //   bits 7,6,3 ($c8): capacitive — read the last DRIVEN value
+        //     (cpuPortLastState), input or output.
+        //   bit 5 ($20, cassette motor): output -> data, input -> reads LOW.
+        // For the standard KERNAL config (ddr=$2f,data=$37) this yields $37,
+        // identical to the old pullup=$17 path, so banking is unaffected.
+        result = (((ddr ^ 0xff) | data) & 0x37) | (cpuPortLastState & 0xc8);
+        if ((ddr & 0x20) == 0) {
+          result &= 0xdf;            // bit 5 drawn low when configured as input
+        }
+      } else {
+        // Legacy: static pullup $17 (no data_out latch / capacitance).
+        final int PULLUP = 0x17;
+        result = (data & ddr) | (~ddr & PULLUP);
+      }
       rindex = adr;
       return result;
     } else {
@@ -299,6 +320,10 @@ public class CPU extends MOS6510Core {
   private void writeMemoryAtCurrentCycle(int adr, int data) {
     if (adr <= 1) {
       memory[adr] = data;
+      // Capacitive port latch: output bits (DDR=1) follow the written data,
+      // input bits (DDR=0) hold their last driven value.
+      cpuPortLastState =
+          ((memory[0] ^ 0xff) & cpuPortLastState) | (memory[0] & memory[1]);
       int p = (memory[0] ^ 0xff) | memory[1];
 
       kernalROM = ((p & 2) == 2); // Kernal on
@@ -399,6 +424,10 @@ public class CPU extends MOS6510Core {
     }
     if (adr <= 1) {
       memory[adr] = data;
+      // Capacitive port latch: output bits (DDR=1) follow the written data,
+      // input bits (DDR=0) hold their last driven value.
+      cpuPortLastState =
+          ((memory[0] ^ 0xff) & cpuPortLastState) | (memory[0] & memory[1]);
       int p = (memory[0] ^ 0xff) | memory[1];
 
       kernalROM = ((p & 2) == 2); // Kernal on
