@@ -30,3 +30,13 @@ android/app/src/main/assets/roms/
 iec_timing.log
 roms
 test-demos/
+
+# macOS / editor cruft
+.DS_Store
+
+# Session capture + logs (transient)
+.capture/
+*.log
+disk_reads.csv
+vice_trace.mon
+.claude/

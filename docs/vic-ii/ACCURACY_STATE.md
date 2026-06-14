@@ -105,6 +105,32 @@ suppressed-c-access behaviour (#1627) plus the dynamic-memory content — NOT an
 idle-state, index, or display-pipe issue. Code is at clean baseline (no source
 changes survived this investigation).
 
+### ⚠️ CORRECTION (2026-06-13) — it IS the display-pipe phase, not the c-access
+
+The "DATA layer / dynamic colour RAM" conclusion above is **wrong**, disproved
+by a pixel-level trace of `bitmap.prg` at the late-badline rasters ($30+):
+
+- **REF:** cols 0–3 all **grey** ($c, the FLI-bug-hidden columns).
+- **JaC:** cols 0–1 **white** (real bitmap), cols 2–3 **grey** — suppression
+  present but **shifted right by ~2 columns**.
+- Targeted traces show the **c-access is UNIFORM** across columns
+  (`vbyte=$20, cbyte=$e` for every col 0–4) **and the g-fetch is UNIFORM**
+  (`gByte=$f0`, `idle=false`, BMM, line-crunched `vc=39+`). Both fetch layers
+  are identical per column, yet the render differs (white vs grey).
+
+⇒ The divergence is **entirely in the 2-stage gbuf/display PIPE phase** at the
+late-badline transition (the "mode-dependent vmli/vbuf read-phase offset" this
+doc suspects elsewhere) — **not** the c-access, not the colour RAM, not
+idle-state. The first ~2 displayed columns should render the pre-badline
+idle/grey gbuf (readme: "display logic recognizes [the badline] in cycle 17");
+JaC feeds the real bitmap into the pipe one phase too early. `badLineDummyColumns`
+/ `badLineFetchSourceColumn` are vestigial (set but unused in rendering).
+
+A clean fix is a **transition-specific** gbuf-pipe-phase change (a uniform shift
+regresses every normal line) and must pass the full 138-test A/B
+(fldscroll/blackmail/den tripwires). Genuine multi-session pipe-phase work; not
+attempted. Code at clean baseline.
+
 ---
 
 
