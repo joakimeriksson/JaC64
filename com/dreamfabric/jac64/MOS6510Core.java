@@ -38,6 +38,14 @@ public abstract class MOS6510Core extends MOS6510Ops {
   protected PatchListener list;
   protected ExtChip chips = null;
 
+  // Fast-load trap (TestRaster -Djac64.fastLoad). When pc reaches this
+  // address — the patched KERNAL LOAD point $F4A1 — read the file directly
+  // out of the attached .d64 via `list.readFile` instead of the slow IEC
+  // transfer, then fall through to the patch's RTS. -1 = disabled.
+  // (The legacy LOAD_FILE pseudo-opcode is dead: opcode fetch masks &0xff,
+  // so the 0x100 index it needs can never be dispatched.)
+  public int fastLoadTrapPc = -1;
+
   /** Return the chips (VIC/CIA/SID composite) for diagnostic access. */
   public ExtChip getChips() { return chips; }
 
@@ -462,12 +470,43 @@ public abstract class MOS6510Core extends MOS6510Ops {
     }
   }
 
+  // Fast-load: read filename from FNADR ($BB/$BC)/FNLEN ($B7), the load
+  // address from $2B/$2C when secondary-address ($B9)==0 (LOAD",8"), and load
+  // the file out of the .d64 via `list`. Returns through the patched RTS at
+  // $F4A2 with the KERNAL LOAD convention (carry clear + X/Y = end address).
+  private void doFastLoad() {
+    int fnlen = memory[0xb7] & 0xff;
+    int fnadr = (memory[0xbb] & 0xff) | ((memory[0xbc] & 0xff) << 8);
+    StringBuilder nm = new StringBuilder();
+    for (int i = 0; i < fnlen; i++) {
+      nm.append((char) (memory[(fnadr + i) & 0xffff] & 0xff));
+    }
+    int sa = memory[0xb9] & 0xff;
+    int loadAdr = (sa == 0)
+        ? ((memory[0x2b] & 0xff) | ((memory[0x2c] & 0xff) << 8)) : -1;
+    boolean ok = list.readFile(nm.toString(), loadAdr);
+    if (ok) {
+      acc = 0;
+      carry = false;                 // success
+      x = memory[0xae] & 0xff;        // end address -> X/Y (KERNAL LOAD return)
+      y = memory[0xaf] & 0xff;
+    } else {
+      carry = true;                  // error
+      acc = 4;                        // FILE NOT FOUND
+    }
+    pc = (fastLoadTrapPc + 1) & 0xffff; // skip the marker byte -> the RTS
+  }
+
   public void emulateOp() {
     // PC wraps within 16 bits: code executing across the $FFFF->$0000
     // boundary (e.g. an opcode at $FFFE) must fetch the next byte from
     // $0000, not spill into the extended/ROM-bank array at $10000.
     pc &= 0xffff;
     instructionStartPC = pc;
+    if (fastLoadTrapPc >= 0 && pc == fastLoadTrapPc && list != null) {
+      doFastLoad();
+      return;
+    }
     updatePendingIRQLineState();
     boolean hadIrqEnableDelay = irqEnableDelayOps > 0;
     boolean irqAllowedByStatus = !disableInterupt

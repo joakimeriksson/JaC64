@@ -77,6 +77,36 @@ public class TestRaster {
         reader.setCPU(cpu);
         cpu.getDrive().setReader(reader);
 
+        // Fast-load trap (-Djac64.fastLoad=true): patch the KERNAL LOAD at
+        // $F49E with the LOAD_FILE pseudo-opcode so a LOAD reads the file
+        // directly out of the attached .d64 into RAM (instant) instead of
+        // going through the cycle-accurate 1541 + IEC serial transfer
+        // (~10 min/test under warp). Bypasses the true drive entirely, so it
+        // is opt-in: keep it OFF for 1541-hardware validation, ON for fast
+        // test-suite iteration. The patch is re-applied on every cpu.reset()
+        // because reset() calls patchROM(list) when a listener is installed.
+        if (Boolean.getBoolean("jac64.fastLoad")) {
+            final C64Reader fr = reader;
+            cpu.patchROM(new PatchListener() {
+                public boolean readFile(String name, int addr) {
+                    String n = name;
+                    int nl = n.indexOf('\n');
+                    if (nl >= 0) n = n.substring(0, nl);
+                    boolean ok = fr.readFile(n, addr) != null;
+                    System.out.println("[fastLoad] LOAD \"" + n + "\" @"
+                        + (addr < 0 ? "file" : Integer.toHexString(addr))
+                        + " -> " + (ok ? "OK" : "NOT FOUND"));
+                    return ok;
+                }
+            });
+            // patchROM installs JSR $F5D2 (SEARCHING/LOADING msg) + RTS at
+            // $F49E and sets the listener; the PC-trap at $F4A1 does the
+            // actual load (the legacy LOAD_FILE opcode there is dead).
+            cpu.fastLoadTrapPc = 0xf4a1;
+            System.out.println("[fastLoad] KERNAL LOAD trap installed "
+                + "(instant .d64 load; true drive bypassed)");
+        }
+
         scr.setKeyboardEmulation(false);
 
         javax.swing.JCheckBoxMenuItem warpItem = null;
