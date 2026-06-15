@@ -480,6 +480,15 @@ public class CIA {
 
     private int getTimer(long cycles) {
       if (state != COUNT) return timer;
+      // Cascade timer (count other-timer underflows, not Phi2): its live
+      // value is maintained in `timer` by the COUNT/countUnderflow branch
+      // — decremented only when the other timer underflows. The Phi2
+      // formula below (nextZero - cycles) would make it free-run on
+      // wall-clock cycles AND corrupt `timer` (line `timer = t`), since
+      // getTimer() runs at the top of every update(). Return `timer` as-is.
+      // (CPUTIMING uses CIA2 Timer B cascade as a 32-bit cycle counter;
+      // the Phi2 formula made it read garbage — e.g. 589833 vs 7.)
+      if (countUnderflow) return timer;
       int t = (int) (nextZero - cycles);
       if (t < 0) {
         // Unexpected underflow...
