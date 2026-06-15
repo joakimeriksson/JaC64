@@ -283,6 +283,18 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public int getStatus() { return getStatusByte(); }
 
   private final void doInterrupt(int adr, int status) {
+    doInterrupt(adr, status, false);
+  }
+
+  // brkInstr: the interrupt sequence was entered from a BRK opcode (vs a
+  // hardware IRQ/NMI). For BRK, emulateOp() has ALREADY consumed the two
+  // T0/T1 read cycles (the opcode fetch at line ~611 + the unconditional
+  // p1 = fetchByte(pc) signature-dummy at ~628). The two dummy fetches
+  // below model exactly those T0/T1 reads for a HARDWARE interrupt (which
+  // returns from emulateOp before reaching the opcode fetch), so they must
+  // be skipped for BRK or it costs 9 cycles instead of the real 7 (Lorenz
+  // cputiming test 00: measured 9 vs RIGHT 7).
+  private final void doInterrupt(int adr, int status, boolean brkInstr) {
     // VICE 6510dtvcore.c:314-348 (DO_IRQBRK + DO_INTERRUPT) cycle order:
     //   1-2. dummy fetches at PC, PC+1
     //   3. PUSH PCH
@@ -309,8 +321,12 @@ public abstract class MOS6510Core extends MOS6510Ops {
           + " cyc=" + rasterCycle);
       tracePcOut.flush();
     }
-    fetchByte(pc);
-    fetchByte(pc + 1);
+    if (!brkInstr) {
+      // T0/T1 dummy reads — for a hardware IRQ/NMI only. BRK already paid
+      // these in emulateOp() (opcode fetch + p1 signature dummy).
+      fetchByte(pc);
+      fetchByte(pc + 1);
+    }
     push((pc & 0xff00) >> 8);
     push(pc & 0x00ff);
     push(status);
@@ -544,7 +560,7 @@ public abstract class MOS6510Core extends MOS6510Ops {
             pc++;
           }
           else status &= 0xef;
-          doInterrupt(0xfffe, status);
+          doInterrupt(0xfffe, status, brk);
           disableInterupt=true;
           lastOpcodeDisablesIrq = false;
           //prevent irq during irq, RTI will clear by poping status back
