@@ -534,7 +534,13 @@ public abstract class MOS6510Core extends MOS6510Ops {
             && irqEnableDelayOps == 0);
     // Before executing an operation - check for interrupts!!!
     if (checkInterrupt) {
-      if (NMIPending && (cycles >= nmiCycleStart)) {
+      // NMI honours the same "branch taken, no page cross delays the
+      // interrupt by 1 cycle" quirk as IRQ (6510core.c:991,
+      // OPCODE_DELAYS_INTERRUPT). The IRQ check above already adds
+      // branchDelaysIrq; without the matching term here the NMI fired 1
+      // cycle early after a taken branch (Lorenz nmi test, opcode $10 BPL:
+      // pushed PC $2010 vs $2011).
+      if (NMIPending && (cycles >= nmiCycleStart + (branchDelaysIrq ? 1 : 0))) {
         log("NMI interrupt at " + cycles);
         lastInterrupt = NMI_INT;
         NMIPending = false;
