@@ -540,6 +540,10 @@ public class C64Screen extends ExtChip implements Observer {
   private int badLineFetchStartColumn = 0;
   private int badLineDummyColumns = 0;
   private int badLineFetchSourceColumn = 0;
+  // Tracks whether col-0 c-access ran this line (case 15). In continuous FLI
+  // the case-15 fetch is gated out (badLine set late), so this stays false and
+  // the case-16 FLI leading-prefetch backfill fills the stale cols 0-1.
+  private boolean col0FetchedThisLine = false;
 
   // VICE viciisc/vicii-cycle.c:657-666 prefetch_cycles. Tracks how many
   // cycles of BA-low we've been in. While prefetch_cycles > 0, the VIC
@@ -3290,9 +3294,11 @@ public class C64Screen extends ExtChip implements Observer {
       finishCycleVic(mpos);
       mpos += 8;
 
+      col0FetchedThisLine = false;
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C15");
         fetchBadLineData(0);  // VICE Phi2(15) col 0
+        col0FetchedThisLine = true;
       }
 
       // Turn off sprite DMA if finished reading!
@@ -3333,6 +3339,23 @@ public class C64Screen extends ExtChip implements Observer {
         checkHBorderLeft();
       }
       if (badLine) {
+        // FLI leading-prefetch backfill (jac64.fliLeadingPrefetch, default on).
+        // In continuous FLI the col-0 c-access at case 15 is gated out because
+        // the $D011 write sets badLine AFTER the case-15 fetchBadLineData(0)
+        // check, so vicCharCache[0..1] retain STALE prev-line data. The real
+        // VIC prefetch-fills the skipped leading cells with the FLI-bug idle
+        // byte ($ff). Backfill cols 0-1 with the prefetch char/color so the
+        // left-edge band matches VICE. Fires ONLY when col-0 was skipped (i.e.
+        // FLI late-badlines) — normal badlines fetch col-0 at case 15, so this
+        // is a no-op for them (zero regression on non-FLI tests).
+        // colorfetchbug family: -1748 cells; fldscroll/blackmail unchanged.
+        if (!col0FetchedThisLine
+            && Boolean.parseBoolean(System.getProperty(
+                "jac64.fliLeadingPrefetch", "true"))) {
+          int prefCol = memory[cpu.pc & 0xffff] & 0x0f;
+          vicCharCache[0] = 0xff; vicColCache[0] = prefCol;
+          vicCharCache[1] = 0xff; vicColCache[1] = prefCol;
+        }
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C16");
         fetchBadLineData(1);  // VICE Phi2(16) col 1
       }
