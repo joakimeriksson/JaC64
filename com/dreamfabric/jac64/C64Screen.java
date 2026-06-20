@@ -652,6 +652,11 @@ public class C64Screen extends ExtChip implements Observer {
   private int glueOldVBank = 0;
   private boolean glueAlarmActive = false;
   private long glueAlarmClock = 0;
+  // $DD00 glue bank-switch settle delay (cycles). VICE presents the switched
+  // bank to the next g-fetch one cycle later than JaC did; default 2 fixes
+  // fetchsplit (132->0). Tunable for A/B via -Djac64.glueAlarmDelay.
+  private static final int GLUE_ALARM_DELAY =
+      Integer.getInteger("jac64.glueAlarmDelay", 2);
 
   // VICE color codes used by the gfx colors[] table (subset).
   private static final int VC_NONE     = 0x10;
@@ -2680,9 +2685,15 @@ public class C64Screen extends ExtChip implements Observer {
     setVideoMem();
   }
 
-  private void scheduleGlueAlarm(int vbank) {
-    // VICE c64gluelogic.c:62 — alarm fires at maincpu_clk + 1.
-    glueAlarmClock = cpu.cycles + 1;
+  // VICE c64gluelogic.c:62 — alarm fires at maincpu_clk + 1. JaC needs +2:
+  // the $DD00 glue-logic bank-switch INTERMEDIATE state ($c000 for XOR==3
+  // transitions) must persist long enough for the boundary g-fetch to read
+  // it. fetchsplit trace (rast $e0 cyc19): VICE g-fetch sees bank $c000
+  // (g=$66) but with delay 1 JaC applies the final bank one cycle too early,
+  // so the g-fetch reads $8000 (g=$18). GLUE_ALARM_DELAY (default 2) lets the
+  // intermediate survive the fetch. fetchsplit 132->0.
+  private void scheduleGlueAlarm(int vbank, int delay) {
+    glueAlarmClock = cpu.cycles + delay;
     glueAlarmActive = true;
   }
 
@@ -2694,11 +2705,16 @@ public class C64Screen extends ExtChip implements Observer {
         && ((vbank & (vbank - 1)) == 0)
         && vbank != 0) {
       newVBank = 3;
-      scheduleGlueAlarm(vbank);
+      // $DD00 glue bank-switch settle delay. VICE's glue chip presents the
+      // bank-3 ($c000) INTERMEDIATE (XOR==3 case) / the new bank to the
+      // g-fetch one cycle later than JaC applied it, so fetchsplit's boundary
+      // g-fetch missed the intermediate (read $8000/g=$18 vs VICE $c000/$66).
+      // Delay the alarm by GLUE_ALARM_DELAY (default 2). fetchsplit 132->0.
+      scheduleGlueAlarm(vbank, GLUE_ALARM_DELAY);
     } else if (ddrFlag && vbank < glueOldVBank
         && ((glueOldVBank ^ vbank) != 3)) {
       updateNow = false;
-      scheduleGlueAlarm(vbank);
+      scheduleGlueAlarm(vbank, GLUE_ALARM_DELAY);
     }
 
     if (updateNow) {
