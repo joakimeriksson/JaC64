@@ -1638,7 +1638,19 @@ public class C64Screen extends ExtChip implements Observer {
 
     if (prefetchCycles > 0) {
       vicCharCache[col] = 0xff;
-      vicColCache[col] = memory[cpu.pc & 0xffff] & 0x0f;
+      // VICE vicii_fetch_matrix prefetch reads ram_base_phi2[reg_pc] — the
+      // byte the CPU has on the Phi2 bus. During the badline BA-low stall
+      // the CPU is HALTED, so reg_pc is FROZEN at the stalled fetch and all
+      // 3 prefetch cols read the SAME byte. JaC runs instructions atomically,
+      // so by the time the VIC's prefetch cycle runs cpu.pc has already
+      // advanced to the END of the (post-stall) instruction — reading the
+      // wrong byte. instructionStartPC is the frozen-fetch address that
+      // matches VICE's reg_pc (blackmail FLI left-edge: memory[startPC]&0xf
+      // = VICE's $9,$a,$b,$c,$d gradient exactly). Flag: -Djac64.prefetchStartPc.
+      int prefetchPc = Boolean.parseBoolean(
+          System.getProperty("jac64.prefetchStartPc", "true"))
+          ? cpu.getInstructionStartPC() : cpu.pc;
+      vicColCache[col] = memory[prefetchPc & 0xffff] & 0x0f;
       if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
           && cpu.cycles <= TRACE_VIC_CYCLE_END) {
         traceVicCycleOut.println("EV-FetchC clk=" + cpu.cycles
@@ -3017,10 +3029,11 @@ public class C64Screen extends ExtChip implements Observer {
       }
     }
 
-    // VICE viciisc/vicii-cycle.c:657-666 — prefetch_cycles counter.
-    // While ba_low (= bad_line active), count down. When ba_low goes
-    // high, reset to 3+1. The first 3 cycles of bad_line return the
-    // FLI-bug prefetch byte (CPU PC), normal c-access starts at cycle 4.
+    // VICE viciisc/vicii-cycle.c:794-805 — prefetch_cycles counter.
+    // While bad_line (ba_low) active, count down; reset to 3+1 otherwise.
+    // The first 3 cycles of bad_line return the FLI-bug prefetch byte (CPU
+    // PC); the real c-access (color RAM) starts at cycle 4. See writeCAccess
+    // for the prefetch byte fix (instructionStartPC vs cpu.pc).
     if (badLine) {
       if (prefetchCycles > 0) prefetchCycles--;
     } else {
