@@ -696,8 +696,19 @@ public class TestRaster {
                 System.out.flush();
                 System.exit(0);
             }
+            // Arm the pause at the exact target cycle, THEN resume if the CPU
+            // is still paused before the target. The PRG path already armed +
+            // resumed (so the CPU is paused AT captureAtCycle here); the d64
+            // path never armed it (CPU sits paused at the 7M inject point), so
+            // without this resume the single capture screenshots the loading
+            // screen at 7M (the documented d64 overshoot). Arming before resume
+            // avoids the warp race — the CPU pauses at exactly captureAtCycle
+            // (same mechanism the burst path uses).
             cpu.pauseAtCycle = captureAtCycle;
-            for (int i = 0; i < 2000; i++) {
+            if (cpu.pause && cpu.cycles < captureAtCycle) {
+                cpu.setPause(false);
+            }
+            for (int i = 0; i < 8000; i++) {
                 if (cpu.pause && cpu.cycles >= captureAtCycle) break;
                 Thread.sleep(20);
             }
