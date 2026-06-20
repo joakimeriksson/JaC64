@@ -594,6 +594,17 @@ public class TestRaster {
                         }
                     }
                     cpu.jumpToSubroutine(sysAddress);
+                    // Arm the captureAtCycle pause BEFORE resuming, while the
+                    // CPU is still paused at the inject point. Otherwise warp
+                    // can run past the capture target in the gap before the
+                    // pause is set (race), making the capture/trace frame
+                    // nondeterministic (e.g. fetchsplit's pattern frame was
+                    // missed). Setting it here pins the pause to exactly
+                    // captureAtCycle on every run.
+                    {
+                        long _cap = Long.getLong("jac64.captureAtCycle", -1L);
+                        if (_cap > 0) cpu.pauseAtCycle = _cap;
+                    }
                     cpu.setPause(false);
                 } else {
                     // No SYS detected — fall back to typing RUN with
