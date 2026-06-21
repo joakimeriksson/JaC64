@@ -1649,6 +1649,14 @@ public class C64Screen extends ExtChip implements Observer {
   // else the real screen+color byte at vcBase+col. col >= 40 is dropped (VICE
   // renders only columns 0..39).
   private void writeCAccess(int col) {
+    // S2 (jac64.vmliCAccess): write by the VICE matrix-fetch index vVmli
+    // (= vc-vcBase) instead of the cycle-derived col. Identical for normal
+    // badlines (vVmli==col); on a LATE badline vc has not advanced during the
+    // idle cycles so vVmli<col — writing by vVmli puts the byte at VICE's
+    // resume index and leaves the truly-skipped leading cells STALE.
+    if (Boolean.getBoolean("jac64.vmliCAccess")) {
+      col = vVmli;
+    }
     if (col < 0 || col >= 40) {
       return;
     }
@@ -3407,6 +3415,7 @@ public class C64Screen extends ExtChip implements Observer {
         // 8th line), VICE keeps that stale value, so DON'T overwrite with $ff.
         int col0StaleThreshold = Integer.getInteger("jac64.col0StaleThreshold", 7);
         if (!col0FetchedThisLine
+            && !Boolean.getBoolean("jac64.vmliCAccess")  // S2: stale, no backfill
             && (!Boolean.parseBoolean(System.getProperty("jac64.col0StaleHold", "true"))
                 || linesSinceCol0Fetched > col0StaleThreshold)
             && Boolean.parseBoolean(System.getProperty(
