@@ -63,6 +63,40 @@ public class TestRaster {
         scr = new C64Screen(monitor, true);
         cpu.init(scr);
 
+        // Deterministic full-FPS capture: dump the front buffer on EVERY frame
+        // within [fpsCaptureStart, fpsCaptureEnd] during ONE continuous run
+        // (the CPU never pauses inside the window), so there's no captureBurst
+        // pause/resume phase-drift. This catches transient per-frame FLI
+        // flicker (e.g. the Krestage left-edge strip) that sparse single
+        // captures skip. Drive the run to the window end with
+        // -Djac64.captureAtCycle=<fpsCaptureEnd>. Files: <base>_NNNN.png.
+        final long fpsStart = Long.getLong("jac64.fpsCaptureStart", -1L);
+        if (fpsStart > 0) {
+            final long fpsEnd = Long.getLong("jac64.fpsCaptureEnd", Long.MAX_VALUE);
+            final String fpsBase = System.getProperty("jac64.fpsCaptureFile",
+                "/tmp/jac64_fps");
+            final int[] fpsSeq = {0};
+            scr.setScreenRefreshListener(() -> {
+                long clk = cpu.cycles;
+                if (clk >= fpsStart && clk <= fpsEnd) {
+                    try {
+                        int[] px = scr.getPixelBuffer();
+                        int w = 384, h = px.length / w;
+                        BufferedImage im = new BufferedImage(w, h,
+                            BufferedImage.TYPE_INT_ARGB);
+                        im.setRGB(0, 0, w, h, px, 0, w);
+                        // Embed the FLI-loop self-modified BNE offset
+                        // ($19cb) in the filename as a scroll signature, so a
+                        // captured frame can be matched to VICE's same scroll.
+                        int scroll = cpu.getMemory()[0x19cb] & 0xff;
+                        ImageIO.write(im, "png", new File(
+                            String.format("%s_%04d_clk%d_s%02x.png", fpsBase,
+                                fpsSeq[0]++, clk, scroll)));
+                    } catch (Exception e) { /* ignore */ }
+                }
+            });
+        }
+
         boolean headless = Boolean.getBoolean("jac64.headless")
             || GraphicsEnvironment.isHeadless();
         C64Canvas canvas = null;
