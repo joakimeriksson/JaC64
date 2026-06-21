@@ -265,6 +265,14 @@ public class C64Screen extends ExtChip implements Observer {
   int vcBase = 0;
   int rc = 0;
   int vmli = 0;
+
+  // S1 of the FLI c-access vmli-pipeline refactor (jac64.vmliCAccess):
+  // a clean VICE-faithful matrix-fetch index locked to vc (vVmli = vc-vcBase),
+  // advancing in phase with vc every display cycle — unlike the legacy `vmli`
+  // which is incremented inside drawGraphicsVic and drifts on late badlines.
+  // S1 only TRACKS + traces it (no behavior change); S2 will write the
+  // char/col caches by vVmli. See FLI_CACCESS_VMLI_REFACTOR_PLAN.md.
+  int vVmli = 0;
   // The current vBeam pos - 9... => used for keeping track of memory
   // position to write to...
   int vPos = 0;
@@ -1176,6 +1184,7 @@ public class C64Screen extends ExtChip implements Observer {
     // visible line (line 51).
     if (vicCycle >= 15 && vicCycle <= 54 && !vicIdleState) {
       vc = (vc + 1) & 0x3ff;
+      vVmli++;  // S1: vmli locked in phase with vc (matrix-fetch index)
     }
 
     // VICE vicii-cycle.c:605-607 — check_badline every cycle while
@@ -1220,6 +1229,7 @@ public class C64Screen extends ExtChip implements Observer {
     if (vicCycle == 13) {
       vc = vcBase;
       vmli = 0;
+      vVmli = 0;  // S1: reset matrix-fetch index with vc (VICE update_vc)
       if (badLine) rc = 0;
     }
 
@@ -1688,6 +1698,7 @@ public class C64Screen extends ExtChip implements Observer {
           + " fci=$" + Integer.toHexString(fetchCharMemoryIndex)
           + " vbase=$" + Integer.toHexString(vcBase)
           + " vmli=" + vmli
+          + " vVmli=" + vVmli
           + " vc=" + vc
           + " vbyte=$" + Integer.toHexString(vicCharCache[col] & 0xff)
           + " cbyte=$" + Integer.toHexString(vicColCache[col] & 0x0f)
