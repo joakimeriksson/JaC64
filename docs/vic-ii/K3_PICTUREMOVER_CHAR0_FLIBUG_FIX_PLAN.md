@@ -150,3 +150,49 @@ emulated cycle instead of TestRaster's wall-clock `Thread.sleep` polling
   `-Djac64.traceD011W`, `-Djac64.traceBackfill` (riseCyc/prevChar0 — was added
   & reverted; re-add from memory), `-Djac64.fpsCapture*` (scroll-tagged frames).
 - Match JaC↔VICE by the `$19cb` BNE-target byte (fine-scroll signature).
+
+---
+
+## 9. Sub-cycle refactor design (2026-06-21, user approved)
+
+The targeted heuristics (`col0StaleHold`, instructionStartPC color) all just
+recolor/reshape the same artifact — confirmed by user (gray flicker still
+present "as soon as it becomes FLI"). The real fix is to port VICE's
+**vmli-indexed c-access pipeline**.
+
+### Model mismatch (deterministic, colorfetchbug rast $48)
+- VICE: first c-access cyc16 **vmli=2** vbuf=$ff cbuf=$a; `vc = vcbase + vmli`;
+  vmli/vc advance every display cycle (in vicii_fetch_graphics), vbuf[vmli]
+  written only when bad_line (vicii_fetch_matrix), prefetch $ff while
+  prefetch_cycles>0. Skipped cells (vmli not reached) keep stale vbuf/cbuf.
+- JaC: column-indexed `col = vicCycle-15`, fetched only at case15+ when
+  badLine; backfill hack forces char0/char1=$ff. No "resume at current vmli".
+  → on a late badline JaC has no clean way to leave the right leading cells
+  stale, so it either backfills $ff (wrong when stale should be real content)
+  or holds stale (wrong when VICE prefetches $ff). That's the col0 gray/garbage.
+
+### VICE pipeline order (vicii-cycle.c / vicii-fetch.c) — must replicate
+1. g-fetch (vicii_fetch_graphics) every cycle: reads vbuf[vmli], THEN vmli++/vc++.
+2. matrix-fetch (vicii_fetch_matrix) when bad_line: writes vbuf[vmli] (post-inc)
+   = $ff+bus-color if prefetch_cycles>0 else colorRAM[vc]/screenRAM[vc].
+   → vbuf[vmli] for cell k is written the cycle BEFORE k is displayed
+   (the 1-cyc pipeline JaC's fldPrefetchShift partially addresses).
+
+### Staged plan (validate colorfetchbug==7 + 139-test A/B after EACH stage)
+- S1: introduce a true vmli/vc pair that advances every display cycle (not
+  col=cyc-15), decoupled from the case dispatch. Keep current render reading
+  unchanged; just verify vmli/vc track VICE (compare EV-FetchC vmli/vc).
+- S2: write vicCharCache/ColCache indexed by vmli (not col), gated on badLine,
+  with prefetch_cycles deciding $ff vs real. Remove the col0/col1 backfill.
+  Skipped cells keep stale. ← the core change; colorfetchbug must stay 7.
+- S3: reconcile the display read index (drawGraphicsVic) with the vmli write
+  index (the vc/vmli phase that regressed 7→1239 in the naive attempt — get
+  the phase exactly right by matching VICE's g-before-c order).
+- S4: validate picture-mover visually (left edge stable, matches VICE) +
+  full FLI suite (fldscroll/blackmail/fetchsplit unchanged).
+
+### Validation prerequisite note
+The picture-mover itself is non-deterministic in JaC (harness wall-clock d64
+boot), so validate the picture-mover STATISTICALLY (many fpsCapture frames,
+left-edge gray/garbage must drop) + rely on the deterministic suite (colorfetchbug
+/fldscroll/blackmail/fetchsplit) as the hard regression gate.
