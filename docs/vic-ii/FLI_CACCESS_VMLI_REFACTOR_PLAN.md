@@ -223,3 +223,31 @@ unchanged). The col0StaleHold commit (e3ce8ad) stays as the interim behavior
     which JaC's c-access DOES reach at cell0) — so once S3 makes the first-line
     c-access reach vmli0, both colorfetchbug ($ff stale) and the picture-mover
     (real stale) converge with NO backfill hack.
+
+## 12. S3 convergence blocker (2026-06-22) — hits the $D011/badline-timing wall
+
+Tracing the colorfetchbug regression to the cell-0/1 stale source: VICE has a
+FULL badline every 8th line (rast&7==3: $33/$3b/$43...) where its c-access
+resumes at vmli0 (cyc14) and writes cells 0,1 — that value then propagates as
+the stale on the intervening FLI lines. **JaC does NOT badline those lines**:
+at rast $33 JaC has `d011=$18` → ysmooth=0, but `rast&7=3`, so no match → no
+badline → c-access never reaches cells 0,1 → wrong stale. VICE has ysmooth=3
+there (the demo's $D011 write applied earlier/differently).
+
+⇒ The OLD char0/char1 `$ff` backfill was COMPENSATING for this $D011/ysmooth
+timing gap. Removing it (S2) exposes the gap → colorfetchbug 7→11. So the
+vmli-pipeline does NOT bypass the sub-cycle wall; full convergence needs
+cycle-exact $D011→ysmooth→badline timing on these lines (the documented hard
+floor / CPU sub-cycle work).
+
+Deer-mover (the actual target) MAY still benefit (its full badlines use a
+constant ysmooth JaC handles right), but the d64-boot non-determinism blocks
+cycle-exact validation — vmli-path char0 swings widely frame-to-frame at a
+given scroll tag, inconclusive vs VICE. To proceed need EITHER:
+  (a) deterministic d64 boot (S0) to validate the deer-mover cell-for-cell, OR
+  (b) fix the $D011/ysmooth/badline timing on rast&7==3 lines (sub-cycle).
+
+STATE: S1 (3b3c39f) + S2 (d9403a9) committed on branch refactor/fli-vmli-caccess
+(default path untouched, colorfetchbug 7/6). S2 is a cleaner foundation but not
+landable until (a) or (b). The interim col0StaleHold fix (e3ce8ad) stays on
+master.
