@@ -195,3 +195,31 @@ unchanged). The col0StaleHold commit (e3ce8ad) stays as the interim behavior
 - [ ] S2: vmli-indexed matrix fetch behind flag; stale kept; backfill off (flag path)
 - [ ] S3: read/write phase reconciled; colorfetchbug ≤7 on flag path (deterministic bytes match VICE)
 - [ ] S4: 139-test A/B 0 regress; picture-mover visual clean; flip default; retire old path
+
+---
+
+## 11. Progress log (2026-06-21)
+
+- **S1 DONE + committed** (3b3c39f, branch `refactor/fli-vmli-caccess`):
+  vVmli locked to vc, behavior-neutral, verified == VICE vmli on colorfetchbug.
+- **S2 DONE + committed** (d9403a9): writeCAccess writes by vVmli + backfill
+  gated off, behind `jac64.vmliCAccess`. Default UNCHANGED (7/6). Flag path:
+  bitmap 6→1 (model proven), main 7→11, main2 7→20, main3/4 14→31. No
+  catastrophe. **The vmli model is sound.**
+- **S3 finding (the remaining convergence):** cell-by-cell vs VICE (rast $40):
+  - prefetch char `$ff` matches; prefetch *color* differs ($d vs $a) = the
+    existing #1627 residual (separate, small).
+  - **cells 0,1 (char0/char1): the regression source.** Both emus skip them on
+    most FLI lines → stale. VICE's stale is `$ff` (written on an EARLIER line
+    where VICE's resume reached vmli0, e.g. the first display line / a full
+    badline). JaC's vmli-path **never reaches vmli0,1** (c-access always starts
+    at cell2/cyc16), so cells 0,1 keep a wrong stale.
+  - **S3 fix = make JaC's c-access reach vmli0,1 on the lines where VICE does**
+    (first/early badline of the FLI region) so the `$ff` (or real) stale
+    propagates. This is the badline-rise-timing piece: on those lines VICE's
+    matrix-fetch resumes at vmli0 (cyc14), JaC starts at cell2 (cyc16). Trace
+    rast $30/$34 (line 48 = FIRST_DMA_LINE) in both; align the resume vmli.
+  - Picture-mover note: its stale SHOULD be real content (from full badlines,
+    which JaC's c-access DOES reach at cell0) — so once S3 makes the first-line
+    c-access reach vmli0, both colorfetchbug ($ff stale) and the picture-mover
+    (real stale) converge with NO backfill hack.
