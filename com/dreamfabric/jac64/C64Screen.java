@@ -545,6 +545,15 @@ public class C64Screen extends ExtChip implements Observer {
   // the case-16 FLI leading-prefetch backfill fills the stale cols 0-1.
   private boolean col0FetchedThisLine = false;
 
+  // Lines since char0 (vmli=0) was last REAL-fetched on a full/early badline.
+  // Distinguishes continuous-FLI (colorfetchbug: char0 never real-fetched →
+  // VICE shows the $ff prefetch idle byte → backfill IS correct) from
+  // FLI-over-content (K3 picture-mover: a full badline every char-row puts a
+  // REAL char0 = black, so the skipped FLI lines must keep that stale black,
+  // NOT $ff). Large value ⇒ no recent full badline ⇒ backfill; small ⇒ keep
+  // the fresh stale char0. See project_colorfetchbug_caccess_2026_06_13.
+  private int linesSinceCol0Fetched = 999;
+
   // VICE viciisc/vicii-cycle.c:657-666 prefetch_cycles. Tracks how many
   // cycles of BA-low we've been in. While prefetch_cycles > 0, the VIC
   // is in the FLI-bug pre-fetch window — c-access fetches return $3FFF
@@ -3324,10 +3333,12 @@ public class C64Screen extends ExtChip implements Observer {
       mpos += 8;
 
       col0FetchedThisLine = false;
+      linesSinceCol0Fetched++;
       if (badLine) {
         setBaLowUntil(lastLine + VICConstants.BA_BADLINE, "BADLINE-C15");
         fetchBadLineData(0);  // VICE Phi2(15) col 0
         col0FetchedThisLine = true;
+        linesSinceCol0Fetched = 0;  // a full/early badline put a REAL char0
       }
 
       // Turn off sprite DMA if finished reading!
@@ -3378,7 +3389,15 @@ public class C64Screen extends ExtChip implements Observer {
         // FLI late-badlines) — normal badlines fetch col-0 at case 15, so this
         // is a no-op for them (zero regression on non-FLI tests).
         // colorfetchbug family: -1748 cells; fldscroll/blackmail unchanged.
+        // Only backfill the FLI-bug $ff idle byte when char0 has NOT been
+        // real-fetched within the last char-row (continuous FLI, e.g.
+        // colorfetchbug — VICE's vbuf[0] holds the $ff prefetch). When a full
+        // badline recently put a REAL char0 (K3 picture-mover: black, every
+        // 8th line), VICE keeps that stale value, so DON'T overwrite with $ff.
+        int col0StaleThreshold = Integer.getInteger("jac64.col0StaleThreshold", 7);
         if (!col0FetchedThisLine
+            && (!Boolean.parseBoolean(System.getProperty("jac64.col0StaleHold", "true"))
+                || linesSinceCol0Fetched > col0StaleThreshold)
             && Boolean.parseBoolean(System.getProperty(
                 "jac64.fliLeadingPrefetch", "true"))) {
           int prefCol = memory[cpu.pc & 0xffff] & 0x0f;

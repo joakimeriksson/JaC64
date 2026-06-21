@@ -1,0 +1,152 @@
+# Krestage 3 Picture-Mover char0 FLI-bug — Fix Plan
+
+Status: diagnosed, not fixed. Targeted fixes exhausted; remaining fix is
+sub-cycle VIC c-access work gated on one VICE datum.
+Last updated: 2026-06-21.
+
+Related memory: `project_colorfetchbug_caccess_2026_06_13.md` (full trace history).
+
+---
+
+## 1. Problem statement
+
+During the Krestage 3 picture-mover, JaC paints a **flickering `$ff` garbage
+column in the leftmost char column (char0, x40–47)** where VICE renders the
+edge **black**. It is hyper-specific to fine-scroll **`$19b9`** (the
+self-modified BNE-target byte at `$19cb`): char0 ≈ 78–89, while the adjacent
+scrolls `$19b8` (char0 ≈ 0) and `$19bb` (char0 ≈ 2–3) are clean. As the mover
+sweeps through `$19b9` for ~one frame, the user sees a flicker.
+
+Confirmed real (scroll-matched ON/OFF: backfill ON → char0 78–89; backfill OFF
+→ char0 = 0.0). VICE's fine-sweep never produces the isolated
+`[bright char0][dark gap][picture]` signature.
+
+## 2. Root cause (established)
+
+- The garbage is the `fliLeadingPrefetch` backfill (C64Screen.java case 16,
+  ~line 3381) firing because **char0 was skipped** (`col0FetchedThisLine=false`).
+- char0 is skipped because the FLI loop's `$D011` (ysmooth) write makes the
+  badline rise **after** JaC's **fixed** char0 c-access at case 15
+  (`BADLINE_FETCH_CYCLE = 15`). VICE's matrix fetch (`vicii_fetch_matrix`,
+  viciisc/vicii-fetch.c:191) runs every c-access cycle gated on `bad_line`, so
+  it catches char0 at raster-cycle 14 (verified: VICE deer fetches vmli=0,
+  vbuf=$0, cbuf=$0 = black; colorfetchbug starts at vmli=2).
+- **CPU instruction timing is identical** JaC↔VICE (STA $19c2 cyc6,
+  STY $19c5 cyc10, STX $19c8 cyc14 in both). It is **not** a mistimed
+  instruction. The `$D011` write→effect lag is +1 in both. The divergence is
+  purely the **char0 c-access cycle** (JaC fixed case15 vs VICE variable cyc14).
+
+## 3. Ruled out (do NOT re-try)
+
+| Attempt | Result |
+|---|---|
+| Disable backfill (`fliLeadingPrefetch=false`) | char0 → black BUT colorfetchbug 7→357 |
+| Prefetch color via `instructionStartPC` (blackmail fix) | tested at $19b9: **no effect** (char0 still 78–89) |
+| CPU instruction-timing hunt | timings identical; nothing to fix |
+| `riseCyc` / `idle` / `ba_low` / `prevChar0` gates | cases observationally identical in JaC's model |
+
+## 4. Open question — MUST resolve first (Phase 0)
+
+At scroll `$19b9`, does VICE:
+- **(A)** real-fetch char0 (vmli=0 present in FetchC, vbuf/cbuf = black), or
+- **(B)** prefetch char0 (vmli=0 absent → `$ff` + bus color, rendered dark)?
+
+This decides the whole fix direction. We have VICE's deer FetchC at one scroll
+(real-fetch); we need it **at the `$19b9` mover scroll** specifically.
+
+---
+
+## 5. Phased plan
+
+### Phase 0 — Get the decisive VICE datum (no deterministic boot needed)
+
+1. Run VICE (`JAC64_TRACE_FILE_FETCHC` + `JAC64_PC_TRACE_FILE`) over the
+   picture-mover window. Match frames by the `$19cb` scroll byte (BNE target),
+   **not** absolute clk — sidesteps the d64 boot non-determinism.
+2. Find a raster line where VICE's loop is at BNE-target `$19b9` and dump the
+   first matrix-fetch cycle + vmli + vbuf/cbuf for char0.
+3. Classify as (A) real-fetch-black or (B) prefetch-dark.
+
+Exit criteria: we know VICE's char0 mechanism at `$19b9`.
+
+### Phase 1A — if VICE REAL-FETCHES char0 (likely)
+
+Goal: make JaC fetch char0 at the boundary scroll like VICE, i.e. give JaC's
+char0 c-access the same cycle-flexibility VICE's matrix fetch has, without
+disturbing the load-bearing `BADLINE_FETCH_CYCLE`.
+
+Approach (least-risk → most-faithful):
+1. **Late-rise re-fetch (surgical):** if the badline rises at case 16 (one
+   cycle after the case-15 char0 fetch was skipped), and VICE would still have
+   c-accessed char0 at its cycle, perform a *real* char0 c-access at case 16
+   (instead of the `$ff` backfill) — but ONLY when the VICE model says char0 is
+   in the real-fetch window (`prefetch_cycles == 0` for cell 0), NOT in the
+   colorfetchbug case (`prefetch_cycles > 0` → keep `$ff`). This requires
+   porting VICE's `prefetch_cycles` counter as the gate (it already exists in
+   C64Screen ~line 3037 — verify it is correct at cell 0).
+2. **Faithful matrix-fetch port (correct, larger):** replace the
+   case15/case16 + backfill HACK with VICE's `vicii_fetch_matrix` model — a
+   per-c-access-cycle fetch gated on `bad_line`, using `prefetch_cycles` to
+   choose `$ff`+bus-color vs real colorRAM. This is the documented "refactor"
+   but is the genuinely correct model and would subsume colorfetchbug,
+   blackmail, fldscroll, fetchsplit into one mechanism.
+
+Pick (1) if Phase 0 shows the difference is a single boundary cell driven by
+`prefetch_cycles`; escalate to (2) only if (1) cannot separate the cases.
+
+### Phase 1B — if VICE PREFETCHES char0 dark
+
+Then both emus skip char0 and the difference is the rendered byte/color.
+- We already disproved `instructionStartPC` color. So investigate whether
+  VICE's `$ff` prefetch char renders **black** because of mode/`$D016`/`$D018`
+  state at that cell (e.g. the bitmap byte vs the color), not the cbuf nibble.
+- Compare JaC's vicCharCache[0]=`$ff` render path vs VICE's at the same cell.
+  The fix would be in how `$ff` char data is colored/rendered at the FLI left
+  edge, not the backfill color source.
+
+### Phase 2 — Validation (mandatory, every variant flag-gated)
+
+Run the existing harness for EACH candidate, flag-gated, default-off until proven:
+1. **colorfetchbug family** must stay: main 7, bitmap 6, main2 7, main3/4 14
+   (family ≈ 48). ANY increase = reject.
+2. **fldscroll** 20/21/22/29/2A/2B, **blackmail** ee/fixed (= 0),
+   **fetchsplit** (= 0) — all must stay 0.
+3. Full 139-test `/tmp/backfill_ab.sh`-style A/B (HEAD vs candidate, capture
+   @30M): require 0 regressions.
+4. **K3 visual check:** fpsCapture deer-mover 282–284M; char0 at `$19b9` must
+   drop from ~80 toward VICE's value (Phase 0 target) while $19b8/$19bb stay
+   unchanged.
+
+### Phase 3 — (optional tooling) Deterministic d64 boot
+
+NOT required for the fix (user-declined), but useful if Phase 0/2 alignment
+proves painful. Mirror the PRG `detSysJump` pattern: inject `RUN` at a fixed
+emulated cycle instead of TestRaster's wall-clock `Thread.sleep` polling
+(TestRaster.java ~489–520). Makes d64 runs reproducible scroll@cycle.
+
+---
+
+## 6. Risk register
+
+| Risk | Mitigation |
+|---|---|
+| Touching `BADLINE_FETCH_CYCLE`/c-access breaks colorfetchbug/fldscroll/blackmail | Flag-gate every change; Phase 2 A/B is a hard gate; never change the constant directly — gate the *extra* char0 fetch on `prefetch_cycles` |
+| `prefetch_cycles` in JaC not VICE-faithful at cell 0 | Verify against VICE FetchC before relying on it as the gate |
+| Faithful refactor (1A.2) regresses many FLI tests | Land behind a flag; keep the old path; A/B both |
+| d64 non-determinism muddies Phase 0/2 | Match by `$19cb` scroll byte, not clk |
+
+## 7. Success criteria
+
+- K3 `$19b9` char0 matches VICE (black / VICE's value), flicker gone.
+- colorfetchbug family ≤ 48, all listed FLI tests unchanged, 139-test A/B
+  zero regressions.
+- Change is flag-gated, default decided only after green A/B.
+
+## 8. Tooling reference (all exists)
+
+- VICE: `JAC64_TRACE_FILE_FETCHC` (c-access), `JAC64_TRACE_FILE_D011`
+  (EV-WrD011 cyc/pc), `JAC64_PC_TRACE_FILE` (+CLK_LO/HI) in 6510dtvcore.c.
+- JaC: `-Djac64.tracePcCycles`, `-Djac64.traceVicState` (ys/bad per cycle),
+  `-Djac64.traceD011W`, `-Djac64.traceBackfill` (riseCyc/prevChar0 — was added
+  & reverted; re-add from memory), `-Djac64.fpsCapture*` (scroll-tagged frames).
+- Match JaC↔VICE by the `$19cb` BNE-target byte (fine-scroll signature).
