@@ -609,17 +609,26 @@ public final class VicDrawCycle {
     // which is why colorfetchbug late-badline lines and Krestage 3
     // picture-mover seam show stale-cache chars where VICE shows clean
     // background. Flag: -Djac64.idleClearPipe (default true).
+    // jac64.vmliUnified: VICE-faithful self-incrementing dmli
+    // (vicii-draw-cycle.c:308-320). dmli loads vbuf/cbuf then increments when
+    // vis_en && !vborder && !idle, and resets to 0 outside the visible area.
+    // This is a SEPARATE display index from the fetch vmli — VICE has both.
+    // When off, the legacy externally-set dmli (= C64Screen vmli) is used.
+    boolean dmliSelf = Boolean.getBoolean("jac64.vmliUnified");
     if (visEn && vborder == 0) {
       if (!idleState
           && vbuf != null && cbuf != null
           && dmli >= 0 && dmli < vbuf.length) {
         vbufPipe0Reg = vbuf[dmli];
         cbufPipe0Reg = cbuf[dmli];
+        if (dmliSelf) dmli++;
       } else if (Boolean.parseBoolean(
           System.getProperty("jac64.idleClearPipe", "true"))) {
         vbufPipe0Reg = 0;
         cbufPipe0Reg = 0;
       }
+    } else if (dmliSelf) {
+      dmli = 0;
     }
   }
 

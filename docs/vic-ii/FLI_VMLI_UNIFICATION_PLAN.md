@@ -136,6 +136,51 @@ All under `jac64.vmliUnified` (default off) until U6. Each stage is a separate
 commit on the branch; a failing gate reverts that stage only. Master's default
 path and `col0StaleHold` (e3ce8ad) are untouched throughout — zero shipping risk.
 
+## 8. BREAKTHROUGH (2026-06-22) — VICE has TWO indices; model nailed
+
+Digging into VICE src (vicii-fetch.c + vicii-draw-cycle.c) overturned the
+"one gated vmli" premise. VICE has **two** indices, and JaC must reproduce both:
+
+1. **`vmli` (fetch)** — vicii-fetch.c. Matrix-fetch (FetchC) writes `vbuf[vmli]`
+   starting **raster_cycle 14** (vmli=0 → vbuf[0]); g-fetch reads `vbuf[vmli]`
+   then `vmli++`. So at cyc N: write index = N-14.
+2. **`dmli` (display)** — vicii-draw-cycle.c:309-320. SELF-incremented inside
+   the draw-cycle (`vbuf_pipe0=vbuf[dmli]; dmli++` when vis_en && !vborder &&
+   !idle), reset to 0 outside the visible area. NOT fed from vmli.
+
+**Decisive trace datum** (added EV-Dmli to VICE, border-250): **`dmli == vmli-1`
+every cycle** (cyc15: dmli=0,vmli=1; cyc16: dmli=1,vmli=2; …). The g-fetch reads
+`vbuf[vmli]` BEFORE its `++`, so bitmap and color both reference cell `vmli-1`.
+
+### JaC's bug (not "index duality" — a wrong dmli + a missed cyc14 write)
+- JaC set `dmli = legacy vmli` externally; correct = **self-increment** like VICE.
+- JaC's gbuf read used legacy vmli; correct = **vVmli-1** (= dmli).
+- JaC's c-access starts at **cyc15** (BADLINE_FETCH_CYCLE), not cyc14, so a
+  `vbuf[vmli]` write skips **vbuf[0]** (VICE wrote it at cyc14) → border garbage.
+
+### The fix (jac64.vmliUnified), all verified:
+- **VicDrawCycle**: `dmli` self-increments + resets (VICE 311-319).
+- **C64Screen gbuf read (3810)**: `vicCharCache[vVmli-1]` (= dmli).
+- **C64Screen c-access write**: `writeCAccess(vVmli)` (VICE write-leads-read-by-1
+  — this is what makes colorfetchbug exact) PLUS at column 0 also
+  `writeCAccess(vVmli-1)` to cover the vbuf[0] VICE wrote at cyc14.
+- **External setDmli** suppressed when unified (let VicDrawCycle self-increment).
+
+### Results (capture @30M, vs 8565 refs):
+| test | off | on |
+|---|---|---|
+| colorfetchbug main | 7 | **1** |
+| colorfetchbug bitmap | 6 | **1** |
+| colorfetchbug main2 | 7 | **1** |
+| colorfetchbug main3 | 14 | **4** |
+| colorfetchbug main4 | 14 | **4** |
+| border-250 | 0 | **0** |
+| den01-48-0 | 0 | **0** |
+
+colorfetchbug family 48→11, border/den unchanged. Beats shipping col0StaleHold.
+Full 139-test A/B = the gate (running). Dead ends that led here: write=vVmli
+alone (border 182), write=vVmli-1 alone (FLI 177) — only the double-write holds both.
+
 ## 7. Execution checklist
 
 - [ ] U0 consumer table + per-cycle divergence map (text/border/FLI)
