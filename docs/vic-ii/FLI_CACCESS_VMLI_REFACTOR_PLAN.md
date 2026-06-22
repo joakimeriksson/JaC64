@@ -282,3 +282,34 @@ NET this session: proved the vmli model is correct on writes, $D011 timing is
 correct (not a CPU floor), colorfetchbug CAN improve — but no landable fix; the
 read-shift that improves colorfetchbug breaks normal display. col0StaleHold
 (e3ce8ad) remains the shipping interim on master.
+
+## 15. Pipeline-delay attempt (2026-06-22) — root blocker is INDEX DUALITY
+
+Went for the VICE pipeline-delay model. KEY discovery: VicDrawCycle.java ALREADY
+implements the full VICE pipeline — gbuf/cbuf/vbuf each staged pipe0->pipe1
+(vicii-draw-cycle.c), indexing vbuf[dmli]/cbuf[dmli]. C64Screen feeds dmli=vmli
+and the gbuf char read uses vmli (C64Screen:3810). So the pipeline machinery is
+fine; the blocker is the INDEX.
+
+Tried feeding a consistent vVmli-derived index (vVmli - readDelay) to BOTH the
+gbuf read AND dmli. Sweep on colorfetchbug + border-250:
+  rd=1: cfb=1   border=182
+  rd=2: cfb=199 border=577
+  rd=3: cfb=372 border=760
+No readDelay is suite-safe. rd=2 SHOULD equal legacy vmli on normal lines
+(vmli==vVmli-2 was observed on colorfetchbug) but border-250 explodes to 577 —
+proving **legacy vmli (unconditional ++ in drawGraphics) and vVmli (gated ++ in
+updateVicStateVic) diverge by a NON-CONSTANT amount** on idle/border-heavy
+content. There is no constant offset that reconciles them.
+
+⇒ ROOT BLOCKER (final): the vmli refactor needs the gated FETCH index (vVmli)
+and the display/read index to be ONE unified gated vmli — exactly VICE's single
+vmli used for both matrix-fetch and g-fetch. JaC's legacy vmli is incremented
+UNCONDITIONALLY (drawGraphics:~4499) and consumed by many paths (drawColorsVic,
+sprite pipe, retroactive paint). Unifying = making legacy vmli gated AND
+auditing every consumer — a large, cross-cutting change, NOT a localized patch
+or a read-offset. The pipeline delays themselves are already correct.
+
+STATUS: reverted to S2' (023ba17). vmli WRITE proven correct; pipeline proven
+present/correct; the index-duality unification is the remaining (large) work.
+col0StaleHold (e3ce8ad) stays the shipping interim on master.
