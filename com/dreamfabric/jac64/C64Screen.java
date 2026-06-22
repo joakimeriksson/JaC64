@@ -1633,7 +1633,13 @@ public class C64Screen extends ExtChip implements Observer {
     // still stored at index k); only the $ff placement corrects. Column 0 has
     // no preceding cycle, so it is also written directly when column==0.
     // Flag jac64.fldPrefetchShift default true.
-    if (Boolean.parseBoolean(System.getProperty("jac64.fldPrefetchShift", "true"))) {
+    if (Boolean.getBoolean("jac64.vmliCAccess")) {
+      // S2 clean path: write the single VICE matrix-fetch cell vVmli (which is
+      // already the post-increment index = the fldPrefetchShift target), no
+      // shift, no col0-double-write. writeCAccess(vVmli) reads colorRAM[vc]
+      // since vcBase+vVmli==vc.
+      writeCAccess(vVmli);
+    } else if (Boolean.parseBoolean(System.getProperty("jac64.fldPrefetchShift", "true"))) {
       if (column == 0) {
         writeCAccess(0);
       }
@@ -1649,14 +1655,10 @@ public class C64Screen extends ExtChip implements Observer {
   // else the real screen+color byte at vcBase+col. col >= 40 is dropped (VICE
   // renders only columns 0..39).
   private void writeCAccess(int col) {
-    // S2 (jac64.vmliCAccess): write by the VICE matrix-fetch index vVmli
-    // (= vc-vcBase) instead of the cycle-derived col. Identical for normal
-    // badlines (vVmli==col); on a LATE badline vc has not advanced during the
-    // idle cycles so vVmli<col — writing by vVmli puts the byte at VICE's
-    // resume index and leaves the truly-skipped leading cells STALE.
-    if (Boolean.getBoolean("jac64.vmliCAccess")) {
-      col = vVmli;
-    }
+    // S2 (jac64.vmliCAccess): callers pass the VICE matrix-fetch index vVmli
+    // (= vc-vcBase) directly; on a LATE badline vc has not advanced during the
+    // idle cycles so vVmli<col, putting the byte at VICE's resume index and
+    // leaving the truly-skipped leading cells STALE.
     if (col < 0 || col >= 40) {
       return;
     }
