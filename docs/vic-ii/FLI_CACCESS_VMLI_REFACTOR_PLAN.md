@@ -313,3 +313,32 @@ or a read-offset. The pipeline delays themselves are already correct.
 STATUS: reverted to S2' (023ba17). vmli WRITE proven correct; pipeline proven
 present/correct; the index-duality unification is the remaining (large) work.
 col0StaleHold (e3ce8ad) stays the shipping interim on master.
+
+## 16. CONCLUSION (2026-06-22) — consistent read also fails; full unification required
+
+Re-tested the CONSISTENT read (gbuf char + dmli both = vVmli - readDelay), now
+knowing VicDrawCycle already idle-gates the pipe load (vicii-draw-cycle.c:313,
+clears on idle). Sweep on colorfetchbug/main + border-250:
+  rd=1: cfb=1    border=182
+  rd=0: cfb=199  border=212
+  rd=-1: cfb=1105 border=224
+**border-250 breaks at EVERY rd (off=0)**, cfb only good at rd=1. So the
+idle-gating does NOT save it — the vmli WRITE (vVmli) is fundamentally
+incompatible with the existing render's index model on non-FLI content (border
+reveals content via the open-border trick that doesn't align with any
+vVmli-derived index, because vVmli's gating diverges from the cyc-based display
+on those cycles).
+
+DEFINITIVE: NO localized change (read-shift, consistent read, constant offset)
+makes the vmli-write suite-safe. The clean fix is the FULL unification — replace
+the legacy unconditional vmli with ONE gated VICE-style vmli used by EVERY
+render consumer (gbuf fetch, vbuf/cbuf pipe via dmli, drawColorsVic, sprite
+pipeline, retroactive paint, border) AND migrate the write to it. That is a
+large, cross-cutting, multi-session rewrite touching the whole render path. The
+pipeline-delay machinery (VicDrawCycle) is already correct and ready for it; the
+work is the index unification + consumer migration.
+
+FINAL STATE: branch refactor/fli-vmli-caccess = research foundation (S1/S2' +
+full findings §11-16). Master default untouched; col0StaleHold (e3ce8ad) ships
+as the interim FLI-left-edge fix. The refactor is fully characterized and
+de-risked but is a genuine large rewrite, not a patch.
