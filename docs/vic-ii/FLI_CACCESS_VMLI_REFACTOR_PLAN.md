@@ -251,3 +251,34 @@ STATE: S1 (3b3c39f) + S2 (d9403a9) committed on branch refactor/fli-vmli-caccess
 (default path untouched, colorfetchbug 7/6). S2 is a cleaner foundation but not
 landable until (a) or (b). The interim col0StaleHold fix (e3ce8ad) stays on
 master.
+
+## 14. S3 read-index: FALSE WIN — vVmli-1 breaks the suite (2026-06-22)
+
+Tried reading vicCharCache by a vVmli-derived index (vVmli - readDelay) in the
+LIVE full-pipeline g-fetch (useVicFullPipeline path, ~line 3810; drawGraphics/
+drawGraphicsVic are dead under that flag). readDelay sweep: rd=1 gave
+colorfetchbug family 48->12 (main 7->1, bitmap 6->1, main2->2, main3/4->4) —
+looked like a breakthrough.
+
+**But the full 139-test A/B (flag off vs on) shows it BREAKS THE SUITE**: every
+non-FLI test regresses 0->~160 (border 0->182, dentest 0->161, dmadelay, banking
+0->106, ...). Cause: vVmli-1 is a READ-SHIFT — it mis-aligns ALL normal display
+by ~1 cell; it only "fixed" colorfetchbug by coincidentally re-aligning its
+cells. The CORRECT read is the display column (legacy vmli, cyc-based), which is
+suite-safe (OFF=0 everywhere) but leaves colorfetchbug at 11 on the vmli WRITE
+path — i.e. the real residual is WRITE-SIDE (cells 0,1 stale + cols 3,4 on the
+idle->display transition line), NOT the read.
+
+⇒ S3 read-index approach via a constant readDelay is a DEAD END (false win).
+Reverted (branch reset to S2' 023ba17). The remaining convergence is the
+WRITE-side: get cells 0,1 stale + the cols-3,4 transition right WITH the
+display-column read (legacy vmli), so the suite stays 0 AND colorfetchbug
+improves. That is genuinely harder (the transition-line vc-lag interacts with
+the gbuf pipeline) — not cracked. The vmli WRITE is correct (matches VICE
+cell-for-cell); the integration with the display-column read on transition
+lines is the open problem.
+
+NET this session: proved the vmli model is correct on writes, $D011 timing is
+correct (not a CPU floor), colorfetchbug CAN improve — but no landable fix; the
+read-shift that improves colorfetchbug breaks normal display. col0StaleHold
+(e3ce8ad) remains the shipping interim on master.
