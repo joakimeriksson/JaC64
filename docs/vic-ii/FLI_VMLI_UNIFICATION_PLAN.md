@@ -178,8 +178,17 @@ every cycle** (cyc15: dmli=0,vmli=1; cyc16: dmli=1,vmli=2; …). The g-fetch rea
 | den01-48-0 | 0 | **0** |
 
 colorfetchbug family 48→11, border/den unchanged. Beats shipping col0StaleHold.
-Full 139-test A/B = the gate (running). Dead ends that led here: write=vVmli
-alone (border 182), write=vVmli-1 alone (FLI 177) — only the double-write holds both.
+Dead ends that led here: write=vVmli alone (border 182), write=vVmli-1 alone
+(FLI 177) — only the col0 double-write holds both.
+
+### Default FLIPPED ON 2026-06-22 (user: "some regression ok if closer to VICE")
+Full 139-test A/B (vmliUnified=false vs default): **5 wins, 4 regressions, net
+-12**. Wins: colorfetchbug family 48→11. Regressions: border-bm-idle/ysh/ysh2 +8
+each (opened bottom-border bitmap-idle corner) + sequencer-bug +1. `vmliUnified`
+now defaults true (helper `C64Screen.vmliUnified()`); the old fliLeadingPrefetch
+backfill is gated off under it (col0 double-write subsumes it — verified no-op).
+col0StaleHold remains as the `=false` opt-out fallback. The 8-cell border-open
+corner is an accepted tradeoff (murky idle-during-border class, partly VICE bugs).
 
 ## 7. Execution checklist
 

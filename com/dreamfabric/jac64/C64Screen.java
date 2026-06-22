@@ -273,6 +273,15 @@ public class C64Screen extends ExtChip implements Observer {
   // S1 only TRACKS + traces it (no behavior change); S2 will write the
   // char/col caches by vVmli. See FLI_CACCESS_VMLI_REFACTOR_PLAN.md.
   int vVmli = 0;
+
+  // VICE-faithful vmli(fetch)/dmli(display) split. Default ON: it tracks VICE's
+  // two-index model (matrix-fetch writes vbuf[vmli] from cyc14; draw-cycle reads
+  // vbuf[dmli], dmli==vmli-1) and closes colorfetchbug 48->11. Opt out with
+  // -Djac64.vmliUnified=false. See FLI_VMLI_UNIFICATION_PLAN.md §8.
+  static boolean vmliUnified() {
+    return Boolean.parseBoolean(System.getProperty("jac64.vmliUnified", "true"));
+  }
+
   // The current vBeam pos - 9... => used for keeping track of memory
   // position to write to...
   int vPos = 0;
@@ -1633,7 +1642,7 @@ public class C64Screen extends ExtChip implements Observer {
     // still stored at index k); only the $ff placement corrects. Column 0 has
     // no preceding cycle, so it is also written directly when column==0.
     // Flag jac64.fldPrefetchShift default true.
-    if (Boolean.getBoolean("jac64.vmliUnified")) {
+    if (vmliUnified()) {
       // U2: VICE writes vbuf[vmli] at FetchC cyc14..53 (vmli=0..39). JaC's
       // c-access starts a cycle later (cyc15, vVmli already 1), so write
       // vVmli (= VICE's write-leads-read-by-1: vbuf[k] written the cycle before
@@ -3430,6 +3439,7 @@ public class C64Screen extends ExtChip implements Observer {
         // 8th line), VICE keeps that stale value, so DON'T overwrite with $ff.
         int col0StaleThreshold = Integer.getInteger("jac64.col0StaleThreshold", 7);
         if (!col0FetchedThisLine
+            && !vmliUnified()  // unified model writes the c-access directly
             && !Boolean.getBoolean("jac64.vmliCAccess")  // S2: stale, no backfill
             && (!Boolean.parseBoolean(System.getProperty("jac64.col0StaleHold", "true"))
                 || linesSinceCol0Fetched > col0StaleThreshold)
@@ -3826,7 +3836,7 @@ public class C64Screen extends ExtChip implements Observer {
         // VICE EV-Dmli: dmli == vmli-1 every cycle). vVmli here is already
         // post-increment, so the correct read index is vVmli-1. The color pipe
         // uses the same value via the self-incrementing dmli (VicDrawCycle).
-        int gFetchIdx = Boolean.getBoolean("jac64.vmliUnified") ? (vVmli - 1) : vmli;
+        int gFetchIdx = vmliUnified() ? (vVmli - 1) : vmli;
         if (gFetchIdx < 0) gFetchIdx = 0; else if (gFetchIdx > 39) gFetchIdx = 39;
         int vByte = vicCharCache[gFetchIdx] & 0xff;
         boolean colorLatency = Boolean.parseBoolean(
@@ -4006,7 +4016,7 @@ public class C64Screen extends ExtChip implements Observer {
       if (dmliForCycle > 39) dmliForCycle = 39;
       // jac64.vmliUnified: let VicDrawCycle self-increment dmli (VICE model);
       // don't clobber it with the external legacy-vmli value each cycle.
-      if (!Boolean.getBoolean("jac64.vmliUnified"))
+      if (!vmliUnified())
         vicDrawCycle.setDmli(dmliForCycle);
       // Phase 1 VICE-shaped split (default ON; opt out with
       // -Djac64.vicShaped=false). Order mirrors vicii_draw_cycle:

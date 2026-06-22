@@ -614,7 +614,7 @@ public final class VicDrawCycle {
     // vis_en && !vborder && !idle, and resets to 0 outside the visible area.
     // This is a SEPARATE display index from the fetch vmli — VICE has both.
     // When off, the legacy externally-set dmli (= C64Screen vmli) is used.
-    boolean dmliSelf = Boolean.getBoolean("jac64.vmliUnified");
+    boolean dmliSelf = Boolean.parseBoolean(System.getProperty("jac64.vmliUnified", "true"));
     if (visEn && vborder == 0) {
       if (!idleState
           && vbuf != null && cbuf != null
