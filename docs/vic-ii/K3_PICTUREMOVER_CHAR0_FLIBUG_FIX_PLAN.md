@@ -8,6 +8,38 @@ Related memory: `project_colorfetchbug_caccess_2026_06_13.md` (full trace histor
 
 ---
 
+## 0b. ★★ DETERMINISTIC REPRO + CONFIRMED JaC BUG 2026-06-23
+
+**Repro recipe (no frame-matching needed):**
+- The mover scroll is the `$19cb` byte (BNE self-mod target). `fpsCapture` tags
+  frames `_s<hex>`. The artifact is at **`$19cb = $ee`**.
+- JaC: `.capture/krestage3_crest.prg`, any `_see` sweep frame (e.g.
+  `sweep_0056_clk181108997_see.png`) → leftmost char column (x32-39) is a
+  **full-height gray character-garbage column**. Neighbour `$ed` is clean black.
+- VICE: same prg, the `$ee` scroll occurs at **clk 182156453** (found via the
+  EV-ChkBrdL trace which now logs `s19cb=`); screenshot there → leftmost column
+  **BLACK**. char0 bright-px: JaC **124** vs VICE **6**. **It is a JaC bug, not
+  faithful FLI-bug emulation** (the demo scroller literally says "move the FLI
+  bug", but VICE renders the edge black; JaC does not).
+- Saved: `/tmp/ARTIFACT_jac_ee.png`, `/tmp/ARTIFACT_vice_ee.png`.
+
+**Characterisation:** leftmost char column (x32-39, C64 x24-31), FULL picture
+height (img-rows ~44-226), **38-col mode (csel=0, d016=$16 → xscroll=6)**.
+
+**RULED OUT (verified):** fetch (c-access 452/453 + g-access 372/378 match);
+left-border flop TIMING (JaC AND VICE both open at rast$44 cyc17 csel=0
+mainB 1→0 — identical); `drawBorder8` (faithful port incl. 38-col 7px/1px split).
+
+**OPEN PUZZLE (next step):** at rast$44 JaC EV-DrawCycle shows `px=0` (black) at
+cyc17-19, yet the rendered image shows garbage at the matching row → the px-field
+semantics or the vicCycle↔screen-x mapping needs untangling (which vicCycle emits
+display x32-39?). In 38-col the leftmost ~7px (C64 x24-30) that 40-col shows
+should be border; JaC appears to show the leftmost char's bitmap there. Pin by:
+map display x32-39 to the emitting vicCycle, dump JaC's emitted vs VICE's RESOLVED
+pixel at THOSE cycles for an `$ee` row, find where JaC emits content & VICE border.
+VICE tools: EV-ChkBrdL now logs `s19cb=`; PX-LATCH has vc/dmli; clk-gate via
+JAC64_TRACE_CLK_MIN. JaC: `-Djac64.vicDrawTrace` EV-DrawCycle (px[8]+mb+vb+dmli+vc+d016).
+
 ## 0. ★ LOCALIZED 2026-06-23 — it's the LEFT-BORDER EDGE, not the fetch
 
 Full deterministic JaC↔VICE trace of `.capture/krestage3_crest.prg` (added clk-gate
