@@ -8,7 +8,39 @@ Related memory: `project_colorfetchbug_caccess_2026_06_13.md` (full trace histor
 
 ---
 
-## 0c. ★★★ ROOT CAUSE PINNED 2026-06-23 — FLI-prefetch cell GBUF (not c-access)
+## 0d. 2026-06-23 — ground truth: JaC foreground vs VICE background; leading suspect = dmli+1 (NEEDS d016-exact confirm)
+
+Screenshot RGB (no markers) at leftmost char, $ee: **JaC = GRAY (149=$f lt-gray, 108=$c gray); VICE = BLACK** (D021 background). So VICE renders the FLI-prefetch cell as BACKGROUND, JaC as FOREGROUND. Scroll-aligned fetch comparison (JaC vc = VICE vc+1 label):
+- gbuf: JaC vc483=$c3 = VICE vc482=$c3 — MATCH (content-start aligns)
+- vbuf: both $ff — MATCH
+- cbuf: JaC $c vs VICE $6 — DIFFER (prefetch colour; JaC prefetchPc byte ≠ VICE reg_pc)
+- **dmli: JaC=4 at cyc18 vs VICE=3 — JaC +1** → JaC displays the NEXT cell (real $c3 content) where VICE displays the prefetch/background cell. This is the leading suspect (cell-index off-by-one at the left edge).
+
+⚠️ CONFOUND: the JaC and VICE captures at "$19cb=$ee" had DIFFERENT d016 (JaC $16/$17 xscroll6/7 vs VICE $11 xscroll1) — $19cb=$ee spans multiple fine-scroll(d016) sub-states. So dmli=4-vs-3 may be the xscroll difference, not a true off-by-one. MUST match BOTH $19cb AND d016 before concluding. NEXT (no code yet): capture JaC and VICE at $ee AND identical d016, read the resolved leftmost pixel + dmli; if dmli still +1 at matched d016 → fix the dmli self-increment start (VicDrawCycle, vmliUnified) by one; if cbuf is the visible diff → fix prefetchPc. DON'T patch before this (two prior hypotheses — left-border, gbuf — were confounded/wrong). Repro: ARTIFACT_jac_ee.png (gray) vs ARTIFACT_vice_ee.png (black).
+
+## 0e. 2026-06-23 — dmli IS misaligned but NON-CONSTANT (not a 1-line fix)
+
+Joined JaC EV-DrawCycle vs VICE PX-LATCH on EXACT scroll-state (rast,vc,d016),
+JaC vc-1 label. 6591 common display-states. **dmli delta (JaC−VICE): dominant +2
+(1749), some +1 (46)**; rast$33 (top row) starts +1 at vc0 and GROWS (+2 by vc2).
+So JaC's display index `dmli` runs AHEAD of VICE's, by a NON-CONSTANT amount →
+JaC displays a later cell than VICE at the left edge, so the FLI-prefetch cell
+that VICE shows as background renders as the next cell's foreground (gray) in JaC.
+
+⇒ This is the ROOT (display-index misalignment at the prefetch left edge), but it
+is NOT a clean off-by-one — it's the same hard vmli/dmli alignment problem the
+vmliUnified work hit. The dmli self-increment (VicDrawCycle, jac64.vmliUnified)
+is not perfectly VICE-aligned in the mover's FLI region. A naive dmli-1 would
+break the suite (border-250=0 currently). The real fix = make JaC's dmli track
+VICE's exactly through the FLI prefetch/late-badline transitions (where vc/dmli
+advance differs). HARD; multi-step; needs the dmli increment/reset conditions
+audited against VICE vicii-draw-cycle.c:308-320 for the FLI/prefetch case
+specifically, with the (rast,vc,d016) dmli-join as the regression gate (delta
+must →0) AND the 139-test suite staying green. NOT attempted (would be a 3rd
+confounded patch). Negatives in the delta histogram (-14..-18,-38) = idle/border
+or frame-collapse noise, ignore.
+
+## 0c. ROOT CAUSE candidate 2026-06-23 — FLI-prefetch cell (gbuf hypothesis SUPERSEDED by 0d/0e)
 
 The leftmost gray (user: "should be blue around the deer, JaC shows gray") is the
 FLI-bug prefetch cell rendering FOREGROUND-gray where VICE renders BACKGROUND.
