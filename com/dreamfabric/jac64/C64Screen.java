@@ -3922,6 +3922,7 @@ public class C64Screen extends ExtChip implements Observer {
         vicCyclePaintBase = -1;
       }
       vicDrawCycle.setTraceClk(cycles, vbeam);
+      vicDrawCycle.setTraceVc(vc);
       vicDrawCycle.setRasterCycle(vicCycle);
       // Phase F1: cycle flags from VICE PAL 6569 chip-model table.
       // Captures VISIBLE_M, FETCH_G, sprite-DMA, border-check, etc.

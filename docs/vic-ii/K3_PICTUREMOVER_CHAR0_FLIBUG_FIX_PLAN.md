@@ -8,6 +8,30 @@ Related memory: `project_colorfetchbug_caccess_2026_06_13.md` (full trace histor
 
 ---
 
+## 0. ★ LOCALIZED 2026-06-23 — it's the LEFT-BORDER EDGE, not the fetch
+
+Full deterministic JaC↔VICE trace of `.capture/krestage3_crest.prg` (added clk-gate
++ vc/d016 to VICE FetchC/FetchG/Dmli/PX-LATCH patches; JaC `vicDrawTrace` already
+emits px[8]+mb+vb+dmli, added vc+d016). Frames DRIFT (different scroll at same clk),
+so JOIN both traces on scroll-state (rast,vc,d016), JaC vc-1 to match VICE label.
+
+**Fetch is CORRECT** (ruled out): char0 c-access (vbuf+cbuf) 452/453 match;
+g-access (gbuf bitmap) 372/378 match. The leftmost char's char/color/bitmap are all
+fetched identically to VICE. The bug is the DISPLAY→pixel stage.
+
+**Divergence localized to the LEFT-EDGE cycles (vicCycle 13–16) at the TOP rows
+rast $44–$4a (raster 68–74 = "up there") + bottom rast $f3–$f4.** Left-edge pixel
+join over 94k scroll-states → 3907 leak-states, ALL clustered at cyc 13–16 / those
+rasters, ~61 scroll-values each (systematic, not scroll-specific). Bidirectional:
+JaC-shows-content-where-VICE-border (1240) AND JaC-border-where-VICE-content (2667).
+⇒ JaC's LEFT MAIN-BORDER flip-flop opens/closes at a different vicCycle than VICE
+at the top/bottom display rows (where the mover's per-line $D011/$D016 FLI tricks
+move the border-compare). Matches user's report: "a row of chars that flickers,
+hidden by the border, in its last 8px before the leftmost border." JaC opens the
+left border at cyc17 (mb 1→0) on the mover lines — compare to VICE's open cycle and
+fix the border-flop timing (checkHBorderLeft / 38-40col CSEL compare), NOT the fetch.
+NEXT: dump JaC vs VICE left-border-open cycle at a scroll-matched rast $45 state.
+
 ## 1. Problem statement
 
 During the Krestage 3 picture-mover, JaC paints a **flickering `$ff` garbage

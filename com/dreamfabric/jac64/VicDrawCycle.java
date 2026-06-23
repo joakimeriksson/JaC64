@@ -287,6 +287,8 @@ public final class VicDrawCycle {
   public void setGbuf(int g) { this.gbuf = g & 0xff; }
   public void setRegs0x11(int v) { this.regs0x11 = v & 0xff; }
   public void setRegs0x16(int v) { this.regs0x16 = v & 0xff; }
+  private int traceVc;
+  public void setTraceVc(int vc) { this.traceVc = vc; }
   public void setRegs0x18(int v) { this.regs0x18 = v & 0xff; }
   public void setVbufCbuf(int[] vb, int[] cb) { this.vbuf = vb; this.cbuf = cb; }
 
@@ -398,6 +400,8 @@ public final class VicDrawCycle {
       .append(" vbuf=$").append(Integer.toHexString(vbufReg))
       .append(" cbuf=$").append(Integer.toHexString(cbufReg))
       .append(" dmli=").append(dmli)
+      .append(" vc=").append(traceVc)
+      .append(" d016=$").append(Integer.toHexString(regs0x16))
       .append(" vp0=$").append(Integer.toHexString(vbufPipe0Reg))
       .append(" vp1=$").append(Integer.toHexString(vbufPipe1Reg))
       .append(" mb=").append(mainBorder ? 1 : 0)
