@@ -8,6 +8,28 @@ Related memory: `project_colorfetchbug_caccess_2026_06_13.md` (full trace histor
 
 ---
 
+## 0c. ★★★ ROOT CAUSE PINNED 2026-06-23 — FLI-prefetch cell GBUF (not c-access)
+
+The leftmost gray (user: "should be blue around the deer, JaC shows gray") is the
+FLI-bug prefetch cell rendering FOREGROUND-gray where VICE renders BACKGROUND.
+Concrete (rast $94 cyc18, $ee, EV-DrawCycle): `gbuf=$c3 vbuf=$ff cbuf=$c` →
+rb=`f.f.f.f.f.f.f.21` → leftmost char emits `$f` (lt-gray). The gray comes from
+**vbuf=$ff (the FLI prefetch byte)** — in bitmap mode $ff's nibbles are $f/$f =
+gray. JaC's **bitmap gbuf for the prefetch cell is NON-ZERO ($c3/$cc)** so pixels
+resolve to foreground (gray); **VICE's gbuf for that cell is 0** so they resolve
+to background D021 (blue at the deer, black at the wolf). The gray pixel sits at
+cyc18.px7 / cyc19.px0-6 (one char, shifted by xscroll=7) on ~every raster →
+full-height gray leftmost column.
+
+⇒ **FIX TARGET: the FLI-prefetch leftmost cell's G-ACCESS must read idle
+($3fff→0) like VICE**, so it resolves to background, not gray foreground. This is
+colorfetchbug-FAMILY (the $ff prefetch) but the GBUF/g-access side, NOT the
+c-access side that jac64.vmliUnified already fixed (hence ON==OFF on crest). One
+fix resolves both gray-vs-black (wolf) and gray-vs-blue (deer). NEXT: find where
+JaC computes the prefetch cell's g-access (drawGraphics gbuf for the prefetch/
+idle columns) and gate it to idle like VICE's vicii_fetch_idle_gfx; verify VICE's
+gbuf=0 for the prefetch cell via FetchG at the matched scroll.
+
 ## 0b. ★★ DETERMINISTIC REPRO + CONFIRMED JaC BUG 2026-06-23
 
 **Repro recipe (no frame-matching needed):**
