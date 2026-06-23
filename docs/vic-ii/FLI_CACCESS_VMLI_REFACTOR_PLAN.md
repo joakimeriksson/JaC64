@@ -195,3 +195,150 @@ unchanged). The col0StaleHold commit (e3ce8ad) stays as the interim behavior
 - [ ] S2: vmli-indexed matrix fetch behind flag; stale kept; backfill off (flag path)
 - [ ] S3: read/write phase reconciled; colorfetchbug ≤7 on flag path (deterministic bytes match VICE)
 - [ ] S4: 139-test A/B 0 regress; picture-mover visual clean; flip default; retire old path
+
+---
+
+## 11. Progress log (2026-06-21)
+
+- **S1 DONE + committed** (3b3c39f, branch `refactor/fli-vmli-caccess`):
+  vVmli locked to vc, behavior-neutral, verified == VICE vmli on colorfetchbug.
+- **S2 DONE + committed** (d9403a9): writeCAccess writes by vVmli + backfill
+  gated off, behind `jac64.vmliCAccess`. Default UNCHANGED (7/6). Flag path:
+  bitmap 6→1 (model proven), main 7→11, main2 7→20, main3/4 14→31. No
+  catastrophe. **The vmli model is sound.**
+- **S3 finding (the remaining convergence):** cell-by-cell vs VICE (rast $40):
+  - prefetch char `$ff` matches; prefetch *color* differs ($d vs $a) = the
+    existing #1627 residual (separate, small).
+  - **cells 0,1 (char0/char1): the regression source.** Both emus skip them on
+    most FLI lines → stale. VICE's stale is `$ff` (written on an EARLIER line
+    where VICE's resume reached vmli0, e.g. the first display line / a full
+    badline). JaC's vmli-path **never reaches vmli0,1** (c-access always starts
+    at cell2/cyc16), so cells 0,1 keep a wrong stale.
+  - **S3 fix = make JaC's c-access reach vmli0,1 on the lines where VICE does**
+    (first/early badline of the FLI region) so the `$ff` (or real) stale
+    propagates. This is the badline-rise-timing piece: on those lines VICE's
+    matrix-fetch resumes at vmli0 (cyc14), JaC starts at cell2 (cyc16). Trace
+    rast $30/$34 (line 48 = FIRST_DMA_LINE) in both; align the resume vmli.
+  - Picture-mover note: its stale SHOULD be real content (from full badlines,
+    which JaC's c-access DOES reach at cell0) — so once S3 makes the first-line
+    c-access reach vmli0, both colorfetchbug ($ff stale) and the picture-mover
+    (real stale) converge with NO backfill hack.
+
+## 12. S3 convergence blocker (2026-06-22) — hits the $D011/badline-timing wall
+
+Tracing the colorfetchbug regression to the cell-0/1 stale source: VICE has a
+FULL badline every 8th line (rast&7==3: $33/$3b/$43...) where its c-access
+resumes at vmli0 (cyc14) and writes cells 0,1 — that value then propagates as
+the stale on the intervening FLI lines. **JaC does NOT badline those lines**:
+at rast $33 JaC has `d011=$18` → ysmooth=0, but `rast&7=3`, so no match → no
+badline → c-access never reaches cells 0,1 → wrong stale. VICE has ysmooth=3
+there (the demo's $D011 write applied earlier/differently).
+
+⇒ The OLD char0/char1 `$ff` backfill was COMPENSATING for this $D011/ysmooth
+timing gap. Removing it (S2) exposes the gap → colorfetchbug 7→11. So the
+vmli-pipeline does NOT bypass the sub-cycle wall; full convergence needs
+cycle-exact $D011→ysmooth→badline timing on these lines (the documented hard
+floor / CPU sub-cycle work).
+
+Deer-mover (the actual target) MAY still benefit (its full badlines use a
+constant ysmooth JaC handles right), but the d64-boot non-determinism blocks
+cycle-exact validation — vmli-path char0 swings widely frame-to-frame at a
+given scroll tag, inconclusive vs VICE. To proceed need EITHER:
+  (a) deterministic d64 boot (S0) to validate the deer-mover cell-for-cell, OR
+  (b) fix the $D011/ysmooth/badline timing on rast&7==3 lines (sub-cycle).
+
+STATE: S1 (3b3c39f) + S2 (d9403a9) committed on branch refactor/fli-vmli-caccess
+(default path untouched, colorfetchbug 7/6). S2 is a cleaner foundation but not
+landable until (a) or (b). The interim col0StaleHold fix (e3ce8ad) stays on
+master.
+
+## 14. S3 read-index: FALSE WIN — vVmli-1 breaks the suite (2026-06-22)
+
+Tried reading vicCharCache by a vVmli-derived index (vVmli - readDelay) in the
+LIVE full-pipeline g-fetch (useVicFullPipeline path, ~line 3810; drawGraphics/
+drawGraphicsVic are dead under that flag). readDelay sweep: rd=1 gave
+colorfetchbug family 48->12 (main 7->1, bitmap 6->1, main2->2, main3/4->4) —
+looked like a breakthrough.
+
+**But the full 139-test A/B (flag off vs on) shows it BREAKS THE SUITE**: every
+non-FLI test regresses 0->~160 (border 0->182, dentest 0->161, dmadelay, banking
+0->106, ...). Cause: vVmli-1 is a READ-SHIFT — it mis-aligns ALL normal display
+by ~1 cell; it only "fixed" colorfetchbug by coincidentally re-aligning its
+cells. The CORRECT read is the display column (legacy vmli, cyc-based), which is
+suite-safe (OFF=0 everywhere) but leaves colorfetchbug at 11 on the vmli WRITE
+path — i.e. the real residual is WRITE-SIDE (cells 0,1 stale + cols 3,4 on the
+idle->display transition line), NOT the read.
+
+⇒ S3 read-index approach via a constant readDelay is a DEAD END (false win).
+Reverted (branch reset to S2' 023ba17). The remaining convergence is the
+WRITE-side: get cells 0,1 stale + the cols-3,4 transition right WITH the
+display-column read (legacy vmli), so the suite stays 0 AND colorfetchbug
+improves. That is genuinely harder (the transition-line vc-lag interacts with
+the gbuf pipeline) — not cracked. The vmli WRITE is correct (matches VICE
+cell-for-cell); the integration with the display-column read on transition
+lines is the open problem.
+
+NET this session: proved the vmli model is correct on writes, $D011 timing is
+correct (not a CPU floor), colorfetchbug CAN improve — but no landable fix; the
+read-shift that improves colorfetchbug breaks normal display. col0StaleHold
+(e3ce8ad) remains the shipping interim on master.
+
+## 15. Pipeline-delay attempt (2026-06-22) — root blocker is INDEX DUALITY
+
+Went for the VICE pipeline-delay model. KEY discovery: VicDrawCycle.java ALREADY
+implements the full VICE pipeline — gbuf/cbuf/vbuf each staged pipe0->pipe1
+(vicii-draw-cycle.c), indexing vbuf[dmli]/cbuf[dmli]. C64Screen feeds dmli=vmli
+and the gbuf char read uses vmli (C64Screen:3810). So the pipeline machinery is
+fine; the blocker is the INDEX.
+
+Tried feeding a consistent vVmli-derived index (vVmli - readDelay) to BOTH the
+gbuf read AND dmli. Sweep on colorfetchbug + border-250:
+  rd=1: cfb=1   border=182
+  rd=2: cfb=199 border=577
+  rd=3: cfb=372 border=760
+No readDelay is suite-safe. rd=2 SHOULD equal legacy vmli on normal lines
+(vmli==vVmli-2 was observed on colorfetchbug) but border-250 explodes to 577 —
+proving **legacy vmli (unconditional ++ in drawGraphics) and vVmli (gated ++ in
+updateVicStateVic) diverge by a NON-CONSTANT amount** on idle/border-heavy
+content. There is no constant offset that reconciles them.
+
+⇒ ROOT BLOCKER (final): the vmli refactor needs the gated FETCH index (vVmli)
+and the display/read index to be ONE unified gated vmli — exactly VICE's single
+vmli used for both matrix-fetch and g-fetch. JaC's legacy vmli is incremented
+UNCONDITIONALLY (drawGraphics:~4499) and consumed by many paths (drawColorsVic,
+sprite pipe, retroactive paint). Unifying = making legacy vmli gated AND
+auditing every consumer — a large, cross-cutting change, NOT a localized patch
+or a read-offset. The pipeline delays themselves are already correct.
+
+STATUS: reverted to S2' (023ba17). vmli WRITE proven correct; pipeline proven
+present/correct; the index-duality unification is the remaining (large) work.
+col0StaleHold (e3ce8ad) stays the shipping interim on master.
+
+## 16. CONCLUSION (2026-06-22) — consistent read also fails; full unification required
+
+Re-tested the CONSISTENT read (gbuf char + dmli both = vVmli - readDelay), now
+knowing VicDrawCycle already idle-gates the pipe load (vicii-draw-cycle.c:313,
+clears on idle). Sweep on colorfetchbug/main + border-250:
+  rd=1: cfb=1    border=182
+  rd=0: cfb=199  border=212
+  rd=-1: cfb=1105 border=224
+**border-250 breaks at EVERY rd (off=0)**, cfb only good at rd=1. So the
+idle-gating does NOT save it — the vmli WRITE (vVmli) is fundamentally
+incompatible with the existing render's index model on non-FLI content (border
+reveals content via the open-border trick that doesn't align with any
+vVmli-derived index, because vVmli's gating diverges from the cyc-based display
+on those cycles).
+
+DEFINITIVE: NO localized change (read-shift, consistent read, constant offset)
+makes the vmli-write suite-safe. The clean fix is the FULL unification — replace
+the legacy unconditional vmli with ONE gated VICE-style vmli used by EVERY
+render consumer (gbuf fetch, vbuf/cbuf pipe via dmli, drawColorsVic, sprite
+pipeline, retroactive paint, border) AND migrate the write to it. That is a
+large, cross-cutting, multi-session rewrite touching the whole render path. The
+pipeline-delay machinery (VicDrawCycle) is already correct and ready for it; the
+work is the index unification + consumer migration.
+
+FINAL STATE: branch refactor/fli-vmli-caccess = research foundation (S1/S2' +
+full findings §11-16). Master default untouched; col0StaleHold (e3ce8ad) ships
+as the interim FLI-left-edge fix. The refactor is fully characterized and
+de-risked but is a genuine large rewrite, not a patch.
