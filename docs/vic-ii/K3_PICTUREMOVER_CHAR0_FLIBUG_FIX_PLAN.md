@@ -18,6 +18,27 @@ Screenshot RGB (no markers) at leftmost char, $ee: **JaC = GRAY (149=$f lt-gray,
 
 ⚠️ CONFOUND: the JaC and VICE captures at "$19cb=$ee" had DIFFERENT d016 (JaC $16/$17 xscroll6/7 vs VICE $11 xscroll1) — $19cb=$ee spans multiple fine-scroll(d016) sub-states. So dmli=4-vs-3 may be the xscroll difference, not a true off-by-one. MUST match BOTH $19cb AND d016 before concluding. NEXT (no code yet): capture JaC and VICE at $ee AND identical d016, read the resolved leftmost pixel + dmli; if dmli still +1 at matched d016 → fix the dmli self-increment start (VicDrawCycle, vmliUnified) by one; if cbuf is the visible diff → fix prefetchPc. DON'T patch before this (two prior hypotheses — left-border, gbuf — were confounded/wrong). Repro: ARTIFACT_jac_ee.png (gray) vs ARTIFACT_vice_ee.png (black).
 
+## 0f. 2026-06-24 — component audit: all FAITHFUL → it's a timing interaction (not a spotable logic bug)
+
+Audited every component on the dmli path against VICE; all are faithful ports:
+- vicIdleState (C64Screen:1255-1262) = verbatim VICE update_rc (rc==7→idle=1,vcbase=vc;
+  !idle||bad→rc++,idle=0) + badline→idle=0 (1210). FAITHFUL.
+- dmli increment (VicDrawCycle, vmliUnified) = VICE "inc when vis_en && !vborder && !idle". FAITHFUL.
+- border flop timing (checkHBorderLeft CSEL cyc), drawBorder8, fetch (c+g) — all FAITHFUL.
+⇒ The dmli divergence is a SUBTLE TIMING interaction — WHEN vis_en/vborder/idle
+transition relative to the per-cycle dmli increment in the FLI region — not a
+logic error visible by inspection. A blind patch (dmli-1, idle flip) would be a
+4th confounded guess and would break the suite. STOPPED here.
+
+**PRECISE NEXT DIAGNOSTIC (do before any code):** add vis_en + idle_state to BOTH
+per-cycle traces (JaC EV-DrawCycle already has vb/dmli — add vicIdleState + visEn;
+VICE: add idle_state + vis_en to PX-LATCH or a new per-cycle trace). Capture at the
+mover, join on EXACT (rast,vc,d016), and tabulate per cyc: (vis_en, vborder,
+idle, dmli) JaC vs VICE for ONE matched FLI top-row (rast~$33/$44). The first cyc
+where (vis_en,vborder,idle) AGREE but dmli has already diverged — OR where one of
+the three disagrees — pinpoints the exact transition. THEN fix that transition's
+timing, gate by the dmli-join (delta→0 on the mover) AND the 139-test suite green.
+
 ## 0e. 2026-06-23 — dmli IS misaligned but NON-CONSTANT (not a 1-line fix)
 
 Joined JaC EV-DrawCycle vs VICE PX-LATCH on EXACT scroll-state (rast,vc,d016),
@@ -306,3 +327,19 @@ The picture-mover itself is non-deterministic in JaC (harness wall-clock d64
 boot), so validate the picture-mover STATISTICALLY (many fpsCapture frames,
 left-edge gray/garbage must drop) + rely on the deterministic suite (colorfetchbug
 /fldscroll/blackmail/fetchsplit) as the hard regression gate.
+
+## 0g. 2026-06-24 — dmli "+1" was a CYC-NUMBERING ARTIFACT; real lead = draw-vs-fetch phase
+
+Added idle+visEn to EV-DrawCycle, idle to PX-LATCH; per-cycle compare at rast$33.
+JaC visEn turns on cyc14 (loads vbuf[0]), dmli=1 by cyc15. VICE first dmli-load at
+cyc15. BUT JaC vicCycle N = VICE raster_cycle N+1, so JaC cyc14 == VICE cyc15 —
+**dmli is ALIGNED, the "+1/+2" from the vc-join was the vc-label + cyc-numbering
+offsets compounding.** dmli RULED OUT (a dmli-1 patch would've been a 4th wrong fix
++ broken the suite). Real remaining lead: VICE fetches char0 BEFORE drawing it
+(FetchC rc14 → draw rc15); JaC's writeCAccess lands at cyc15(=VICE rc16) while the
+dmli read is at cyc14(=VICE rc15) → JaC draws the leftmost cell ~1 VICE-cyc before
+its c-access writes it, so on FLI-prefetch lines the draw reads STALE vbuf. VERIFY
+per physical cycle (align JaC cyc N ↔ VICE cyc N+1) at a matched FLI prefetch row
+BEFORE patching. Pattern this session: every confident single-cause patch (left-
+border, gbuf, dmli) was confounded — only careful per-physical-cycle verification
+holds. Trace tooling ready (idle/visEn in both).

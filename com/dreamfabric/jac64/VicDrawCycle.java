@@ -400,6 +400,8 @@ public final class VicDrawCycle {
       .append(" vbuf=$").append(Integer.toHexString(vbufReg))
       .append(" cbuf=$").append(Integer.toHexString(cbufReg))
       .append(" dmli=").append(dmli)
+      .append(" idle=").append(idleState ? 1 : 0)
+      .append(" visEn=").append((cycleFlags & VIS_EN_M) != 0 ? 1 : 0)
       .append(" vc=").append(traceVc)
       .append(" d016=$").append(Integer.toHexString(regs0x16))
       .append(" vp0=$").append(Integer.toHexString(vbufPipe0Reg))
