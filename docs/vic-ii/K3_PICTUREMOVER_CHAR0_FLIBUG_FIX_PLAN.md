@@ -328,6 +328,213 @@ boot), so validate the picture-mover STATISTICALLY (many fpsCapture frames,
 left-edge gray/garbage must drop) + rely on the deterministic suite (colorfetchbug
 /fldscroll/blackmail/fetchsplit) as the hard regression gate.
 
+## 0h. ★★★ 2026-06-24 — per-physical-cycle verification: visEn/dmli ALIGNED; gray is the vbuf/gbuf PIPELINE-PHASE at the border edge (leading-g-fetch hypothesis TESTED → no-op)
+
+Did the §0g per-physical-cycle verification at $ee (JaC deterministic clk 181108997,
+VICE clk 182274389+, rast $4d FLI-prefetch line). Added visEn to VICE PX-LATCH
+(this session) + VICE EV-FetchG-VICE (already existed). Aligned JaC↔VICE by the
+content anchors **vc + dmli** (mapping-independent), confirming JaC vicCycle N ≡
+VICE raster_cycle N+1.
+
+**Findings, in order of certainty:**
+1. **visEn ALIGNED, dmli ALIGNED.** JaC cyc14 (vc=119,dmli=0,visEn=1) ≡ VICE cyc15
+   (vc=119,dmli=0,visEn=1). §0e/0g concerns (dmli, draw-vs-fetch visEn timing) are
+   CLOSED — both aligned by content.
+2. **The gray is a GBUF (g-access) divergence at dmli=0 and dmli=1.** At the left
+   edge VICE gbuf=0 (→ background $21); JaC gbuf=non-zero ($42 stale at dmli=0,
+   $13 at dmli=1) (→ foreground gray/$f). Both in MC-bitmap. Confirmed §0c.
+3. **EXACT mechanism (EV-FetchG addr sequences, $4d):**
+   - VICE g-fetch order: `$63b2`(0), `$63ba`($13), `$63c2`(0), … — vmli=0 @rc15
+     reads **vc=118 → $63b2 → 0**.
+   - JaC  g-fetch order: `$63ba`($13), `$63c2`(0), … — col0 @cyc15 reads
+     **vc=119 → $63ba → $13**.
+   ⇒ **JaC's 40 g-fetches are shifted ONE CELL LATE: they cover VICE's vmli 1..40
+   (vc 119..158) and MISS VICE's leading vmli=0 (vc 118, $63b2=0)**, adding a
+   harmless extra cell at the right (vmli≥40 dropped). The leftmost displayed cell
+   (dmli=0) therefore shows the skipped cell's right-neighbour ($13) = gray, where
+   VICE shows the real leading cell (0) = background.
+4. **Why static screens are immune / why it's FLI-only:** the missing leading
+   g-fetch leaves dmli=0's gbuf STALE from the previous line. On a static screen
+   the leading cell's content is identical line-to-line, so stale==correct (no
+   visible bug). FLI changes rc/content per line, so the stale leading cell is
+   wrong → the K3 left-edge gray. Also explains why fetchsplit's bmmVc tuning
+   (`bmmVcFetchFix`, vc-1) never exposed it.
+
+**LEADING-G-FETCH FIX TESTED → NO-OP (0 cells). Hypothesis (3) was the wrong layer.**
+Implemented `jac64.fliLeadingGfetch` (extra g-fetch at vicCycle 14 so dmli=0 reads
+VICE's leading cell). It DID make JaC's gbuf FEED match VICE cell-for-cell at $4d
+(cyc14 gbuf $42→0, and the whole feed JaC cyc14=0,15=$13,16=0 ≡ VICE cyc15=0,
+16=$13,17=0). BUT the rendered PNG was **byte-identical (0/8000 cells)** — the gray
+SURVIVED. Reverted (kept only the VICE visEn tooling). Lesson re-confirmed: a
+VICE-faithful sub-fix that doesn't move pixels is the wrong layer.
+
+**WHY the no-op (deeper, corrected root):** The gray at the displayed left edge is
+NOT the missing leading fetch. Both emus g-fetch `$63ba=$13` for the vc≈119 cell.
+The gray = JaC RENDERS `$13`'s bits as foreground over **vbuf=$ff** (→ `$f` gray)
++ **cbuf=$c** at the leftmost VISIBLE pixels (cyc18, after the 38-col border opens
+at cyc17 + xscroll=7), where VICE at the content-aligned position emits background
+`$21` / black `$0` (vbuf there = `$0`, real-fetched). So the divergence is the
+**relative PHASE between (a) the gbuf shift-register content, (b) the vbuf/cbuf
+matrix value, and (c) the border-flop reveal** at the FLI left edge — i.e. the
+deep **vmli/dmli/vbuf pipeline-phase** (the same wall as `vmliUnified` / §0e),
+NOT a single missing fetch. Specifically: at the first VISIBLE cell, JaC's vbuf is
+still the `$ff` FLI-prefetch byte while VICE's is the real `$0` — so the gbuf bits
+that do appear paint `$ff`'s `$f` nibble (gray) instead of `$0` (black/invisible).
+
+**NEXT (do NOT patch on confidence — the last 4 hypotheses all confounded):** pin,
+per physical cycle at $4d, which (vc-cell, pipe-stage) supplies the vbuf/cbuf AND
+the gbuf for the FIRST border-revealed pixel (cyc18.px? at xscroll7), in BOTH emus.
+The fix must make JaC's vbuf at that pixel be VICE's `$0` (real) not `$ff` (prefetch)
+— i.e. it is a c-access prefetch-EXTENT / vbuf-pipe-phase issue at the border edge,
+likely only addressable by the vmli c-access pipeline refactor (§9), validated by
+the 139-test suite + colorfetchbug==48 as the hard gate.
+
+Trace tooling added this session: visEn in VICE PX-LATCH (vicii-draw-cycle.c). The
+`fliLeadingGfetch` flag was reverted (no-op).
+
+### 0h continued — PNG ground-truth + flag refutations (2026-06-24 cont.)
+
+Stopped trusting internal vc/vmli labels (they mislead) and measured the FINAL
+rendered PNGs (JaC deterministic $ee @181108997 vs VICE @182274389). Both 384px
+wide. Left-edge-x histogram (first non-black px per row):
+- **JaC: 132 rows have content starting at x=39** (a full-height strip), and the
+  strip is a full **8px char (x39–46)**.
+- **VICE: NO rows start at x=39** (earliest ≥41, picture body ≥52); x39–46 is
+  black/border on every picture row.
+⇒ The gray is **one extra leftmost CHAR** that JaC displays and VICE does not.
+
+**Refuted by direct test (PNG unchanged / strip still present):**
+- `fliLeadingGfetch=true` → 0/8000 cell change (no-op).
+- `bmmVcExtraShift=1` (g-fetch vc−2) → shifts the WHOLE bitmap one cell (66% of
+  cells change) and the gray just MOVES to the next cycle — not a uniform vc error.
+- `vmliCol0Backfill=false` → strip persists (149 rows). NOT the c-access backfill.
+- `vmliUnified=false` → strip persists (132 rows). NOT the unified read-index.
+
+**Mapping-resolved mechanism (the one consistent story):** JaC's leftmost DISPLAYED
+cell is **vc119** (g-fetch `$63ba`=`$13`, gbuf bits set → `$ff` vbuf paints `$f`
+gray); VICE's leftmost displayed cell is **vc120** (gbuf=0 → `$ff` stays background).
+Both leftmost cells have vbuf=`$ff` (prefetch); the ONLY difference is the gbuf
+(content) of the cell that lands at the first border-revealed pixel: JaC is one
+content-cell EARLIER than VICE. No single existing flag moves this boundary — it is
+the relative phase between (gbuf shift-reg) ↔ (border-flop reveal at csel=0/xscroll=7)
+↔ (the FLI per-line vc/rc), i.e. the genuine vmli/dmli/vc left-edge alignment that
+needs the c-access pipeline refactor (§9), NOT a targeted patch. This is the 5th+
+single-cause hypothesis disproven by measurement — the discipline holds: the K3
+left-edge is NOT a one-liner; it co-resolves with the §9 vmli pipeline refactor.
+
+**For the §9 refactor, the precise acceptance test is now concrete:** JaC's leftmost
+displayed cell on FLI lines must be vc120 (gbuf 0), not vc119 — i.e. the strip at
+PNG x39–46 must go black, matching VICE, while colorfetchbug stays 48 and the
+139-test suite is green.
+
+### 0h continued (2) — PIXEL-LEVEL ROOT: gbuf/vbuf pipes pair OFF-BY-ONE (2026-06-24)
+
+Added `vbufReg`/`cbufReg`/`dmli` to BOTH PX-LATCH traces (JaC VicDrawCycle.pxLatchTrace
++ VICE vicii-draw-cycle.c) and compared the gbuf SHIFT REGISTER pixel-by-pixel at
+$ee rast $4d. Decisive:
+- **The gbuf shift register is BYTE-IDENTICAL** JaC↔VICE: same sequence
+  `$26,$4c,$98,$30,$60,$c0,$80,$0` (JaC ~6px ahead in cyc.pix, but identical values).
+  ⇒ the g-access is NOT the bug.
+- **Aligning on gbuf=`$98` (same bitmap cell, both dmli=3):**
+  JaC `vbufReg=$ff cbufReg=$c → emitted $f` (gray); VICE `vbufReg=$0 cbufReg=$0 →
+  emitted $0` (black). **Same gbuf cell, different vbuf.** JaC pairs the content
+  gbuf with the PREVIOUS cell's `$ff` prefetch vbuf; VICE pairs it with the real
+  `$0`. ⇒ JaC's **vbuf pipe is one cell BEHIND its gbuf pipe** vs VICE.
+
+**Two targeted fixes implemented + TESTED + REVERTED (both wrong layer):**
+1. `fliPrefetchBackfillDec` — decrement prefetchCycles when the col0 backfill
+   double-writes (it skips one VICE per-cell pc decrement). This DID make the
+   c-access VICE-faithful (col3 became real `$0` not `$ff` prefetch, prefetch extent
+   3 not 4 — verified in EV-FetchC). BUT: (a) K3 PNG **unchanged** (0/8000 — the
+   displayed cell reads a piped index the extent-fix doesn't touch), and (b) it
+   **REGRESSED blackmail-ee by 160 cells** (blackmail is currently PERFECT vs
+   real-HW). So the prefetch EXTENT is already correct as-is; changing it is a pure
+   regression. REVERTED.
+2. `fliLeadingGfetch` / `bmmVcExtraShift` (earlier) — also no-op / shifts whole
+   bitmap. REVERTED.
+
+**Conclusion (pixel-confirmed):** the K3 gray is NEITHER g-access NOR the c-access
+prefetch-extent. It is the **relative PHASE between the gbuf pipe and the vbuf pipe**
+— in JaC the vbuf the renderer pairs with a given gbuf cell is one cell stale
+(the prefetch `$ff` instead of the real `$0`). The gbuf/vbuf load together at
+i==xscroll (faithful), so the drift is UPSTREAM: the g-fetch index (`vVmli-1`) and
+the self-incrementing display `dmli` (drives vbuf[dmli]) are not in the VICE phase
+through the FLI prefetch. Fixing this is exactly the §9 vmli/dmli unification and is
+**entangled with blackmail** (the extent is shared) — confirming it is NOT a
+targeted patch. Trace tooling now in place (vbufReg in both PX-LATCH) makes the
+acceptance test directly measurable: at gbuf=`$98`/dmli=3, JaC's vbufReg must become
+`$0` (matching VICE) WITHOUT moving blackmail off 0.
+
+### 0h continued (3) — TRUE ROOT: FLI line vc is +2 vs VICE (normal lines +1) (2026-06-24)
+
+Final round of measurement + disproven knobs. The pipe is internally CONSISTENT;
+the cells are at the wrong vc.
+
+- `dmliFromGfetch` (drive display dmli = g-fetch index vVmli-1): **0/8000 no-op** →
+  proves the vbuf read index ALREADY equals the g-fetch index. gbuf and vbuf are
+  read at the SAME index. So the pairing logic is fine; the INDEX→vc mapping is off.
+- Per-vc g-fetch DATA is identical JaC↔VICE (vc119=$13, vc120=0, …); JaC simply
+  never fetches VICE's leading vc118. Per-cell vbuf prefetch: JaC prefetches
+  vc119–122, VICE vc120–122. **JaC's whole FLI left edge is shifted one vc LEFT:
+  JaC's leftmost displayed cell is vc119, VICE's is vc120.**
+- Root: at $4d cyc15 JaC vc=120 / VICE vc=118 → **JaC vc is +2**; on a NORMAL
+  badline ($33) JaC vc=1 / VICE vc=0 → **JaC vc is +1**. The standard +1 is
+  compensated by `bmmVcFetchFix`=(vc-1); the EXTRA +1 on FLI late-badlines is
+  uncompensated → leftmost cell lands on vc119 (content) instead of vc120,
+  rendering FLI content where VICE shows the leading/background cell.
+- `bmmVcExtraShift=1` (vc-2 globally) cancels the extra +1 but shifts EVERY BMM
+  line (66% cells) — the extra +1 is FLI-late-badline-specific, not global.
+
+**DEFINITIVE root cause:** JaC's vc/vcbase counter is one too high specifically on
+the FLI late-badline (the same late-badline that makes colorfetchbug=48 and forces
+the col0 backfill). It is NOT g-access, NOT prefetch-extent, NOT dmli, NOT the
+pipe-pairing — all internally consistent. It is the **vc/vcbase phase on the late
+badline**. The fix is to make JaC's vc on the FLI late-badline match VICE's (one
+lower), which is the §9 vmli/vc/vcbase unification — and it MUST stay neutral on
+normal lines (where the +1 is already compensated) and on blackmail (different
+badline phase). This unifies the K3 left-edge with the colorfetchbug-48 residual:
+they are the same FLI-late-badline vc-phase bug.
+
+**Knobs disproven this session (all measured):** fliLeadingGfetch (no-op),
+bmmVcExtraShift (shifts all), fliPrefetchBackfillDec ungated (regresses blackmail
+-160), fliPrefetchBackfillDec gated pc>=3 (neutral but K3 no-op), vmliCol0Backfill
+off (worse, 149), vmliUnified off (no change), dmliFromGfetch (no-op). 7 dead ends.
+All reverted; only the vbufReg PX-LATCH trace addition kept.
+
+### 0h continued (4) — EXACT PINPOINT: vcbase=119 (JaC) vs 120 (VICE) on the FLI late-badline
+
+JaC EV-State at $ee $4d (clk 181095591+):
+```
+cyc12 vc=159 vmli=40 rc=2 vcbase=119   (end of $4c)
+cyc13 vc=119 vmli=0  rc=2 vcbase=119   (vc reset to vcbase)
+cyc14 vc=119 vmli=0  rc=2 vcbase=119 bad=0
+cyc15 vc=120 vmli=0  rc=2 vcbase=119 bad=1   (badline rises LATE here)
+cyc16 vc=121 vmli=0  ...
+cyc17 vc=122 vmli=1
+cyc18 vc=123 vmli=2
+```
+VICE vcbase reconstructed from FetchC (matrix vmli0 reads vc=vcbase): **VICE vcbase=120**.
+JaC **vcbase=119** → one too LOW. So JaC's leftmost matrix cell = vc119, VICE's = vc120.
+
+(VICE's own EV-State is raster-gated to $30–$40, so it doesn't cover $4d directly;
+widen that window in vicii-cycle.c + rebuild to confirm vcbase=120 live. The FetchC
+reconstruction already establishes it.)
+
+Also note: JaC's `vc` increments every cycle from cyc14 while `vmli` (old counter)
+lags to cyc17 — vc and vmli are decoupled through the late badline (vc = vcbase + ?,
+vmli separate). The g-fetch/c-access use vVmli = vc-vcbase, so they ride the vc that
+started one too low.
+
+**THE FIX (designed, for §9):** make JaC's vcbase capture on the FLI late-badline
+match VICE (one higher, 120 not 119). vcbase is set in the update_rc/vicIdleState
+path (rc==7 → vcbase=vc). On the FLI single-line char rows the late $D011 badline
+makes JaC capture vcbase one cycle early/low. The fix MUST be neutral on normal
+lines (vcbase already correct there) and on blackmail (different badline phase) —
+gate on the late-badline condition and validate with: K3 PNG x39–46 → black,
+colorfetchbug ≤ 48 (likely IMPROVES — same root), blackmail/fldscroll/fetchsplit
+unchanged, 139-test green. This is the precise, measurable §9 target; it is a
+vcbase-capture change, NOT any of the 7 knobs above.
+
 ## 0g. 2026-06-24 — dmli "+1" was a CYC-NUMBERING ARTIFACT; real lead = draw-vs-fetch phase
 
 Added idle+visEn to EV-DrawCycle, idle to PX-LATCH; per-cycle compare at rast$33.

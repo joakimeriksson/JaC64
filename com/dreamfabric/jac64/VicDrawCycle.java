@@ -501,6 +501,9 @@ public final class VicDrawCycle {
         + " vmode16=$" + Integer.toHexString(vmode16Pipe & 0xff)
         + " vmode16p2=$" + Integer.toHexString(vmode16Pipe2 & 0xff)
         + " gbufReg=$" + Integer.toHexString(gbufReg & 0xff)
+        + " vbufReg=$" + Integer.toHexString(vbufReg & 0xff)
+        + " cbufReg=$" + Integer.toHexString(cbufReg & 0xff)
+        + " dmli=" + dmli
         + " mcFlop=" + gbufMcFlop
         + " emitted=$" + Integer.toHexString(emitted & 0xff));
   }
