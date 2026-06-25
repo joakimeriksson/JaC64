@@ -525,6 +525,97 @@ lags to cyc17 — vc and vmli are decoupled through the late badline (vc = vcbas
 vmli separate). The g-fetch/c-access use vVmli = vc-vcbase, so they ride the vc that
 started one too low.
 
+### 0h continued (7) — SOURCE vc++ fix regresses screenpos + colorfetchbug (the wall) (2026-06-25)
+
+Took on the source fix: do the skipped cyc15 vc++ at its source (jac64.fliVcCyc15Inc)
+so vc counts 40 consistently every frame (no scroll-toggle).
+- STATIC: fully fixes $ee (132→7, vcbase matches VICE 80/120/160/200) — same as the
+  capture-hack but at the source.
+- STABLE: frame-to-frame same-scroll instability unchanged (BASE avg 3788 vs FIX
+  3861, +2%) — does NOT introduce the cell-jump flicker the capture-hack did.
+- SCROLL-GATE: 12425→11055 (cyc15-only) / →10457 (broadened to cyc15-54). Partial —
+  but the gate metric over-counts (the deer has legit gray fur at x39); the gray
+  bug colors specifically dropped (light-gray 149: 2074→1002).
+- ❌ REGRESSES: **screenpos +3062, colorfetchbug bitmap/main/main2/3/4 +180/203/179/
+  185/185.** The late-badline DETECTION (idle-true at the cyc15..54 vc++ check) also
+  fires at the NORMAL top-of-screen display entry (screenpos's idle→display
+  transition) and alters colorfetchbug's tuned FLI rendering (currently 48). So the
+  vc++ change is NOT FLI-mover-specific.
+
+⇒ DEFINITIVE WALL: the vc COUNT is coupled to the tuning of screenpos (the vc++
+order is the documented screenpos fix), colorfetchbug (FLI prefetch, =48), and
+blackmail (=0, real-HW). Every targeted vc fix breaks one of them OR the live
+scroll. The two viable-looking fixes both fail:
+  - capture-time vcbase +1: correct value, but toggles with scroll → live flicker.
+  - source cyc15 vc++: consistent + stable, but regresses screenpos + colorfetchbug.
+The K3 left-edge can only be fixed by the COORDINATED §9 refactor that re-derives
+vc/vcbase/vmli/rc + the badline-idle timing to VICE's model and re-tunes
+screenpos+colorfetchbug+blackmail+fetchsplit TOGETHER (so the bmmVc/vc++ compensations
+become unnecessary). That is the multi-session refactor, not a flag. All experiments
+reverted to default-off; gate (k3_scroll_gray.py) + lateBadlineThisLine tracking +
+both flags (default-off) kept for that refactor.
+
+### 0h continued (6) — scroll-sweep GATE built; -1 is a single PROPAGATING capture error (2026-06-25)
+
+Built the dynamic gate the single-frame capture lacked:
+`tools/vice-compare/k3_scroll_gray.py` — runs fpsCapture over the 180–183M sweep
+(153 frames, scrolls $d4–$ef) and counts per-frame "leftmost-char gray" rows
+(x∈[39,46]) + variance. **Baseline: total_gray_rows=12425, all 153 frames gray,
+mean 81, max 156.** This is the regression gate (a good fix → ~0 across ALL frames,
+low variance; the vcbase-hack's frame-to-frame toggle would show as high variance).
+
+Using the gate, a SECOND targeted fix was tried + REVERTED:
+- `fliCaccessLateShift` (shift ONLY the c-access read +1 on lateBadline lines, leave
+  vcBase/vc propagation alone, to avoid the scroll-failure): **0/8000 no-op.** Why:
+  the -1 vcbase error is captured ONCE (at the FLI-entry $43 rc==7) and PROPAGATES
+  to every line below (each line's vc=vcBase at cyc13). The bulk "wrong colors" are
+  propagated, not per-line-late — so a per-line c-access shift (which only fires on
+  the few actually-late lines) can't touch them. The vcbase-hack changed 67% of
+  cells precisely BECAUSE it propagated; the c-access shift doesn't, so it's inert.
+
+⇒ Refined understanding: the fix MUST correct the vc COUNT at the source (the
+skipped cyc15 vc++) so vcbase is captured correctly AND consistently every frame.
+The vcbase-hack got the value right but toggled with scroll (the late-badline
+DETECTION shifts as the mover's $D011 writes move the badline timing) → flicker.
+The source cause is JaC's idle/badline clearing one cycle LATE vs VICE (so the
+cyc15 vc++ — gated on prev-cycle idle — is skipped); VICE clears idle at cyc14.
+This is the colorfetchbug §2 badline-timing root. Fixing it consistently (idle/
+badline rises at VICE's cycle on the FLI $D011 trick) makes vc count 40 always,
+vcbase correct always, no toggle — but it touches the load-bearing badline FSM, so
+it must be gated against k3_scroll_gray (→0, low variance) AND the 139-test suite
+AND a LIVE MCP scroll check. Left default-off; gate + lateBadlineThisLine tracking
+kept for the next attempt.
+
+### 0h continued (5) — vcbase fix WORKS STATICALLY, BREAKS LIVE SCROLL (2026-06-25)
+
+Implemented `jac64.fliVcbaseLateComp`: detect the skipped vicCycle-15 vc++ on the
+late badline (idle still true at the vc++ check) and add the missing increment at
+the rc==7 vcbase capture. STATIC results (.capture/krestage3_crest.prg $ee frame):
+- vcbase now matches VICE EXACTLY across the whole picture ($43–$b3, all OK; was
+  -1 from $4b down).
+- K3 gray strip 132 → 7 rows (residual: top 6 rows + 1).
+- ZERO suite regressions (A/B ON-vs-OFF = 0 on blackmail-ee/fixed, all 5
+  colorfetchbug, fldscroll, fetchsplit, screenpos, greydot, modesplit, colorsplit,
+  vicii_reg_timing). 67% of K3 cells changed = the WHOLE picture's colors
+  realigning to the correct vcbase (the "right pixels / wrong colors" the user saw
+  across the deer, not just the strip).
+
+**BUT — LIVE (MCP, full demo scrolling) REGRESSED: scroll failure + flicker, and
+the leftmost gray PERSISTS.** Root of the regression: the capture-time +1 is NOT
+address-neutral (vcbase sets the NEXT line's vc start), and worse, the late-badline
+trigger (cyc15 vc++ skip) MOVES as the picture-mover scrolls (its per-line $D011
+writes shift the badline timing), so the +1 toggles on/off frame-to-frame → the
+picture jumps one cell per frame = scroll failure. REVERTED to default OFF (jar
+rebuilt; baseline restored 0/8000).
+
+⇒ The vcbase=119-vs-120 root is CONFIRMED, but a capture-time patch can't fix it.
+The real fix must make the vc COUNTING correct CONSISTENTLY across all scroll
+states — i.e. don't skip the cyc15 vc++ on the late badline in the first place
+(so vc is right throughout the line AND the addresses follow), which is the §9
+vc/vmli unification, validated DYNAMICALLY (live scroll must stay smooth) not just
+on one captured frame. Add a deterministic multi-frame/scroll-sweep gate before
+the next attempt — single-frame capture is insufficient (it passed; live failed).
+
 **THE FIX (designed, for §9):** make JaC's vcbase capture on the FLI late-badline
 match VICE (one higher, 120 not 119). vcbase is set in the update_rc/vicIdleState
 path (rc==7 → vcbase=vc). On the FLI single-line char rows the late $D011 badline

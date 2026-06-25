@@ -266,6 +266,21 @@ public class C64Screen extends ExtChip implements Observer {
   int rc = 0;
   int vmli = 0;
 
+  // ===== S1 SHADOW COUNTER (jac64.viceVcModel, default OFF) =====
+  // VICE viciisc vicii_cycle counter model, ported VERBATIM, run as a SHADOW
+  // alongside the legacy fields (no render effect until later stages). Goal:
+  // prove (cycle_align vs VICE) that ONE coherent counter set matches VICE
+  // per-(rast,cyc) on BOTH normal lines (screenpos) AND FLI late-badlines
+  // (colorfetchbug/K3) — eliminating the legacy vc/vmli/vVmli/vcBase
+  // compensations. Order mirrors vicii-cycle.c: phi1 g-fetch increment (gated
+  // on PREVIOUS-cycle idle) -> check_badline -> update_vc -> update_rc.
+  // See VC_TIMING_UNIFICATION_REFACTOR_PLAN.md. Shadow vars suffixed `2`.
+  int vc2 = 0;
+  int vcbase2 = 0;
+  int rc2 = 0;
+  int vmli2 = 0;
+  boolean idle2 = true;
+
   // S1 of the FLI c-access vmli-pipeline refactor (jac64.vmliCAccess):
   // a clean VICE-faithful matrix-fetch index locked to vc (vVmli = vc-vcBase),
   // advancing in phase with vc every display cycle — unlike the legacy `vmli`
@@ -561,6 +576,11 @@ public class C64Screen extends ExtChip implements Observer {
   // the case-15 fetch is gated out (badLine set late), so this stays false and
   // the case-16 FLI leading-prefetch backfill fills the stale cols 0-1.
   private boolean col0FetchedThisLine = false;
+
+  // True if this raster's badline rose LATE (idle still true at the rise),
+  // so the vicCycle-15 vc++ was skipped. The vcbase capture (vicCycle 57)
+  // compensates so vcbase matches VICE. See handleBadLineStart.
+  private boolean lateBadlineThisLine = false;
 
   // Lines since char0 (vmli=0) was last REAL-fetched on a full/early badline.
   // Distinguishes continuous-FLI (colorfetchbug: char0 never real-fetched →
@@ -1157,7 +1177,43 @@ public class C64Screen extends ExtChip implements Observer {
       Boolean.parseBoolean(
           System.getProperty("jac64.vicBadlineFsm", "true"));
 
+  static final boolean VICE_VC_MODEL =
+      Boolean.getBoolean("jac64.viceVcModel");
+
+  // S1 shadow counter — VICE viciisc/vicii-cycle.c order, verbatim. Runs each
+  // cycle when jac64.viceVcModel; updates the `2`-suffixed shadow vars only
+  // (no render effect). Validated by cycle_align (EV-State emits the shadow
+  // when the flag is on). See VC_TIMING_UNIFICATION_REFACTOR_PLAN.md S1.
+  private void updateShadowCounters(int vicCycle) {
+    if (!VICE_VC_MODEL) return;
+    final int cf = VicDrawCycle.cycleFlagsFor(vicCycle);
+    // 1. Phi1 graphics fetch increment (vicii_fetch_graphics: vmli++; vc++ AFTER
+    //    read). Gated on PREVIOUS-cycle idle2 (fetch runs before this cycle's
+    //    check_badline in vicii_cycle), and only on FETCH_G cycles when !idle.
+    if ((cf & VicDrawCycle.PHI1_TYPE_M) == VicDrawCycle.PHI1_FETCH_G && !idle2) {
+      vmli2++;
+      vc2 = (vc2 + 1) & 0x3ff;
+    }
+    // 2. check_badline (vicii-cycle.c:53-62): bad && set idle=0.
+    final boolean bad2 = displayEnabled
+        && (vbeam & 7) == vScroll && vbeam >= 0x30 && vbeam <= 0xf7;
+    if (bad2) idle2 = false;
+    // 3. update_vc (PAL cyc14): vc=vcbase; vmli=0; if bad: rc=0.
+    if ((cf & VicDrawCycle.UPDATE_VC_M) != 0) {
+      vc2 = vcbase2;
+      vmli2 = 0;
+      if (bad2) rc2 = 0;
+    }
+    // 4. update_rc (PAL cyc58): if rc==7 {idle=1; vcbase=vc;}
+    //    if (!idle||bad) {rc=(rc+1)&7; idle=0;}.
+    if ((cf & VicDrawCycle.UPDATE_RC_M) != 0) {
+      if (rc2 == 7) { idle2 = true; vcbase2 = vc2; }
+      if (!idle2 || bad2) { rc2 = (rc2 + 1) & 7; idle2 = false; }
+    }
+  }
+
   private void updateVicStateVic(int vicCycle) {
+    updateShadowCounters(vicCycle);
     if (Boolean.getBoolean("jac64.traceBadFsm")
         && Integer.getInteger("jac64.traceBadFsmRastLo", 48) <= vbeam
         && vbeam <= Integer.getInteger("jac64.traceBadFsmRastHi", 52)
@@ -1191,9 +1247,16 @@ public class C64Screen extends ExtChip implements Observer {
     // increment vc one cycle earlier than VICE, accumulating off-by-one
     // vcBase/rc state by the time the screenpos test reaches its first
     // visible line (line 51).
+    boolean vcIncSkippedWhileIdle = false;
     if (vicCycle >= 15 && vicCycle <= 54 && !vicIdleState) {
       vc = (vc + 1) & 0x3ff;
       vVmli++;  // S1: vmli locked in phase with vc (matrix-fetch index)
+    } else if (vicCycle >= 15 && vicCycle <= 54 && vicIdleState) {
+      // The vc++ was skipped because idle was still true. If a
+      // badline rises THIS cycle (below), this is a LATE badline — VICE's
+      // cyc15 vc++ runs (idle already false) but JaC's didn't, so vc ends one
+      // low and the rc==7 vcbase capture propagates -1 (K3 left-edge gray).
+      vcIncSkippedWhileIdle = true;
     }
 
     // VICE vicii-cycle.c:605-607 — check_badline every cycle while
@@ -1208,6 +1271,22 @@ public class C64Screen extends ExtChip implements Observer {
       // clear is unnecessary.
       if (badLine) {
         vicIdleState = false;
+        // Late badline at cyc15: the vc++ was skipped (idle still true at the
+        // vc++ check above). VICE clears idle a cycle earlier so its cyc15 vc++
+        // runs (vc counts 40). Do the missing increment HERE, at the source, so
+        // vc counts 40 consistently every frame (no scroll-dependent toggle)
+        // and the rc==7 vcbase capture is naturally correct. SOURCE fix — vc is
+        // bumped before this line's c/g-access, mirroring VICE. Validate against
+        // the scroll-gate + fetchsplit (bmmVc-sensitive) + suite + live.
+        // jac64.fliVcCyc15Inc.
+        if (vcIncSkippedWhileIdle
+            && Boolean.parseBoolean(System.getProperty("jac64.fliVcCyc15Inc", "false"))) {
+          vc = (vc + 1) & 0x3ff;
+          vVmli++;
+        }
+        if (vcIncSkippedWhileIdle) {
+          lateBadlineThisLine = true;
+        }
       }
     } else {
       badLine = false;
@@ -1240,6 +1319,7 @@ public class C64Screen extends ExtChip implements Observer {
       vmli = 0;
       vVmli = 0;  // S1: reset matrix-fetch index with vc (VICE update_vc)
       if (badLine) rc = 0;
+      lateBadlineThisLine = false;  // reset before this line's badline rise
     }
 
     // VICE vicii-cycle.c:629-640 — update_rc at VICII_PAL_CYCLE(58) =
@@ -1254,7 +1334,16 @@ public class C64Screen extends ExtChip implements Observer {
       // parallel implementations of exactly this (gfxVisible == !idle).
       if (rc == 7) {
         vicIdleState = true;
-        vcBase = vc;
+        // Late-badline vc++ compensation (see handleBadLineStart): on a line
+        // whose badline rose late, JaC skipped the vicCycle-15 vc++, so vc is
+        // one low. Add it back HERE (vcbase's only consumer) so vcbase matches
+        // VICE and the FLI left edge stops shifting one cell. Address-neutral.
+        int vcCap = vc;
+        if (lateBadlineThisLine
+            && Boolean.parseBoolean(System.getProperty("jac64.fliVcbaseLateComp", "false"))) {
+          vcCap = (vc + 1) & 0x3ff;
+        }
+        vcBase = vcCap;
       }
       if (!vicIdleState || badLine) {
         rc = (rc + 1) & 7;
@@ -2981,6 +3070,8 @@ public class C64Screen extends ExtChip implements Observer {
       }
       if (vbeam == 0) {
         frame++;
+        // S1 shadow: VICE vicii_cycle_start_of_frame resets vcbase=0, vc=0.
+        if (VICE_VC_MODEL) { vc2 = 0; vcbase2 = 0; }
         // VICE vicii-lightpen.c semantics: light_pen.triggered cleared
         // at start of frame so a new /LP trigger can fire next frame.
         lpTriggered = false;
@@ -3104,12 +3195,19 @@ public class C64Screen extends ExtChip implements Observer {
         try { vicStateOut = new java.io.PrintStream(path); }
         catch (Exception e) { vicStateOut = System.err; }
       }
+      // When the shadow counter is active, trace IT (so cycle_align validates
+      // the VICE-faithful model, not the legacy fields). S1.
+      int tVc = VICE_VC_MODEL ? vc2 : vc;
+      int tVmli = VICE_VC_MODEL ? vmli2 : vmli;
+      int tRc = VICE_VC_MODEL ? rc2 : rc;
+      int tVcbase = VICE_VC_MODEL ? vcbase2 : vcBase;
+      int tIdle = VICE_VC_MODEL ? (idle2 ? 1 : 0) : (vicIdleState ? 1 : 0);
       vicStateOut.println("EV-State clk=" + cycles
           + " rast=$" + Integer.toHexString(vbeam)
           + " cyc=" + vicCycle
-          + " vc=" + vc + " vmli=" + vmli
-          + " rc=" + rc + " vcbase=" + vcBase
-          + " idle=" + (vicIdleState ? 1 : 0)
+          + " vc=" + tVc + " vmli=" + tVmli
+          + " rc=" + tRc + " vcbase=" + tVcbase
+          + " idle=" + tIdle
           + " bad=" + (badLine ? 1 : 0)
           + " abl=" + (displayEnabled ? 1 : 0)
           + " ys=" + vScroll);
