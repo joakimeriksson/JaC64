@@ -129,6 +129,31 @@ the flag is on.
 compensations could not. The refactor premise is PROVEN; S2–S4 are now mechanical
 switches of the fetches onto vc2/vmli2 with hard A/B gates.
 
+### ⚠️ S1 COROLLARY (2026-06-25) — K3 has a SECOND root: $D011 write-phase
+
+While starting S2, found the shadow counter (validated 0-div on colorfetchbug +
+screenpos) gives **vcbase2=119 on K3 (VICE=120)** — i.e. it does NOT fix K3 by
+itself. Cause: the shadow's check_badline reads JaC's `vScroll` (ysmooth), and on
+K3 **JaC's ysmooth updates ONE CYCLE LATE** vs VICE: at $4d, JaC ys=4@cyc14→5@cyc15,
+but VICE has `regs[0x11]=$35` (ys=5) already @cyc14. So the shadow's badline rises a
+cycle late → the cyc14 vc++ context is wrong → vcbase captured one low. This is the
+**$D011→register write-phase** (CPU/VIC sub-cycle), NOT the counter model.
+
+**colorfetchbug does NOT have this** (its $D011 write lands on-time → shadow = VICE,
+0-div). So:
+- The vc unification (S1–S6) FIXES the FLI-vc-phase class: **colorfetchbug** and any
+  FLI test whose $D011 timing is already correct. High value on its own.
+- **K3 specifically needs ALSO the $D011 write-phase fix** (ysmooth one cycle
+  earlier, matching VICE `regs[0x11]` @ the write cycle). That is the documented
+  CPU sub-cycle floor (`project_cpu_subcycle_floor`), a SEPARATE refactor.
+
+⇒ Two independent fixes compose for K3. Do the vc unification first (it's validated
+and broadly valuable); treat the $D011 write-phase as a second workstream. Re-scope:
+the vc refactor's K3 acceptance is downgraded to "colorfetchbug-family fixed +
+K3 no WORSE"; full K3 left-edge needs both. Verify the $D011-timing hypothesis next
+by tracing the K3 FLI `$D011` write cycle (CPU PC trace) vs VICE and finding where
+JaC's vScroll commit lags by one.
+
 ### S2 — c-access on the unified counter
 Switch `writeCAccess` to `screen[vc2]` / `colorRAM[vc2]` indexed by `vmli2`
 (remove `vcBase+col`, the col0 backfill, fldPrefetchShift). prefetch decision from
