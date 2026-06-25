@@ -129,7 +129,30 @@ the flag is on.
 compensations could not. The refactor premise is PROVEN; S2–S4 are now mechanical
 switches of the fetches onto vc2/vmli2 with hard A/B gates.
 
-### ⚠️ S1 COROLLARY (2026-06-25) — K3 has a SECOND root: $D011 write-phase
+### ⛔ B ABANDONED (2026-06-25) — VICE's K3 run is NON-DETERMINISTIC (VSP bug)
+
+The "$D011 write-phase / vcbase 119-vs-120" finding (S1 corollary below) was chased
+into B (verify+fix the ysmooth timing). It collapsed: **two identical VICE runs of
+Krestage 3 give DIFFERENT $4d cyc14 state** (run1 vcbase=120/ys=5; run2
+vcbase=119/ys=4). VICE emulates the **VSP bug with randomness** (lib_unsigned_rand;
+"VSP Bug: memory corruption" warnings) and Krestage 3 triggers it, so VICE's
+per-cycle K3 state JITTERS run-to-run. ⇒ Per-cycle K3 comparison vs a VICE run is
+UNRELIABLE; the "vcbase 119 vs 120" was VICE's own RNG jitter, NOT a JaC bug. JaC's
+deterministic vcbase=119 is INSIDE VICE's range. So:
+- **B (ysmooth write-phase) is UNFOUNDED — abandoned.** No CPU sub-cycle fix needed
+  for this.
+- **K3 cannot be diagnosed per-cycle vs VICE.** Use deterministic proxies
+  (colorfetchbug = the same FLI-prefetch mechanism, fully deterministic) + the
+  VISUAL scroll-gate. The K3-plan §0h vcbase root is RETRACTED as VICE-jitter-
+  confounded; the real K3 gray is the FLI-prefetch-cell RENDER (original §0c class),
+  to be addressed via the deterministic colorfetchbug path (A).
+- Tooling kept: VICE EV-State now clk-gated (JAC64_TRACE_CLK_MIN).
+
+⇒ PIVOT TO A. The vc unification is validated on DETERMINISTIC tests (colorfetchbug
++ screenpos, 0-div) and is the trustworthy path. Drive it by colorfetchbug (≤48,
+ideally lower) + the suite; treat K3 as a visual/scroll-gate secondary check only.
+
+### ⚠️ S1 COROLLARY (2026-06-25) [RETRACTED — see B ABANDONED above] — K3 has a SECOND root: $D011 write-phase
 
 While starting S2, found the shadow counter (validated 0-div on colorfetchbug +
 screenpos) gives **vcbase2=119 on K3 (VICE=120)** — i.e. it does NOT fix K3 by
