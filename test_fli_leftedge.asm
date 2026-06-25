@@ -25,6 +25,12 @@ start
         sei
         lda #$35            ; KERNAL+BASIC off, I/O on (RAM under for fill)
         sta $01
+        ; disable CIA timer IRQs (else a CIA IRQ derails our raster handler)
+        lda #$7f
+        sta $dc0d
+        sta $dd0d
+        lda $dc0d           ; ack any pending
+        lda $dd0d
 
         ; VIC bank 1 ($4000-$7fff): DD00 bits %10 (inverted) = bank 1
         lda DD02

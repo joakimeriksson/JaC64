@@ -3,6 +3,26 @@
 Status: CHARACTERIZED, not safely fixable now (see §FINAL 2026-06-25).
 Last updated: 2026-06-25.
 
+## §REPRO-2 2026-06-25 — the test does NOT run identically in both emus (INVALID compare)
+
+Tried the CPU-cycle diff (option 2). It exposed why the repro is invalid: the
+hand-written test does NOT execute the same in JaC and VICE.
+- JaC (via detSysJump → SYS $810): runs the FLI loop ($08c0) ~once/frame, ~100 IRQ
+  entries / 2M cyc. Good.
+- VICE (via autostart RUN): the raster IRQ RE-FIRES constantly — $08be (ldx #0 after
+  the $d019 ack) executes 210,599× / 2M cyc, the FLI loop never completes. Even after
+  disabling CIA IRQs, VICE IRQ-thrashes and never reaches a stable FLI.
+⇒ The "JaC green vs VICE orange" left-edge difference was JaC running the FLI while
+VICE ran a thrashing/partial display — DIFFERENT code paths, not an emulator-accuracy
+comparison. The repro is INVALID.
+
+**Honest endpoint:** a clean repro needs a hand-written FLI that (a) runs IDENTICALLY
+under both JaC's detSysJump and VICE's autostart, (b) is cycle-STABLE (raster-locked),
+and (c) doesn't IRQ-thrash. That is a real 6502 sub-project (stable raster IRQ +
+cycle-exact FLI kernel + robust IRQ ack), not yet achieved. The CPU/BA-timing lead
+(§REPRO) remains plausible but unproven without such a repro. test_fli_leftedge.prg
+is kept as a JaC-side FLI exerciser, NOT a valid JaC-vs-VICE reference.
+
 ## §REPRO 2026-06-25 — handwritten FLI test: unstable, but exposes a CPU/BA-timing lead
 
 Built `test_fli_leftedge.asm/.prg` (committed ee4fe84): MC-bitmap FLI, 38-col,
