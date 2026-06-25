@@ -765,3 +765,26 @@ gate would be a hand-written FLI tuned to lock in BOTH JaC and VICE (stable +
 diverging) so only the render differs; test_fli_leftedge locks in JaC only and is the
 starting point. Until the sub-cycle floor is addressed, the K3 left-edge is a known,
 characterized, low-ROI residual.
+
+## §REPRO-5 2026-06-25 — DEFINITIVE: JaC == VICE on the deterministic FLI (no fixable target)
+
+Full per-iteration CPU-cycle diff of the FLI loop, JaC vs VICE: **ZERO divergence
+across all 189 iterations (X=0..188, every delta identical).** JaC's CPU/BA/VIC
+timing matches VICE exactly on this test — no timing bug.
+
+The render "difference" (JaC green/brown stripes vs VICE pink) is NOT a bug:
+- It's the FLI-bug cell color = the prefetch BUS BYTE = memory[frozen-PC-during-BA-low]
+  & 0xf. That PC depends on the loop PHASE, which both emus vary frame-to-frame
+  (VICE's PX-LATCH over a frame: 48024 cells, none non-gray in the sampled frame —
+  its stripes are phase-dependent too). The captures caught different phases.
+- The gray field is pure PALETTE (JaC color-12 RGB 108 vs VICE 148; same index).
+- Counts matched exactly (gray 7836=7836, black 180=180, accent 1344=1344) = same
+  data; only the phase-dependent stripe color differed.
+
+⇒ Where it can be measured deterministically, JaC ALREADY equals VICE. The actual
+K3 left-edge difference is below deterministic reproducibility: the closest
+deterministic FLI (this test) shows JaC==VICE, and K3 itself renders
+NON-DETERMINISTICALLY in VICE (VSP bug). There is no stable, verifiable target to
+fix toward — "100% VICE" is undefined for a bug VICE doesn't render the same twice.
+The K3 left-edge is a CLOSED investigation: characterized, real visually, but not a
+fixable/verifiable defect with current tooling.
