@@ -3,6 +3,30 @@
 Status: CHARACTERIZED, not safely fixable now (see §FINAL 2026-06-25).
 Last updated: 2026-06-25.
 
+## §REPRO 2026-06-25 — handwritten FLI test: unstable, but exposes a CPU/BA-timing lead
+
+Built `test_fli_leftedge.asm/.prg` (committed ee4fe84): MC-bitmap FLI, 38-col,
+xscroll=7 (K3 config), no VSP trigger → VICE deterministic. Result + caveats:
+
+- **JaC renders green/brown garbage at the FLI left column; VICE renders a clean
+  uniform orange column.** A clear, deterministic JaC≠VICE left-edge difference (the
+  K3-class symptom). VICE is stable here (left edge identical run-to-run).
+- **BUT the hand-written FLI loop is NOT cycle-stable** — it never raster-locks
+  (at $40: VICE ys=3/rc=5/no-badline; JaC ys=7→0/rc=0/badline). The 21-cyc tight
+  loop + badline-steal ≠ 63 exactly, and it can't bootstrap the lock. So the loop
+  DRIFTS, and JaC vs VICE drift to DIFFERENT positions.
+- ⇒ The left-edge difference here is **timing-drift, not the clean render bug**.
+  K3's real picture-mover FLI IS raster-locked (it's a working demo); my unstable
+  loop is NOT representative of that stable case.
+
+**The genuine NEW LEAD:** an unstable loop with IDENTICAL CPU/BA timing would drift
+IDENTICALLY in both emus. JaC and VICE drift DIFFERENTLY ⇒ **JaC's CPU/BA cycle
+timing in tight badline loops diverges from VICE's.** The K3 left-edge may therefore
+be rooted in CPU/BA-steal cycle-timing accuracy (the documented CPU sub-cycle floor),
+NOT the VIC render counters. To pursue cleanly: either bootstrap a cycle-STABLE FLI
+(raster-locked) so only the render differs, OR do a direct per-instruction +
+per-badline CPU-cycle diff JaC-vs-VICE in the loop (deterministic via this test).
+
 ## §FINAL 2026-06-25 — conclusive characterization (many earlier roots RETRACTED)
 
 After exhaustive investigation, the reliable picture:
