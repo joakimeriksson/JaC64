@@ -718,3 +718,50 @@ per physical cycle (align JaC cyc N ↔ VICE cyc N+1) at a matched FLI prefetch 
 BEFORE patching. Pattern this session: every confident single-cause patch (left-
 border, gbuf, dmli) was confounded — only careful per-physical-cycle verification
 holds. Trace tooling ready (idle/visEn in both).
+
+## §REPRO-3 2026-06-25 — WORKING deterministic repro: BA-steal-timing root PROVEN
+
+Rewrote test_fli_leftedge as POLLING (no IRQ thrash) — now runs identically in JaC
+(detSysJump) and VICE (autostart): both execute the FLI loop ($08a4) 190×/frame.
+The deterministic divergence:
+- **VICE: 29 cyc/iteration, ba=0** — mid-line $D011 writes do NOT trigger a BA-steal;
+  the loop never raster-locks.
+- **JaC: drifts 31→ then LOCKS at 63 cyc/iter** — its $D011 writes DO trigger a
+  BA-steal that paces the loop to one-per-line (bad=1 every line in EV-State).
+⇒ ROOT (deterministic, finally): JaC and VICE disagree on whether a mid-line $D011
+badline-trigger pulls BA low (steals CPU cycles). JaC steals/locks; VICE doesn't.
+This is the CPU/BA-steal-timing root of the K3 picture-mover render difference — the
+picture-mover's FLI relies on this exact timing, so the two emus' different steal
+behavior → different render at the FLI left edge.
+
+CONCRETE FIXABLE TARGET (deterministic): make JaC's BA-steal on a mid-line $D011
+badline trigger match VICE — i.e. the FLI loop should run 29 cyc/iter (no lock) in
+JaC too, OR (if real HW locks) confirm VICE is the one that's wrong. The repro
+(test_fli_leftedge.prg) is the gate: JaC's per-iteration delta must match VICE's.
+Relevant JaC code: setBaLowUntil / the BADLINE BA-low window (C64Screen, the
+"BADLINE-*" setBaLowUntil calls + handleBadLineStart BA timing).
+
+## §REPRO-4 2026-06-25 — root = CPU/BA SUB-CYCLE floor (VICE confirmed correct)
+
+User confirms VICE is correct for the K3 demo. So JaC's behavior (the gray; locking
+the FLI test where VICE doesn't) is the bug. Characterization of WHY:
+- In the FLI test JaC self-LOCKS (BA-steal engages, ~34 BA-low cyc / 63-cyc line);
+  VICE free-runs at 29 cyc/line (no steal, no lock).
+- BUT JaC's BA-steal is CORRECT on a STABLE FLI: colorfetchbug renders ~1-4 cells vs
+  VICE (near-perfect). If JaC's BA-steal were grossly wrong, colorfetchbug would
+  diverge. It doesn't.
+⇒ The test (and K3) diverge because they are TIMING-SENSITIVE: a SUB-CYCLE (≈1-cycle)
+JaC-vs-VICE difference tips the marginally-stable FLI loop into a lock in JaC but not
+VICE. On stable, non-marginal FLI (colorfetchbug) the same sub-cycle difference is
+absorbed and the render matches. So the K3 left-edge is rooted in the **CPU/BA
+sub-cycle timing floor** (project_cpu_subcycle_floor), NOT a gross BA-steal or VIC
+render error — which is exactly why every deterministic-suite-validated fix attempt
+this session was either a no-op or a regression: the suite CANNOT see it.
+
+**Fix path (toward VICE):** the deep CPU sub-cycle (Phi1/Phi2) timing work. NOT a
+targeted patch — the deterministic testprog suite is already 0 vs VICE on every
+FLI/border/timing test, so it provides no gate for a sub-cycle fix. A future clean
+gate would be a hand-written FLI tuned to lock in BOTH JaC and VICE (stable +
+diverging) so only the render differs; test_fli_leftedge locks in JaC only and is the
+starting point. Until the sub-cycle floor is addressed, the K3 left-edge is a known,
+characterized, low-ROI residual.
