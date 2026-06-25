@@ -1,8 +1,41 @@
 # Krestage 3 Picture-Mover char0 FLI-bug — Fix Plan
 
-Status: diagnosed, not fixed. Targeted fixes exhausted; remaining fix is
-sub-cycle VIC c-access work gated on one VICE datum.
-Last updated: 2026-06-21.
+Status: CHARACTERIZED, not safely fixable now (see §FINAL 2026-06-25).
+Last updated: 2026-06-25.
+
+## §FINAL 2026-06-25 — conclusive characterization (many earlier roots RETRACTED)
+
+After exhaustive investigation, the reliable picture:
+
+1. **The bug is real + well-defined at the leftmost char.** VICE's K3 x39-46 is
+   STABLE and mostly black across runs (gray-rows@x39: VICE=0/0, JaC=132). JaC
+   reveals one extra content char at x39-46; VICE's leftmost content is at x≥47.
+2. **NOT the FLI-prefetch/vc-phase class.** colorfetchbug (the deterministic FLI-
+   prefetch test) is ALREADY ~perfect vs VICE (~1-4 cells/variant). vicii_reg_timing
+   and the FLI/border suite are all 0 vs VICE. So the K3 gray is a DISTINCT bug:
+   the **content position at the 38-col(csel=0) + xscroll + scrolling-bitmap-FLI
+   left edge** — JaC's leftmost displayed cell is one char too far LEFT vs VICE.
+3. **The border timing is PROVABLY CORRECT.** Delaying the 38-col left border one
+   cycle (`csel0BorderLate`) DOES hide the gray (x39→0, leftmost→x47 = VICE), but
+   it REGRESSES vicii_reg_timing 0→14 vs VICE (deterministic). So cyc17 is the right
+   border cycle; the delay is a symptom-mask (matches the 2026-05-25 reverted
+   hideColumnDelay attempt, vicii_reg_timing +35). REVERTED.
+4. **VICE's K3 run is NON-DETERMINISTIC** (VSP-bug RNG: 18632 px/frame vary between
+   identical runs) → per-cycle K3 comparison is invalid. All earlier per-cycle
+   roots here (vcbase 119-vs-120 §0h, dmli, draw-vs-fetch) are RETRACTED as
+   VICE-jitter-confounded. The vc-unification refactor (S1 shadow counter validated
+   0-div on colorfetchbug+screenpos, committed) does NOT help — colorfetchbug is
+   already correct (VC_TIMING_UNIFICATION_REFACTOR_PLAN.md §0).
+
+**Why not safely fixable now:** the real defect (content one char too far left for
+scrolling-bitmap-FLI + xscroll) has (a) NO deterministic repro — every deterministic
+FLI/border/xscroll test is already 0 vs VICE, and (b) a NON-deterministic VICE
+reference. The only working symptom-mask regresses a perfect deterministic test.
+A real fix needs a deterministic minimal repro (a static 38-col + xscroll=N +
+bitmap-FLI test prg exhibiting the one-char-left content shift) to even validate
+against — that construction is the prerequisite, not more per-cycle K3 tracing.
+
+(Earlier sections §0..§9 below are superseded; kept for history.)
 
 Related memory: `project_colorfetchbug_caccess_2026_06_13.md` (full trace history).
 
