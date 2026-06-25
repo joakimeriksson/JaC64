@@ -11,7 +11,37 @@ a divergent trace).
 
 ---
 
-## 1. Why a refactor (the wall, proven by measurement)
+## 0. ⛔ OUTCOME (2026-06-25): render switch has NO deterministic payoff — STOP
+
+Tested the "take the bet" path (coupled S2+S3+S4 render switch, acceptance
+colorfetchbug<48). The premise collapsed on measurement:
+
+- **colorfetchbug is ALREADY near-perfect vs VICE: 1/1/1/4/4 cells (bitmap/main/
+  main2/main3/main4), ~11 total** by direct png_cell_diff. The "48" was a stale/
+  different survey metric. There is NO headroom for the refactor to improve.
+- The S1 shadow counter is 0-divergence vs VICE while the LEGACY counter diverges
+  (984 on colorfetchbug vmli) — yet the legacy RENDER is already ~perfect. So the
+  legacy compensations make the render correct DESPITE the counter divergence. ⇒
+  switching the render to the unified counter cannot improve any deterministic test.
+- K3 itself is NOT per-cycle verifiable (VICE VSP non-determinism), so the render
+  switch's K3 benefit is unmeasurable, while it RISKS regressing real-HW-tuned
+  tests (blackmail S2-alone already showed +23).
+
+**Decision: do NOT pursue S2–S6 (the render switch).** It is pure internal
+cleanliness with zero measurable render gain and unverifiable K3 benefit, at real
+regression risk. **S1 (validated shadow counter) stands as a clean foundation** and
+documents the correct model, but flipping the render onto it is not justified now.
+
+**Reframe for K3:** since colorfetchbug (FLI prefetch) is already correct but K3 is
+gray, **K3's gray is a DISTINCT bug**, not the FLI-vc-phase class. It is specific to
+the picture-mover: **38-col (csel=0) + xscroll=7 + scrolling bitmap FLI** left edge.
+It must be pursued as its own VISUAL investigation (VICE non-det rules out per-cycle),
+comparing JaC's leftmost-char render to VICE's (consistently black) — NOT via this
+refactor. See K3 plan; the vcbase/vc-phase roots there are RETRACTED.
+
+---
+
+## 1. Why a refactor (the wall, proven by measurement) [HISTORICAL — see §0]
 
 JaC's VIC has accumulated **per-test compensations** on top of a video-matrix
 counter model that is NOT VICE-faithful. Each compensation fixed one test and
