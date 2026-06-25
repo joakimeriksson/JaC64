@@ -177,7 +177,25 @@ K3 no WORSE"; full K3 left-edge needs both. Verify the $D011-timing hypothesis n
 by tracing the K3 FLI `$D011` write cycle (CPU PC trace) vs VICE and finding where
 JaC's vScroll commit lags by one.
 
-### S2 — c-access on the unified counter
+### ⚠️ S2/S3/S4 ARE COUPLED — do them as ONE render switch (2026-06-25)
+
+Tried S2 (c-access) in isolation: write `vicCharCache[vmli2]=screen[vc2]` at FETCH_C
+cycles (gating out legacy fetchBadLineData). Result: text mode (screenpos/fetchsplit/
+modesplit/greydot) = 0 change, colorfetchbug ≈ 0 change, but **blackmail +23** —
+because the c-access WRITE index (vmli2) and the display READ index (legacy dmli)
+and the g-access index (gFetchIdx=vVmli-1) all index the SAME vicCharCache/vc, so
+switching one without the others misaligns FLI. ⇒ S2+S3+S4 must land TOGETHER as a
+single coherent switch of {c-access write, g-access read, display dmli} onto
+vc2/vmli2. Reverted to clean S1.
+
+**Deterministic acceptance for the coupled switch (K3 is NOT per-cycle-verifiable —
+VICE non-det):** the goal is **colorfetchbug < 48** (the FLI-prefetch floor = the
+same mechanism as the K3 gray). If the unified render reaches <48 with screenpos=0,
+blackmail=0, fetchsplit=0, suite-green, that's the real win and K3 is then judged
+visually. If it cannot beat 48, the 48 floor is in the pipe/prefetch/mixPhi1 layer,
+not the counter, and the refactor is cleanliness-only — decide value then.
+
+### S2 — c-access on the unified counter (LEGACY staging note; see coupling above)
 Switch `writeCAccess` to `screen[vc2]` / `colorRAM[vc2]` indexed by `vmli2`
 (remove `vcBase+col`, the col0 backfill, fldPrefetchShift). prefetch decision from
 the unified `prefetch_cycles`.
