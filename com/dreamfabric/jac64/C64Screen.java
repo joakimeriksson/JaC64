@@ -1080,10 +1080,18 @@ public class C64Screen extends ExtChip implements Observer {
     boolean prevMain = mainBorder;
     boolean prevV = vBorder;
     checkVBorderTopBottom();
-    // Phase K iter#7: vBorder commit moved to case 1 (= VICE viciisc
-    // raster_cycle==1). Don't re-latch here at cyc 17/18 — VICE only
-    // commits once per line. Mid-line $D011 writes update setVBorder
-    // but the new value doesn't apply until NEXT line's cyc 1.
+    // VICE viciisc/vicii-cycle.c:219-225 check_border_l: re-latch
+    //   vicii.vborder = vicii.set_vborder;
+    //   if (vicii.vborder == 0) vicii.main_border = 0;
+    // VICE commits vborder at BOTH cyc 1 AND the left-border check (cyc
+    // 17/18), not just cyc 1. The earlier "Phase K iter#7" removal left
+    // JaC one latch short, so a set_vborder change landing between cyc 1
+    // and the left-border check (the 24/25-row bottom-flop edge) applied
+    // one line late — vborder2-35 bottom edge = 40 cells (one raster line)
+    // vs both real-HW and VICE. Flag jac64.viceVBorderLatchL default true.
+    if (Boolean.parseBoolean(System.getProperty("jac64.viceVBorderLatchL", "true"))) {
+      vBorder = setVBorder;
+    }
     if (!vBorder) {
       mainBorder = false;
     }
@@ -3987,7 +3995,9 @@ public class C64Screen extends ExtChip implements Observer {
               + " data=$" + Integer.toHexString(gByte)
               + " d018=$" + Integer.toHexString(vicMem)
               + " vc=" + vc
-              + " rc=" + rc);
+              + " rc=" + rc
+              + " lateBL=" + (lateBadlineThisLine ? 1 : 0)
+              + " idle=" + (vicIdleState ? 1 : 0));
         }
       }
       // Phase C: paint base aligned with VICE's Phi1(N)-quantized xpos
