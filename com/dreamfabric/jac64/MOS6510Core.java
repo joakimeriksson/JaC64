@@ -64,6 +64,11 @@ public abstract class MOS6510Core extends MOS6510Ops {
   public int lastInterrupt = 0;
   public boolean busAvailable = true;
   public long baLowUntil = 0;
+  // True while the CPU is HALTED inside a BA-low read stall (waitForBus loop).
+  // VICE's reg_pc is frozen at the stalled fetch then; the FLI prefetch uses
+  // getInstructionStartPC (the stalled opcode) when set, and cpu.pc (the
+  // next-fetch address) when the CPU is still running into the stall.
+  public boolean inBusStall = false;
 
   // The processor flags
   boolean sign = false;

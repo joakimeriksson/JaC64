@@ -1795,9 +1795,22 @@ public class C64Screen extends ExtChip implements Observer {
       // wrong byte. instructionStartPC is the frozen-fetch address that
       // matches VICE's reg_pc (blackmail FLI left-edge: memory[startPC]&0xf
       // = VICE's $9,$a,$b,$c,$d gradient exactly). Flag: -Djac64.prefetchStartPc.
-      int prefetchPc = Boolean.parseBoolean(
-          System.getProperty("jac64.prefetchStartPc", "true"))
-          ? cpu.getInstructionStartPC() : cpu.pc;
+      // K3 deer "gray should be blue" (jac64.prefetchRegPc, default false):
+      // emulate VICE's reg_pc for the FLI prefetch. While the CPU is HALTED in a
+      // read stall (inBusStall) reg_pc is frozen at the stalled opcode =
+      // getInstructionStartPC. While the CPU is still RUNNING into the stall
+      // (e.g. col0/1 during the STY $D011 write that just set the badline) the
+      // next-fetch address is cpu.pc (= the about-to-stall $19c8). This picks the
+      // VICE-faithful reg_pc per cell without a global CPU cycle-shift (which
+      // would break the mutually-1-behind CPU+VIC consistency the suite relies on).
+      int prefetchPc;
+      if (Boolean.parseBoolean(System.getProperty("jac64.prefetchRegPc", "true"))) {
+        prefetchPc = cpu.inBusStall ? cpu.getInstructionStartPC() : cpu.pc;
+      } else {
+        prefetchPc = Boolean.parseBoolean(
+            System.getProperty("jac64.prefetchStartPc", "true"))
+            ? cpu.getInstructionStartPC() : cpu.pc;
+      }
       vicColCache[col] = memory[prefetchPc & 0xffff] & 0x0f;
       if (TRACE_VIC_CYCLE && cpu.cycles >= TRACE_VIC_CYCLE_START
           && cpu.cycles <= TRACE_VIC_CYCLE_END) {

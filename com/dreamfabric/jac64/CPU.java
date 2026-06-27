@@ -172,11 +172,13 @@ public class CPU extends MOS6510Core {
     long entryClk = cycles;
     traceBaEvent("BA-WAIT-START until=" + baLowUntil);
     boolean stoleCycles = false;
+    inBusStall = true;   // CPU halted on BA-low read: reg_pc frozen for the VIC
     while (baLowUntil > cycles) {
       cycles++;
       stoleCycles = true;
       schedule(cycles);
     }
+    inBusStall = false;
     if (stoleCycles) {
       vicInterruptDelayAfterSteal();
     }
