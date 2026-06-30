@@ -152,6 +152,39 @@ Make JaC's vc handling structurally identical to VICE, eliminating the `-1` hack
 4. Full A/B survey; deer light-gray → background, zero regressions.
 5. Flip default, remove `bmmVcFetchFix` + the pre-inc path, document.
 
+## 7. STOP — premise contradiction found (2026-07-01), resolve BEFORE refactor
+
+Attempted to plan/implement the §3 post-increment move. Traced the captured deer
+frame (181108997, rast $93-$94, cyc13-20) and found:
+**`badLine=false`, `idle_state=true`, `prefetchCycles=4` (never decrements).**
+
+This CONTRADICTS the whole vc-phase premise. The planned fix targets the FLI
+*badline* cyc15 vc++ skip — but at the frame that shows the gray, JaC is NOT in a
+badline (badLine=false) and IS idle. So:
+- The gray at this frame is NOT produced by the FLI-badline prefetch cyc15 vc++
+  path. It's rendered in an IDLE state (idle gfx) with no active matrix fetch.
+- The targeted fix (fliVcCyc15Inc) "worked" here by coincidence of shifting vc,
+  not by fixing the actual mechanism — which is why it tore the picture (scroll-
+  dependent: badLine/idle state varies per slide frame).
+- The reverted commit dd32279 was right to revert.
+
+**OPEN QUESTION (must answer before ANY vc/badline refactor):** what state does
+the deer light-gray actually render in across the slide — idle vs FLI-badline?
+The captured 181108997 may be a TRANSIENT idle frame, not the clean continuous-
+FLI deer. Earlier deer analysis assumed FLI badlines every line; this trace says
+the analysis frame is idle. The whole vc/vmli model above is correct for VICE,
+but JaC's deer may diverge at a HIGHER level (idle-state / badline recognition
+during the slide), not just the vc++ phase.
+
+**Required step 0:** trace JaC's badLine/idle/prefetchCycles AND VICE's
+bad_line/idle_state across SEVERAL aligned deer slide frames (live), classify
+which cells' gray is idle-rendered vs badline-prefetch. Only then is the vc-phase
+refactor (or a different idle/badline fix) safe to design. Rewriting the core
+vc/badline timing without this WILL break the 99.95%-clean suite.
+
+**Status: refactor NOT started — blocked on step 0.** The 2 clean wins stand
+(cbuf 7bf2067, vborder f1712d8); light-gray fix reverted (b84e64a).
+
 ## 6. EMPIRICAL (2026-06-29) — a WORKING fix exists, gating is the blocker
 
 `-Djac64.fliVcCyc15Inc=true` (the existing flag that adds the skipped cyc15 vc++
