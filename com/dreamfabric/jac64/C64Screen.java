@@ -581,13 +581,6 @@ public class C64Screen extends ExtChip implements Observer {
   // so the vicCycle-15 vc++ was skipped. The vcbase capture (vicCycle 57)
   // compensates so vcbase matches VICE. See handleBadLineStart.
   private boolean lateBadlineThisLine = false;
-  // Continuous-FLI detector: FLI cycles $D018 (screen-matrix nibble) EVERY line;
-  // a normal text/bitmap scene (screenpos) never rewrites $D018 per line. Gates
-  // the FLI cyc15 vc++ compensation (fliVcCyc15Inc) to FLI only — the badLine
-  // FIELD is unreliable here (the FLI badline is set by the mid-line $D011/$D018
-  // write, after updateVicStateVic runs), so we key off the $D018 write instead.
-  private boolean d018WrittenThisLine = false;
-  private boolean prevLineD018Written = false;
 
   // Lines since char0 (vmli=0) was last REAL-fetched on a full/early badline.
   // Distinguishes continuous-FLI (colorfetchbug: char0 never real-fetched →
@@ -1294,11 +1287,8 @@ public class C64Screen extends ExtChip implements Observer {
         // bumped before this line's c/g-access, mirroring VICE. Validate against
         // the scroll-gate + fetchsplit (bmmVc-sensitive) + suite + live.
         // jac64.fliVcCyc15Inc.
-        // Gate to CONTINUOUS FLI (prev line wrote $D018) so the cyc15 vc++
-        // compensation fixes the FLI leading-cell vc-one-low (K3 deer light-gray)
-        // without shifting normal-badline text (screenpos +3062 when ungated).
-        if (vcIncSkippedWhileIdle && prevLineD018Written
-            && Boolean.parseBoolean(System.getProperty("jac64.fliVcCyc15Inc", "true"))) {
+        if (vcIncSkippedWhileIdle
+            && Boolean.parseBoolean(System.getProperty("jac64.fliVcCyc15Inc", "false"))) {
           vc = (vc + 1) & 0x3ff;
           vVmli++;
         }
@@ -1338,9 +1328,6 @@ public class C64Screen extends ExtChip implements Observer {
       vVmli = 0;  // S1: reset matrix-fetch index with vc (VICE update_vc)
       if (badLine) rc = 0;
       lateBadlineThisLine = false;  // reset before this line's badline rise
-      // Roll the per-line $D018-write history for the continuous-FLI gate.
-      prevLineD018Written = d018WrittenThisLine;
-      d018WrittenThisLine = false;
     }
 
     // VICE vicii-cycle.c:629-640 — update_rc at VICII_PAL_CYCLE(58) =
@@ -2455,7 +2442,6 @@ public class C64Screen extends ExtChip implements Observer {
       break;
 
     case 0xd018: {
-      d018WrittenThisLine = true;  // FLI signature: per-line $D018 cycling
       vicMem = data;
       setVideoMem();
       if (Boolean.getBoolean("jac64.traceFli")) {
