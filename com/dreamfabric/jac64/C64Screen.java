@@ -3967,9 +3967,9 @@ public class C64Screen extends ExtChip implements Observer {
         // VICE EV-Dmli: dmli == vmli-1 every cycle). vVmli here is already
         // post-increment, so the correct read index is vVmli-1. The color pipe
         // uses the same value via the self-incrementing dmli (VicDrawCycle).
-        // POST_INC: vVmli is NOT pre-incremented, so the char index for this
-        // cell is vVmli directly (VICE reads vbuf[vmli] with vmli pre-fetch).
-        int gFetchIdx = VICE_VC_POST_INC ? vVmli : (vmliUnified() ? (vVmli - 1) : vmli);
+        // Text char index: keep the write-leads-read-by-1 offset (g-fetch reads
+        // the cell whose c-access ran the previous cycle) under POST_INC too.
+        int gFetchIdx = (VICE_VC_POST_INC || vmliUnified()) ? (vVmli - 1) : vmli;
         if (gFetchIdx < 0) gFetchIdx = 0; else if (gFetchIdx > 39) gFetchIdx = 39;
         int vByte = vicCharCache[gFetchIdx] & 0xff;
         boolean colorLatency = Boolean.parseBoolean(
