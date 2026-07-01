@@ -152,6 +152,41 @@ Make JaC's vc handling structurally identical to VICE, eliminating the `-1` hack
 4. Full A/B survey; deer light-gray → background, zero regressions.
 5. Flip default, remove `bmmVcFetchFix` + the pre-inc path, document.
 
+## 8. STEP 0 COMPLETE (2026-07-01) — root confirmed vs aligned VICE
+
+Aligned EV-State, deer body line $50 (cyc15):
+- **JaC:  vc=120, vcbase=119, rc=5, bad=1, idle=0**
+- **VICE: vc=121, vcbase=120, rc=5, bad=1, idle=0**
+
+⇒ JaC's vc AND vcbase are EXACTLY ONE-LOW vs VICE at the deer body. The g-fetch
+(`bmmVc = vc-1 = 119`) reads bitmap[119]; VICE reads bitmap[120] → JaC's cell is
+one bitmap-byte off → gbuf $68 (MC 01/10 → vbuf nibble $f gray) vs VICE $c0
+(cbuf/bg). THIS is the light-gray.
+
+Cause of the one-low (confirmed):
+- Both emulators have an IDLE BLOCK at the deer top ($34-$4a) — SHARED, correct
+  (VICE idle rasters $34-$40+ match JaC). Not the divergence.
+- At the idle→FLI transition ($4b, first badline after idle), JaC SKIPS the cyc15
+  vc++ (idle still true at the updateVicStateVic check) → 39 increments where VICE
+  does 40 → vc/vcbase one-low for the whole FLI block below.
+- The 181108997 "badLine=false/idle=true" I saw earlier was just the top idle
+  block ($34-$4a); the 146 gray rows are the FLI BODY ($4b-$f0), all bad=1.
+
+Why the targeted skip-fix (fliVcCyc15Inc) can't win:
+- `screenpos` badlines ALSO hit the cyc15 skip (idle set by the previous line's
+  rc==7). JaC's whole vc model (pre-increment @cyc15-54 + skip-when-idle + the
+  bmmVcFetchFix `-1`) is SELF-CONSISTENT for screenpos/fetchsplit (they pass at
+  0). Adding the vc++ back breaks them (+3062 screenpos) and firing it per-FLI-line
+  over-shifts the deer (the scroll-dependent JUMP — reverted dd32279).
+
+⇒ CONCLUSION: the light-gray is only cleanly fixable by adopting VICE's
+SELF-CONSISTENT post-increment vc model wholesale (§3) — replace pre-increment +
+`-1` with: g-fetch uses vc directly, then `vc++/vmli++` AFTER (VICE
+vicii_fetch_graphics). That removes the skip-vs-compensate fragility entirely.
+Gate: full static suite byte-identical (fetchsplit/screenpos/border) AND the LIVE
+deer slide (no jump, light-gray gone at ALL scrolls, not just one capture).
+High-risk (touches every g-fetch); do on its own branch with the live-slide gate.
+
 ## 7. STOP — premise contradiction found (2026-07-01), resolve BEFORE refactor
 
 Attempted to plan/implement the §3 post-increment move. Traced the captured deer
