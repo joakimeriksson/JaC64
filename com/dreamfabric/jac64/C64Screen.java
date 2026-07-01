@@ -1751,6 +1751,24 @@ public class C64Screen extends ExtChip implements Observer {
     // still stored at index k); only the $ff placement corrects. Column 0 has
     // no preceding cycle, so it is also written directly when column==0.
     // Flag jac64.fldPrefetchShift default true.
+    if (VICE_VC_POST_INC) {
+      // POST_INC: vc/vVmli increment in the g-fetch (AFTER use) and the g-fetch
+      // is gated to FETCH_G cycles (16..55), so vVmli is NOT a reliable c-access
+      // index at the leading cells — it stays 0 across BOTH col0 (cyc15) and
+      // col1 (cyc16) and only starts advancing at col2 (cyc17). The pre-inc
+      // model wrote cache[vVmli] (= cache[column+1], since vVmli was
+      // pre-incremented to column+1) plus a col0 backfill cache[vVmli-1]
+      // (= cache[0]). Reproduce those effective indices from the RELIABLE
+      // `column` parameter so the write indices match pre-inc exactly and the
+      // VicDrawCycle dmli reads (self-incrementing, phase-independent) line up
+      // at the leading cells. Fixes screenpos col0 + blackmail col2 under
+      // post-inc without disturbing the (already-clean) body.
+      if (column == 0) {
+        writeCAccess(0);
+      }
+      writeCAccess(column + 1);
+      return;
+    }
     if (vmliUnified()) {
       // U2: VICE writes vbuf[vmli] at FetchC cyc14..53 (vmli=0..39). JaC's
       // c-access starts a cycle later (cyc15, vVmli already 1), so write
@@ -3967,9 +3985,15 @@ public class C64Screen extends ExtChip implements Observer {
         // VICE EV-Dmli: dmli == vmli-1 every cycle). vVmli here is already
         // post-increment, so the correct read index is vVmli-1. The color pipe
         // uses the same value via the self-incrementing dmli (VicDrawCycle).
-        // Text char index: keep the write-leads-read-by-1 offset (g-fetch reads
-        // the cell whose c-access ran the previous cycle) under POST_INC too.
-        int gFetchIdx = (VICE_VC_POST_INC || vmliUnified()) ? (vVmli - 1) : vmli;
+        // Text char index: under POST_INC vVmli is post-increment (bumped in
+        // this block AFTER the read) whereas the pre-inc model bumped vVmli at
+        // the TOP of BOTH cyc15 and cyc16, so pre-inc's gFetchIdx sequence at
+        // cyc16,17,18 is [1,2,3,...]. Post-inc's vVmli at read is [0,1,2,...],
+        // so gFetchIdx=vVmli+1 reproduces the pre-inc (proven-clean) sequence
+        // exactly. The extra +1 is temporarily tunable via jac64.gfIdxAdj.
+        int gfAdj = Integer.getInteger("jac64.gfIdxAdj", -1);
+        int gFetchIdx = VICE_VC_POST_INC ? (vVmli + gfAdj)
+            : (vmliUnified() ? (vVmli - 1) : vmli);
         if (gFetchIdx < 0) gFetchIdx = 0; else if (gFetchIdx > 39) gFetchIdx = 39;
         int vByte = vicCharCache[gFetchIdx] & 0xff;
         boolean colorLatency = Boolean.parseBoolean(
@@ -4020,6 +4044,8 @@ public class C64Screen extends ExtChip implements Observer {
               + " rast=$" + Integer.toHexString(vbeam)
               + " cyc=" + vicCycle
               + " col=" + vmli
+              + " gfIdx=" + gFetchIdx
+              + " vVmli=" + vVmli
               + " addr=$" + Integer.toHexString(fetchAddr)
               + " data=$" + Integer.toHexString(gByte)
               + " d018=$" + Integer.toHexString(vicMem)

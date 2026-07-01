@@ -69,7 +69,7 @@ for test in "${TESTS[@]}"; do
     extra=$(extra_flags "$test")
     java -Djac64.warp=true -Djac64.captureFrames=2 -Djac64.captureOnDone=true \
          -Djac64.injectAtCycle=7005254 -Djac64.detSysJump=true \
-         -Djac64.zeroColorRam=true $extra \
+         -Djac64.zeroColorRam=true $extra $JAC64_EXTRA_FLAGS \
          -cp "$BUILD_DIR:$JAC64_ROOT" TestRaster "$PRG" \
          > /tmp/sd_${test}_jac.log 2>&1 || true
     cp /tmp/jac64_test_frame_001.png "$JAC_SHOT" 2>/dev/null || continue

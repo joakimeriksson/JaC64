@@ -152,6 +152,69 @@ Make JaC's vc handling structurally identical to VICE, eliminating the `-1` hack
 4. Full A/B survey; deer light-gray → background, zero regressions.
 5. Flip default, remove `bmmVcFetchFix` + the pre-inc path, document.
 
+## 9b. VERDICT (2026-07-01): POST-INC NOT VIABLE — full-suite regression
+
+After fixing the two leading-cell edges (see §9), the 16-test JaC-vs-VICE
+survey with `jac64.viceVcPostInc=true` was run against the (proven) default:
+
+| test               | default | post-inc | delta |
+|--------------------|---------|----------|-------|
+| screenpos          | 0       | 77       | +77   |
+| rmwtest            | 1       | 203      | +202  |
+| greydot            | 0       | 3048     | +3048 |
+| vicii_reg_timing   | 0       | 2086     | +2086 |
+| vicii_reg_timing-a5| 0       | 2086     | +2086 |
+| vicii_reg_timing-ff| 0       | 2086     | +2086 |
+| **TOTAL vs VICE**  | **1**   | **9586** | **+9585** |
+
+greydot + vicii_reg_timing break across the WHOLE display (not a leading-cell
+edge — cols 1..11+ all diverge). gfIdx tuning does NOT move greydot
+(gfAdj=-1→2595, gfAdj=0→2585), and BMM bmmVc is consistent (post vc == pre
+vc-1 at fetch). The breakage is the **vc sub-cycle timing itself**: post-inc
+moves the vc/vVmli increment from updateVicStateVic (top of cycle) into the
+g-fetch block, changing WHEN vc is visible to the mid-cycle register-sampling
+paths that greydot/vicii_reg_timing exercise ($D011/$D016/$D018 write timing,
+8565 grey-dot cregs commit). Those tests currently PASS byte-exact vs VICE;
+post-inc trades the deer (146→21) for +9585 conformance cells. NET LOSS.
+
+**Decision:** keep `jac64.viceVcPostInc` default OFF. The default build is
+UNAFFECTED (survey total stays 1). The committed deer cbuf "gray should be
+blue" fix (7bf2067) + vborder fix stand independently. Fixing the deer's
+residual light-gray (vc/vcbase one-low at FLI body) WITHOUT disturbing the
+register-timing suite requires the sub-cycle Phi1/Phi2 register-sampling
+split (the "multi-week" refactor in CYCLE_STEPPED_CPU_PHASE_PLAN.md), not a
+global vc-increment-phase move. The post-inc experiment is valuable NEGATIVE
+knowledge: global vc-timing changes are load-bearing for greydot/reg-timing.
+
+What the §9 work DID achieve (kept on branch, flag OFF): blackmail-ee col2
+regression fixed (161→2 via column-based c-access under post-inc), screenpos
+narrowed to col0-only, deer fixed (21). If the sub-cycle split later lands,
+this c-access/gfIdx alignment is the correct companion.
+
+## 9. IMPLEMENTATION IN PROGRESS (2026-07-01, branch fli-vc-postinc)
+
+Flag `jac64.viceVcPostInc` (default OFF). Changes: skip updateVicStateVic
+pre-increment; g-fetch uses vc directly (no bmmVcFetchFix -1) + `vc++/vVmli++`
+AFTER the fetch; text char index keeps the write-leads-read offset (vVmli-1).
+
+**A/B viceVcPostInc=true:**
+- ✅ deer x=39: 146 → **21** (light-gray FIXED).
+- ✅ BODY VICE-faithful: fetchsplit 0, modesplit 0, greydot 0, ss-mc-hires 0,
+  screenpos BODY clean, blackmail BODY clean.
+- ⚠️ RESIDUAL = LEADING-CELL edges only: screenpos **col 0** (77 cells, all rows),
+  blackmail **col 2** (160 cells). The body works; only the first/prefetch cells
+  are misaligned under post-inc.
+
+**Remaining work (the leading-cell edge):** the write-leads-read col0-backfill
+(`fetchBadLineData`: `if column==0 writeCAccess(vVmli-1)`) no-ops under post-inc
+(vVmli=0 at col0 → writeCAccess(-1)), and the FLI prefetch leading cells (col0-2)
+need re-alignment. gFetchIdx clamps -1→0 at col0 so col0 reads its own c-access
+(no write-lead) where VICE reads vbuf[0] written the previous cycle. Fix: give
+col0/leading cells the correct previous-cycle c-access under post-inc (a post-inc
+col0-backfill + prefetch leading-cell index), then the residual clears.
+Gate unchanged: full static byte-identical (incl. screenpos col0, blackmail col2)
+AND live deer slide (no jump).
+
 ## 8. STEP 0 COMPLETE (2026-07-01) — root confirmed vs aligned VICE
 
 Aligned EV-State, deer body line $50 (cyc15):
