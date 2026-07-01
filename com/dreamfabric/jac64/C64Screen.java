@@ -1184,6 +1184,15 @@ public class C64Screen extends ExtChip implements Observer {
   private static final boolean VICE_BADLINE_FSM =
       Boolean.parseBoolean(
           System.getProperty("jac64.vicBadlineFsm", "true"));
+  // §3 FLI vc-phase refactor (docs/cpu/FLI_VC_PHASE_REFACTOR_DESIGN.md): adopt
+  // VICE's POST-increment vc/vmli model. When ON: the pre-increment in
+  // updateVicStateVic (cyc15-54) is skipped; the g-fetch uses vc/vVmli DIRECTLY
+  // (no bmmVcFetchFix -1, no vVmli-1) and increments vc/vVmli AFTER the fetch,
+  // exactly like VICE vicii_fetch_graphics. Fixes the FLI vcBase-one-low (deer
+  // light-gray) uniformly. Default OFF until validated (static suite byte-
+  // identical + live deer slide).
+  private static final boolean VICE_VC_POST_INC =
+      Boolean.parseBoolean(System.getProperty("jac64.viceVcPostInc", "false"));
 
   static final boolean VICE_VC_MODEL =
       Boolean.getBoolean("jac64.viceVcModel");
@@ -1256,7 +1265,10 @@ public class C64Screen extends ExtChip implements Observer {
     // vcBase/rc state by the time the screenpos test reaches its first
     // visible line (line 51).
     boolean vcIncSkippedWhileIdle = false;
-    if (vicCycle >= 15 && vicCycle <= 54 && !vicIdleState) {
+    if (VICE_VC_POST_INC) {
+      // Post-increment model: vc/vVmli are advanced in the g-fetch (after use),
+      // not here. Nothing to do at the top of the cycle.
+    } else if (vicCycle >= 15 && vicCycle <= 54 && !vicIdleState) {
       vc = (vc + 1) & 0x3ff;
       vVmli++;  // S1: vmli locked in phase with vc (matrix-fetch index)
     } else if (vicCycle >= 15 && vicCycle <= 54 && vicIdleState) {
@@ -3955,7 +3967,9 @@ public class C64Screen extends ExtChip implements Observer {
         // VICE EV-Dmli: dmli == vmli-1 every cycle). vVmli here is already
         // post-increment, so the correct read index is vVmli-1. The color pipe
         // uses the same value via the self-incrementing dmli (VicDrawCycle).
-        int gFetchIdx = vmliUnified() ? (vVmli - 1) : vmli;
+        // POST_INC: vVmli is NOT pre-incremented, so the char index for this
+        // cell is vVmli directly (VICE reads vbuf[vmli] with vmli pre-fetch).
+        int gFetchIdx = VICE_VC_POST_INC ? vVmli : (vmliUnified() ? (vVmli - 1) : vmli);
         if (gFetchIdx < 0) gFetchIdx = 0; else if (gFetchIdx > 39) gFetchIdx = 39;
         int vByte = vicCharCache[gFetchIdx] & 0xff;
         boolean colorLatency = Boolean.parseBoolean(
@@ -3987,9 +4001,11 @@ public class C64Screen extends ExtChip implements Observer {
           // cell on lines where the bitmap varies cell-to-cell
           // (fetchsplit r7 gradient lines, ~40 cells CLASS A). Text mode
           // is immune (it indexes vicCharCache[vmli], not vc).
-          int bmmVc = Boolean.parseBoolean(
-              System.getProperty("jac64.bmmVcFetchFix", "true"))
-              ? ((vc - 1) & 0x3ff) : (vc & 0x3ff);
+          // POST_INC: use vc DIRECTLY (VICE g_fetch_addr: a=(vc<<3)|rc, vc used
+          // pre-increment). No bmmVcFetchFix -1 (that undid JaC's pre-increment).
+          int bmmVc = VICE_VC_POST_INC ? (vc & 0x3ff)
+              : (Boolean.parseBoolean(System.getProperty("jac64.bmmVcFetchFix", "true"))
+                  ? ((vc - 1) & 0x3ff) : (vc & 0x3ff));
           int vcMasked = (d011Fetch & 0x40) != 0 ? (bmmVc & 0x33f) : bmmVc;
           fetchAddr = vicBase + vcMasked * 8 + rc;
         } else if ((d011Fetch & 0x40) != 0) {
@@ -4011,6 +4027,14 @@ public class C64Screen extends ExtChip implements Observer {
               + " rc=" + rc
               + " lateBL=" + (lateBadlineThisLine ? 1 : 0)
               + " idle=" + (vicIdleState ? 1 : 0));
+        }
+        // POST_INC: advance vc/vVmli AFTER the fetch, gated on !idle, exactly
+        // like VICE vicii_fetch_graphics (vmli++; vc++). This replaces the
+        // updateVicStateVic pre-increment. Consistent across FLI + normal lines
+        // -> fixes the deer vcBase-one-low without the skip/compensate fragility.
+        if (VICE_VC_POST_INC && !vicIdleState) {
+          vc = (vc + 1) & 0x3ff;
+          vVmli++;
         }
       }
       // Phase C: paint base aligned with VICE's Phi1(N)-quantized xpos
