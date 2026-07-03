@@ -577,6 +577,12 @@ public class C64Screen extends ExtChip implements Observer {
   // the case-16 FLI leading-prefetch backfill fills the stale cols 0-1.
   private boolean col0FetchedThisLine = false;
 
+  // badLine state as of vicCycle 14 — i.e. whether VICE's cyc14 c-access
+  // (vbuf[0]) would have run this line. Gates the U2 col0 backfill: when the
+  // badline only rises at cyc15 (FLI $D011 write landing there), VICE leaves
+  // vbuf[0] stale and so must we. See fetchBadLineData / jac64.fliCol0Stale.
+  private boolean badLineAtC14 = false;
+
   // True if this raster's badline rose LATE (idle still true at the rise),
   // so the vicCycle-15 vc++ was skipped. The vcbase capture (vicCycle 57)
   // compensates so vcbase matches VICE. See handleBadLineStart.
@@ -1777,8 +1783,16 @@ public class C64Screen extends ExtChip implements Observer {
       // FIRST c-access (column 0) ALSO write vVmli-1 to cover the vbuf[0] cell
       // VICE wrote at cyc14, which JaC's cyc15 start would otherwise skip
       // (border/den garbage). The gbuf/dmli read index is vVmli-1.
+      // The col0 backfill stands in for VICE's cyc14 c-access (JaC's loop
+      // starts at cyc15). VICE only runs that access when bad_line is already
+      // set at cyc14; if the badline rises AT cyc15 (K3 picture-mover FLI with
+      // the deer near the left edge), vbuf[0] stays STALE in VICE — writing
+      // $ff there painted the flickering gray left column (jac64.fliCol0Stale
+      // default true = VICE-faithful gating; false = old unconditional).
       if (column == 0
-          && Boolean.parseBoolean(System.getProperty("jac64.vmliCol0Backfill", "true"))) {
+          && Boolean.parseBoolean(System.getProperty("jac64.vmliCol0Backfill", "true"))
+          && (badLineAtC14
+              || !Boolean.parseBoolean(System.getProperty("jac64.fliCol0Stale", "true")))) {
         writeCAccess(vVmli - 1);
       }
       writeCAccess(vVmli);
@@ -3232,6 +3246,20 @@ public class C64Screen extends ExtChip implements Observer {
       if (prefetchCycles > 0) prefetchCycles--;
     } else {
       prefetchCycles = 4;
+    }
+
+    // K3 picture-mover left-edge flicker (2026-07-02): VICE's c-access window
+    // starts at cyc14 (vicii-chip-model FetchC), one cycle before JaC's case-15
+    // loop. The U2 col0 backfill in fetchBadLineData emulates that cyc14 write
+    // of vbuf[0] — but VICE only performs it when bad_line is ALREADY active at
+    // its cyc14. When the FLI $D011 write lands at cyc15 (crest deer near the
+    // left edge; 206/1744 lines in the aligned VICE trace), VICE's first
+    // c-access is cyc15 writing vbuf[1] and vbuf[0] KEEPS ITS STALE value
+    // (black) — JaC's unconditional backfill injected $ff there, pairing the
+    // first bitmap byte with FLI-bug colors = the flickering gray left column.
+    // Capture badLine as of JaC cyc14 (pre-write, TVIC-verified) to gate it.
+    if (vicCycle == 14) {
+      badLineAtC14 = badLine;
     }
 
     // Phase K iter#9: per-cycle VIC state trace for diff against VICE.
