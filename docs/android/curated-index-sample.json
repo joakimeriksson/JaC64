@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "comment": "Sample curated index for the JaC64 content browser (schema v1). The real index will live in its own GitHub repo (e.g. jac64-content) and be fetched as a raw URL - remote hosting doubles as the takedown mechanism. Only openly-distributed scene releases and games with an explicit open license / author permission belong here.",
+  "items": [
+    {
+      "id": "krestage3",
+      "title": "Krestage 3 - More Weird Stuff",
+      "author": "Crest",
+      "year": 2007,
+      "type": "demo",
+      "license": "scene release, openly distributed via CSDb",
+      "download": "https://csdb.dk/getinternalfile.php/39828/KRESTAGE3.zip",
+      "screenshot": "https://csdb.dk/gfx/releases/48000/48577.png",
+      "needsOriginalRoms": true
+    },
+    {
+      "id": "aloft",
+      "title": "Aloft",
+      "author": "Fjalldata 2026 release",
+      "year": 2026,
+      "type": "game",
+      "license": "scene release, openly distributed via CSDb",
+      "download": "https://csdb.dk/getinternalfile.php/276871/Aloft.zip",
+      "screenshot": "https://csdb.dk/gfx/releases/259000/259056.png",
+      "needsOriginalRoms": false
+    }
+  ]
+}

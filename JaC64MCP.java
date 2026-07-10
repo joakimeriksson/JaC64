@@ -345,6 +345,15 @@ public class JaC64MCP {
         tools.add(toolDef("swap_disk", "Swap disk in multi-disk games. Call with no arguments to list available disks. Call with disk number to swap.",
             prop("disk", "integer", "Disk number to swap to (1-based). Omit to list available disks.")));
 
+        tools.add(toolDef("csdb_latest", "List the latest releases on CSDb (csdb.dk) - id, title, author, type. Load one with csdb_load.",
+            prop("count", "integer", "Number of releases to list (default 10)")));
+
+        tools.add(toolDef("csdb_search", "Search CSDb releases by name. Returns id + title; load one with csdb_load.",
+            prop("query", "string", "Search text, e.g. a demo or game name")));
+
+        tools.add(toolDef("csdb_load", "Download a CSDb release by id and load it into the emulator (picks the best download link, unzips, mounts/loads).",
+            prop("id", "string", "CSDb release id (from csdb_latest/csdb_search)")));
+
         result.add("tools", tools);
         return result;
     }
@@ -370,6 +379,9 @@ public class JaC64MCP {
                 case "cpu_state": return toolCpuState();
                 case "iec_trace": return toolIecTrace(args);
                 case "swap_disk": return toolSwapDisk(args);
+                case "csdb_latest": return toolCsdbLatest(args);
+                case "csdb_search": return toolCsdbSearch(args);
+                case "csdb_load": return toolCsdbLoad(args);
                 case "fld_trace": scr.startFldTrace(); return toolResult("FLD trace started for 2 frames - check stdout");
                 default: return toolError("Unknown tool: " + name);
             }
@@ -434,6 +446,50 @@ public class JaC64MCP {
     }
 
     // --- Tool Implementations ---
+
+    private JsonObject toolCsdbLatest(JsonObject args) throws Exception {
+        int count = args.has("count") ? args.get("count").getAsInt() : 10;
+        java.util.List<com.dreamfabric.c64utils.repo.ContentItem> items =
+            new com.dreamfabric.c64utils.repo.CsdbRepo().latest(count);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < items.size(); i++)
+            sb.append(items.get(i)).append('\n');
+        return toolResult(sb.length() > 0 ? sb.toString() : "no releases found");
+    }
+
+    private JsonObject toolCsdbSearch(JsonObject args) throws Exception {
+        String query = args.get("query").getAsString();
+        java.util.List<com.dreamfabric.c64utils.repo.ContentItem> items =
+            new com.dreamfabric.c64utils.repo.CsdbRepo().search(query, 25);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < items.size(); i++)
+            sb.append(items.get(i)).append('\n');
+        return toolResult(sb.length() > 0 ? sb.toString() : "no hits for: " + query);
+    }
+
+    private JsonObject toolCsdbLoad(JsonObject args) throws Exception {
+        String id = args.get("id").getAsString();
+        com.dreamfabric.c64utils.repo.ContentItem item =
+            new com.dreamfabric.c64utils.repo.CsdbRepo().details(id);
+        if (item == null)
+            return toolError("CSDb release not found: " + id);
+        if (item.downloadUrl == null)
+            return toolError("no download link for: " + item);
+        // Delegate to load_file - it handles URL download, zip, d64/t64/prg.
+        JsonObject loadArgs = new JsonObject();
+        loadArgs.addProperty("path", item.downloadUrl);
+        JsonObject result = toolLoadFile(loadArgs);
+        // Prepend what we resolved so the caller sees title/author.
+        if (result.has("content")) {
+            JsonObject first = result.getAsJsonArray("content")
+                .get(0).getAsJsonObject();
+            if (first.has("text"))
+                first.addProperty("text",
+                    "Loading " + item + "\nfrom " + item.downloadUrl
+                    + "\n" + first.get("text").getAsString());
+        }
+        return result;
+    }
 
     private JsonObject toolLoadFile(JsonObject args) throws Exception {
         String path = args.get("path").getAsString();

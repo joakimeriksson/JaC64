@@ -61,4 +61,6 @@ android {
 }
 
 dependencies {
+    // used by the shared-core content browser (com.dreamfabric.c64utils.repo)
+    implementation 'com.google.code.gson:gson:2.11.0'
 }

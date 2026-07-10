@@ -43,6 +43,7 @@ import javax.net.ssl.X509TrustManager;
 public class MainActivity extends Activity {
 
     private static final int REQUEST_OPEN_FILE = 1001;
+    private static final int REQUEST_BROWSE = 1002;
 
     private CPU cpu;
     private C64Screen screen;
@@ -339,6 +340,15 @@ public class MainActivity extends Activity {
             if (uri != null) {
                 loadFile(uri);
             }
+        } else if (requestCode == REQUEST_BROWSE && resultCode == RESULT_OK && data != null) {
+            String url = data.getStringExtra(BrowseActivity.EXTRA_DOWNLOAD_URL);
+            if (url != null && !url.isEmpty()) {
+                String title = data.getStringExtra(BrowseActivity.EXTRA_TITLE);
+                if (title != null) {
+                    Toast.makeText(this, "Loading " + title, Toast.LENGTH_SHORT).show();
+                }
+                loadFromUrl(url);
+            }
         }
     }
 
@@ -618,6 +628,7 @@ public class MainActivity extends Activity {
         popup.getMenu().add(0, 40, 10, warpEnabled ? "Warp Speed OFF" : "Warp Speed ON");
         popup.getMenu().add(0, 41, 11, touchPaddleEnabled ? "Touch Paddle OFF" : "Touch Paddle ON");
         popup.getMenu().add(0, 50, 12, "Load URL");
+        popup.getMenu().add(0, 51, 13, "Browse Content...");
         if (diskImages.size() > 1) {
             popup.getMenu().add(0, 60, 13, "Swap Disk (" + (currentDisk + 1) + "/" + diskImages.size() + ")");
         }
@@ -647,6 +658,10 @@ public class MainActivity extends Activity {
                     joystickView.setVisibility(touchPaddleEnabled ? View.GONE : View.VISIBLE);
                     return true;
                 case 50: showUrlDialog(); return true;
+                case 51:
+                    startActivityForResult(
+                        new Intent(MainActivity.this, BrowseActivity.class), REQUEST_BROWSE);
+                    return true;
                 case 60: showSwapDiskDialog(); return true;
                 case 70:
                     startActivity(new Intent(MainActivity.this, SIDPlayActivity.class));

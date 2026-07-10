@@ -46,15 +46,42 @@ distribution.
 
 ## Phases
 
-1. Core repo module + desktop CLI harness (buildable/testable in this env):
-   CSDb provider, curated-index provider, download+extract+identify
+1. **[DONE]** Core repo module + desktop CLI harness (buildable/testable in
+   this env): CSDb provider, curated-index provider, download+extract+identify
    pipeline; end-to-end test = fetch a real demo, boot it in desktop JaC64.
 2. Seed curated index (~20 entries: Krestage 3, Crest/Booze/Fairlight
    classics, ~12 open homebrew games) with license notes, on GitHub.
-3. Android UI: BrowseActivity + Library + progress/error states; wire to
-   loadFile; disk-swap prompt. (User builds the APK — no SDK here.)
+   (Sample 2-entry index bundled: `docs/android/curated-index-sample.json`,
+   also shipped as the Android asset `curated-index.json`.)
+3. **[DONE — needs on-device test]** Android UI: BrowseActivity (Latest /
+   Games / Search) wired to MainActivity.loadFromUrl. Library tab + disk-swap
+   prompt still TODO. (User builds the APK — no SDK here.)
 4. OpenROMs bundling + ROM settings screen + "needs original ROMs" badges.
+   (Curated index already carries the `needsOriginalRoms` flag; BrowseActivity
+   shows a "[needs original ROMs]" badge.)
 5. Polish: screenshots in list (CSDb has them), share deep links
    (`jac64://csdb/release/<id>`), resume-last-session, F-Droid-ready build.
 
-Phase 1 can start immediately in the shared core. Status: NOT STARTED.
+## Status (2026-07-09)
+
+Phases 1 + 3 landed (uncommitted). Shared core
+`com.dreamfabric.c64utils.repo`: `ContentItem`, `ContentRepo`, `HttpFetch`,
+`C64Files`, `CsdbRepo` (RSS latest / HTML-scrape search / webservice details +
+best-link picker), `CuratedIndexRepo` (+`fromJson` for Android assets),
+`RepoCLI`. Verified end-to-end on desktop: `RepoCLI get 48577` downloaded and
+unzipped Krestage 3 to KRESTAGE3.D64; curated `aloft` -> Aloft-Side1.d64.
+
+MCP server exposes `csdb_latest`, `csdb_search`, `csdb_load <id>` (delegate to
+load_file). Verified over stdio. NOTE: MCP server needs a display (JFrame) —
+not headless-safe.
+
+Android: `BrowseActivity` + `activity_browse.xml`, registered in manifest,
+reachable from MainActivity menu ("Browse Content..."); returns a download URL
+that MainActivity.loadFromUrl handles. Bundled asset `curated-index.json`.
+Gson added to android/app/build.gradle. CANNOT be compiled/built in this env
+(no Android SDK) — needs a real `./gradlew assembleDebug` on a machine with
+the SDK + ROMs in assets/roms/.
+
+Remaining for a great UX: on-device test; screenshots in rows (CSDb provides
+`screenshotUrl` but loading images needs an async image path, no lib here);
+Library/downloads tab; multi-d64 disk-swap prompt after browse-load.
