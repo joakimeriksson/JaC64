@@ -36,6 +36,23 @@ public class JaC64MCP {
         this.mcpOut = mcpOut;
     }
 
+    // Same pattern as TestRaster: no audio device in headless mode.
+    private static final class SilentAudioDriver extends AudioDriver {
+        private boolean fullSpeed = true;
+
+        public void init(int sampleRate, int bufferSize) {}
+        public void write(byte[] buffer) {}
+        public long getMicros() { return System.nanoTime() / 1000L; }
+        public boolean hasSound() { return false; }
+        public int available() { return Integer.MAX_VALUE; }
+        public int getMasterVolume() { return 0; }
+        public void setMasterVolume(int v) {}
+        public void shutdown() {}
+        public void setSoundOn(boolean on) {}
+        public void setFullSpeed(boolean full) { fullSpeed = full; }
+        public boolean fullSpeed() { return fullSpeed; }
+    }
+
     private void initEmulator() {
         SIDMixer.DL_BUFFER_SIZE = 16384;
         Debugger monitor = new Debugger();
@@ -44,7 +61,18 @@ public class JaC64MCP {
         scr = new C64Screen(monitor, true);
         cpu.init(scr);
 
-        C64Canvas canvas = C64Canvas.setupDesktop(scr, cpu, true);
+        // Headless (-Djac64.headless=true, or no display): no window, no
+        // audio device. screenshot/read_screen still work — they read
+        // C64Screen's pixel buffer, not the canvas.
+        boolean headless = Boolean.getBoolean("jac64.headless")
+            || GraphicsEnvironment.isHeadless();
+        C64Canvas canvas = null;
+        if (headless) {
+            scr.init(cpu, new SilentAudioDriver());
+            scr.setSoundOn(false);
+        } else {
+            canvas = C64Canvas.setupDesktop(scr, cpu, true);
+        }
 
         reader = new C64Reader();
         reader.setCPU(cpu);
@@ -53,6 +81,13 @@ public class JaC64MCP {
         keyboard = scr.getKeyboard();
         scr.setKeyboardEmulation(false);
 
+        if (!headless) {
+            initWindow(canvas);
+        }
+        finishInit();
+    }
+
+    private void initWindow(C64Canvas canvas) {
         window = new JFrame("JaC64 MCP");
         window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         window.setBackground(Color.black);
@@ -135,7 +170,9 @@ public class JaC64MCP {
 
         canvas.setFocusable(true);
         canvas.requestFocusInWindow();
+    }
 
+    private void finishInit() {
         // Start CPU on its own thread
         Thread cpuThread = new Thread(() -> cpu.start(), "C64-CPU");
         cpuThread.setDaemon(true);
