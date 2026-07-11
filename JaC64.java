@@ -17,8 +17,12 @@ import javax.swing.table.AbstractTableModel;
 import javax.swing.table.TableModel;
 
 import java.net.*;
+import java.io.File;
+import java.io.InputStream;
+import java.util.List;
 import com.dreamfabric.jac64.*;
 import com.dreamfabric.c64utils.*;
+import com.dreamfabric.c64utils.repo.*;
 
 public class JaC64 implements ActionListener, KeyEventDispatcher {
 
@@ -41,6 +45,12 @@ public class JaC64 implements ActionListener, KeyEventDispatcher {
   private JTable fileTable;
   private JDialog loadFile;
   private DirEntry[] dirEntries;
+
+  // In-app content browser (shared core repo module).
+  private JDialog browseDialog;
+  private final CsdbRepo browseCsdb = new CsdbRepo();
+  /** Remote curated index; empty -> use the bundled sample index. */
+  private static final String CURATED_INDEX_URL = "";
 
   private static final String[] SID_TYPES = new String[] {"SID: resid MOS 6581", 
     "SID: resid MOS 8580", "SID: JaC64 Original"};
@@ -96,6 +106,8 @@ public class JaC64 implements ActionListener, KeyEventDispatcher {
     mi.addActionListener(this);
     filem.add(load = new JMenuItem("Load File"));
     load.addActionListener(this);
+    filem.add(mi = new JMenuItem("Browse Content..."));
+    mi.addActionListener(this);
     filem.add(mi = new JMenuItem("Reset"));
     mi.addActionListener(this);
     filem.add(mi = new JMenuItem("Hard Reset"));
@@ -182,6 +194,8 @@ public class JaC64 implements ActionListener, KeyEventDispatcher {
       cpu.hardReset();
     } else if ("About JaC64".equals(cmd)) {
       showAbout();
+    } else if ("Browse Content...".equals(cmd)) {
+      showBrowseDialog();
     } else if ("Load File".equals(cmd)) {
       if (loadFile == null) {
         loadFile = new JDialog(C64Win, "Load file from disk");
@@ -229,6 +243,199 @@ public class JaC64 implements ActionListener, KeyEventDispatcher {
   private void showAbout() {
     JOptionPane.showMessageDialog(C64Win, ABOUT_MESSAGE,
         "JaC64 - The Java C64 Emulator", JOptionPane.INFORMATION_MESSAGE);
+  }
+
+  // ---- In-app content browser (desktop twin of the Android BrowseActivity) ----
+
+  private void showBrowseDialog() {
+    if (browseDialog == null) {
+      browseDialog = new JDialog(C64Win, "Browse Content");
+      browseDialog.setLayout(new BorderLayout());
+
+      final JTextField search = new JTextField();
+      final JLabel status = new JLabel("Loading latest releases...");
+      final DefaultListModel<ContentItem> model = new DefaultListModel<ContentItem>();
+      final JList<ContentItem> list = new JList<ContentItem>(model);
+      list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+
+      // Top: source tabs + search field.
+      JPanel top = new JPanel(new BorderLayout());
+      JPanel tabs = new JPanel(new FlowLayout(FlowLayout.LEFT));
+      JButton latestBtn = new JButton("Latest");
+      JButton gamesBtn = new JButton("Games");
+      JButton searchBtn = new JButton("Search");
+      tabs.add(latestBtn);
+      tabs.add(gamesBtn);
+      top.add(tabs, BorderLayout.WEST);
+      JPanel sp = new JPanel(new BorderLayout());
+      sp.add(search, BorderLayout.CENTER);
+      sp.add(searchBtn, BorderLayout.EAST);
+      top.add(sp, BorderLayout.CENTER);
+      browseDialog.add(top, BorderLayout.NORTH);
+
+      browseDialog.add(new JScrollPane(list), BorderLayout.CENTER);
+
+      JPanel bottom = new JPanel(new BorderLayout());
+      bottom.add(status, BorderLayout.CENTER);
+      JButton loadBtn = new JButton("Load");
+      JButton closeBtn = new JButton("Close");
+      JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+      btns.add(loadBtn);
+      btns.add(closeBtn);
+      bottom.add(btns, BorderLayout.EAST);
+      browseDialog.add(bottom, BorderLayout.SOUTH);
+
+      latestBtn.addActionListener(new ActionListener() {
+        public void actionPerformed(ActionEvent e) {
+          browseFill(model, status, "latest releases", new RepoQuery() {
+            public List<ContentItem> run() throws Exception { return browseCsdb.latest(40); }
+          });
+        }
+      });
+      gamesBtn.addActionListener(new ActionListener() {
+        public void actionPerformed(ActionEvent e) {
+          browseFill(model, status, "games", new RepoQuery() {
+            public List<ContentItem> run() throws Exception { return curatedRepo().latest(200); }
+          });
+        }
+      });
+      ActionListener doSearch = new ActionListener() {
+        public void actionPerformed(ActionEvent e) {
+          final String q = search.getText().trim();
+          if (q.isEmpty()) { status.setText("Enter a search term."); return; }
+          browseFill(model, status, "results for \"" + q + "\"", new RepoQuery() {
+            public List<ContentItem> run() throws Exception { return browseCsdb.search(q, 40); }
+          });
+        }
+      };
+      searchBtn.addActionListener(doSearch);
+      search.addActionListener(doSearch);
+
+      loadBtn.addActionListener(new ActionListener() {
+        public void actionPerformed(ActionEvent e) {
+          ContentItem item = list.getSelectedValue();
+          if (item != null) browseLoad(item, status);
+        }
+      });
+      list.addMouseListener(new MouseAdapter() {
+        public void mouseClicked(MouseEvent e) {
+          if (e.getClickCount() == 2) {
+            ContentItem item = list.getSelectedValue();
+            if (item != null) browseLoad(item, status);
+          }
+        }
+      });
+      closeBtn.addActionListener(new ActionListener() {
+        public void actionPerformed(ActionEvent e) { browseDialog.setVisible(false); }
+      });
+
+      browseDialog.setSize(560, 460);
+      browseDialog.setLocationRelativeTo(C64Win);
+
+      // Open on the latest releases.
+      browseFill(model, status, "latest releases", new RepoQuery() {
+        public List<ContentItem> run() throws Exception { return browseCsdb.latest(40); }
+      });
+    }
+    browseDialog.setVisible(true);
+  }
+
+  /** A repo call that runs off the EDT. */
+  private interface RepoQuery { List<ContentItem> run() throws Exception; }
+
+  private void browseFill(final DefaultListModel<ContentItem> model,
+                          final JLabel status, final String what, final RepoQuery query) {
+    status.setText("Loading " + what + "...");
+    new Thread(new Runnable() {
+      public void run() {
+        try {
+          final List<ContentItem> found = query.run();
+          SwingUtilities.invokeLater(new Runnable() {
+            public void run() {
+              model.clear();
+              for (ContentItem it : found) model.addElement(it);
+              status.setText(found.isEmpty() ? "No " + what + "." : found.size() + " " + what);
+            }
+          });
+        } catch (final Exception ex) {
+          setStatusLater(status, "Error: " + ex.getMessage());
+        }
+      }
+    }, "BrowseRepo").start();
+  }
+
+  /** Curated repo from the remote index when set, else the bundled sample. */
+  private ContentRepo curatedRepo() throws Exception {
+    if (CURATED_INDEX_URL != null && CURATED_INDEX_URL.length() > 0) {
+      try {
+        CuratedIndexRepo remote = new CuratedIndexRepo(CURATED_INDEX_URL);
+        remote.latest(1);
+        return remote;
+      } catch (Exception e) { /* fall back to bundled */ }
+    }
+    String path = "docs/android/curated-index-sample.json";
+    InputStream in = getClass().getResourceAsStream("/" + path);
+    if (in != null) {
+      java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+      byte[] buf = new byte[8192];
+      int n;
+      while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+      in.close();
+      return CuratedIndexRepo.fromJson(new String(out.toByteArray(), "UTF-8"));
+    }
+    // Running from the project dir (gradle run): read the file directly.
+    return new CuratedIndexRepo(path);
+  }
+
+  private void browseLoad(final ContentItem item, final JLabel status) {
+    status.setText("Fetching " + item.title + "...");
+    new Thread(new Runnable() {
+      public void run() {
+        try {
+          String url = item.downloadUrl;
+          if (url == null && "csdb".equals(item.source)) {
+            ContentItem full = browseCsdb.details(item.id);
+            if (full != null) url = full.downloadUrl;
+          }
+          if (url == null) { setStatusLater(status, "No download link for " + item.title); return; }
+
+          File dir = new File(System.getProperty("java.io.tmpdir"), "jac64-browse");
+          File downloaded = HttpFetch.download(url, dir);
+          File loadable = C64Files.toLoadable(downloaded, dir);
+          if (loadable == null) { setStatusLater(status, "No loadable C64 file in download"); return; }
+
+          String path = loadable.getAbsolutePath();
+          String lower = path.toLowerCase();
+          cpu.reset();
+          waitReady();
+          if (lower.endsWith(".d64")) {
+            reader.readDiskFromFile(path);
+            cpu.enterText("LOAD\"*\",8,1~");
+          } else if (lower.endsWith(".t64")) {
+            reader.readTapeFromFile(path);
+            reader.readFile("*", -1);
+            cpu.runBasic();
+          } else { // .prg / .p00
+            reader.readPGM(path, -1);
+            cpu.runBasic();
+          }
+          setStatusLater(status, "Loaded " + item.title);
+        } catch (Exception ex) {
+          setStatusLater(status, "Error: " + ex.getMessage());
+        }
+      }
+    }, "BrowseLoad").start();
+  }
+
+  private void waitReady() throws InterruptedException {
+    Thread.sleep(200);
+    while (!scr.ready()) Thread.sleep(100);
+  }
+
+  private void setStatusLater(final JLabel status, final String text) {
+    SwingUtilities.invokeLater(new Runnable() {
+      public void run() { status.setText(text); }
+    });
   }
   
   public void toggleFullScreen() {

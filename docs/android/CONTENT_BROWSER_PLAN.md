@@ -75,6 +75,16 @@ MCP server exposes `csdb_latest`, `csdb_search`, `csdb_load <id>` (delegate to
 load_file). Verified over stdio. NOTE: MCP server needs a display (JFrame) —
 not headless-safe.
 
+Desktop Swing app (JaC64.java) now has feature parity: File -> "Browse
+Content..." opens a Swing dialog (Latest / Games / Search + double-click to
+load) reusing the same repo module; downloads to java.io.tmpdir/jac64-browse
+and runs via reset+LOAD/runBasic. Curated sample index bundled into the
+desktop jar (build.gradle `include docs/android/curated-index-sample.json`,
+loaded as classpath resource). Compiles + jar-verified in this env.
+
+So all four frontends share one backend: desktop CLI (RepoCLI), MCP, desktop
+Swing GUI, and Android.
+
 Android: `BrowseActivity` + `activity_browse.xml`, registered in manifest,
 reachable from MainActivity menu ("Browse Content..."); returns a download URL
 that MainActivity.loadFromUrl handles. Bundled asset `curated-index.json`.

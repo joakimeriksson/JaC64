@@ -48,6 +48,7 @@ jar {
     from('.') {
         include 'roms/**'
         include 'sounds/**'
+        include 'docs/android/curated-index-sample.json'
     }
     from {
         configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
