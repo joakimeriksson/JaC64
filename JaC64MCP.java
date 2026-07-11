@@ -182,6 +182,70 @@ public class JaC64MCP {
         while (!scr.ready()) {
             try { Thread.sleep(100); } catch (InterruptedException e) { break; }
         }
+
+        // Live web view (-Djac64.webPort=8642): browser canvas polling the
+        // pixel buffer at display rate — watch demos live, headless or not.
+        Integer webPort = Integer.getInteger("jac64.webPort");
+        if (webPort != null) {
+            try {
+                startWebView(webPort);
+                System.err.println("Web view on http://localhost:" + webPort);
+            } catch (IOException e) {
+                System.err.println("Web view failed: " + e);
+            }
+        }
+    }
+
+    private static final String WEB_PAGE = "<!doctype html><meta charset='utf-8'>"
+        + "<title>JaC64 live</title><body style='background:#111;margin:0;display:flex;"
+        + "flex-direction:column;align-items:center;font:12px monospace;color:#888'>"
+        + "<canvas id=c style='image-rendering:pixelated;margin-top:1rem'></canvas>"
+        + "<div id=s>connecting...</div><script>\n"
+        + "const c=document.getElementById('c'),x=c.getContext('2d');let n=0,t=Date.now();\n"
+        + "async function loop(){try{const r=await fetch('/frame');\n"
+        + "const w=+r.headers.get('X-Width'),h=+r.headers.get('X-Height');\n"
+        + "const b=new Uint8ClampedArray(await r.arrayBuffer());\n"
+        + "if(c.width!=w){c.width=w;c.height=h;c.style.width=(w*2)+'px';}\n"
+        + "x.putImageData(new ImageData(b,w,h),0,0);\n"
+        + "if(++n%50==0){const d=Date.now();document.getElementById('s').textContent=\n"
+        + "Math.round(50000/(d-t))+' fps';t=d;}}catch(e){}requestAnimationFrame(loop);}\n"
+        + "loop();</script>";
+
+    private void startWebView(int port) throws IOException {
+        com.sun.net.httpserver.HttpServer hs =
+            com.sun.net.httpserver.HttpServer.create(new InetSocketAddress(port), 0);
+        hs.createContext("/", ex -> {
+            byte[] body = WEB_PAGE.getBytes("UTF-8");
+            ex.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+            ex.sendResponseHeaders(200, body.length);
+            ex.getResponseBody().write(body);
+            ex.close();
+        });
+        hs.createContext("/frame", ex -> {
+            int[] px = scr.getPixelBuffer();
+            int w = 384, h = px.length / w;
+            byte[] rgba = new byte[px.length * 4];
+            for (int i = 0; i < px.length; i++) {
+                int p = px[i];
+                rgba[i * 4] = (byte) (p >> 16);
+                rgba[i * 4 + 1] = (byte) (p >> 8);
+                rgba[i * 4 + 2] = (byte) p;
+                rgba[i * 4 + 3] = (byte) 0xff;
+            }
+            ex.getResponseHeaders().set("Content-Type", "application/octet-stream");
+            ex.getResponseHeaders().set("X-Width", Integer.toString(w));
+            ex.getResponseHeaders().set("X-Height", Integer.toString(h));
+            ex.getResponseHeaders().set("Cache-Control", "no-store");
+            ex.sendResponseHeaders(200, rgba.length);
+            ex.getResponseBody().write(rgba);
+            ex.close();
+        });
+        hs.setExecutor(java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "webview");
+            t.setDaemon(true);
+            return t;
+        }));
+        hs.start();
     }
 
     private void handleMenu(String cmd) {
@@ -784,10 +848,18 @@ public class JaC64MCP {
     }
 
     private JsonObject toolPoke(JsonObject args) {
-        int address = args.get("address").getAsInt();
-        int value = args.get("value").getAsInt();
-        cpu.poke(address, value & 0xff);
-        return toolResult(String.format("Poked $%04X = $%02X", address, value & 0xff));
+        int address = args.get("address").getAsInt() & 0xffff;
+        int value = args.get("value").getAsInt() & 0xff;
+        // Mirror peekByte: NEVER go through cpu.writeByte from this thread —
+        // it advances the CPU cycle counter and scheduler, corrupting the
+        // concurrently running CPU (observed as scrambled KERNAL state under
+        // bulk pokes). RAM is a plain array store; I/O goes to the chips.
+        if (address >= 0xD000 && address <= 0xDFFF) {
+            scr.performWrite(address, value, cpu.cycles);
+        } else {
+            cpu.getMemory()[address] = value;
+        }
+        return toolResult(String.format("Poked $%04X = $%02X", address, value));
     }
 
     private JsonObject toolReset(JsonObject args) {
